@@ -120,77 +120,143 @@ Some calculations:
 
 """
 
-
+#import sys
 import random
 #from random import choice
 from collections import defaultdict
-from math import log, exp
+#from math import log, exp
 
-from .dom_anneal_models import Tube, Strand, Domain, Complex
+import numpy as np
+
+from .dom_anneal_models import Tube #, Strand, Domain, Complex
 from .energymodels.biopython import binary_state_probability, hybridization_dH_dS
 
 
-N_Avogadro = 6.022e23
+N_AVOGADRO = 6.022e23   # /mol
 
 
 class Simulator():
+    """
+    Simulator class to hold everything required for a single simulation.
+    """
 
-    def __init__(self, volume, strands, params):
+    def __init__(self, volume, strands, params, verbose=0, domain_pairs=None, outputstatsfile=None):
         self.Tube = Tube(volume, strands)
         self.Volume = volume
         self.Strands = strands
-        self.Domains = [strand.Domain for strand in strands]
+        self.VERBOSE = verbose
+        self.Print_statsline_when_saving = params.get('print_statsline_when_saving', False)
+        # random.choice requires a list, not a set.
+        self.Domains_list = [domain for strand in strands for domain in strand.Domains]
+        self.Domains = set(self.Domains_list)
+        self.N_domains = len(self.Domains)
+        self.N_strands = len(self.Strands)
+        self.N_domains_hybridized = sum(1 for domain in self.Domains_list if domain.Partner)
+        self.N_strands_hybridized = sum(1 for oligo in self.Strands if oligo.is_hybridized())
         self.Domains_by_name = defaultdict(list)
         for d in self.Domains:
             self.Domains_by_name[d.Name].append(d)
+        if domain_pairs is None:
+            domain_pairs = {d.Name: d.lower() if d.Name == d.upper() else d.upper() for d in self.Domains_list}
+        assert not any(k == v for k, v in domain_pairs.items())
+        self.Domain_pairs = domain_pairs
         self.Uppers = [d for d in self.Domains if d == d.upper()]
         self.Lowers = [d for d in self.Domains if d == d.lower()]
         self.Params = params
-        #self.Domain_dG = {}  # currently indexed as [<domain-name-uppercase>][<temp>][<8-bit-tuple>]
-        # Standard enthalpy and entropy, indexed as [<domain-name-uppercase>][<8-bit-tuple>][0 or 1]
+        # Standard enthalpy and entropy of hybridization,
+        # indexed as [<domain-name-uppercase>][0 or 1]
         self.Domain_dHdS = {}
+        #self.Visualization_hook = self.print_domain_hybridization_percentage
+        #self.Visualization_hook = self.randomly_print_stats
+        self.Visualization_hook = self.save_stats_if_large
 
-    def select_event_domains(self):
+        self.Outputstatsfile = outputstatsfile
+        self.Record_stats = params.get("record_stats", True)    # Enable or disable stats recording
+        # Save stats to a cache and only occationally append them to file on disk.
+        self.Stats_cache = []   # list of tuples: (Temperature, N_dom_hybridized, %_dom_hybridized, N_oligos_hybridized, %_oligos_hybridized)
+
+        print("Simulator initiated at V=%s with %s strands spanning %s domains." \
+              % (self.Volume, len(self.Strands), len(self.Domains)))
+        c = 1/N_AVOGADRO/self.Volume
+        print("Concentration of each domain is: %0.3g M" % c)
+        print("Domain pairing map:", ", ".join("->".join(kv) for kv in self.Domain_pairs.items()))
+
+
+
+    def n_hybridized_domains(self, ):
+        count =  sum(1 for domain in self.Domains_list if domain.Partner)
+        if not count % 2 == 0:
+            print("Weird - n_hybridized_domains counts to %s (should be an even number)" % count)
+            print("Hybridized domains:", ", ".join(str(domain) for domain in self.Domains_list if domain.Partner))
+        return count
+
+    def n_hybridized_strands(self, ):
+        return sum(1 for oligo in self.Strands if oligo.is_hybridized())
+
+
+    def get_complexes(self, ):
+        complexed_strands = [strand for strand in self.Strands if strand.Complex]
+        complexes = {strand.Complex for strand in complexed_strands}
+
+
+    def select_event_domains(self, oversampling=1):
         """
         Returns a tuple with (domain1, domain2).
         If domain2 is None, then no
         """
-        dom1 = random.choice(self.Domains)
+        is_hybridized = None
+        dom1 = random.choice(self.Domains_list)
         if dom1.Partner:
-            return (dom1, dom1.Partner)
+            return (dom1, dom1.Partner, True)
         # Only consider domains that are not already paired up:
-        candidates = [d for d in self.Domains_by_name[dom1.Name] if not d.Partner]
+        candidates = [d for d in self.Domains_by_name[self.Domain_pairs[dom1.Name]] if not d.Partner]
         # Whether we find a candidate depends on (1) the number of candidates and (2) the volume.
         # empty_volume_number should be scaled with the tube volume.
-        empty_volume_number = self.Params.get("empty_volume_number", 100)
+        # empty_volume_number = self.Params.get("empty_volume_number", 100)
+        # Edit: Using volume and numbers to get an actual concentration:
+        # c2 = 1/N_AVOGADRO/self.Volume     # Edit2: concentration is determined for each domain individually.
 
         # Need to scale intra-complex domain higher: (higher effective concentration)
         # Doing this by making a list with repeated entries:
         # (This is only able to scale by integers, but should suffice for now...)
-        if dom1.Complex and any(dom1.Complex == d.Complex for d in candidates):
-            candidates = sum(([d]*d.effective_conc(dom1) if d.Complex == dom1.Complex else [d]
-                              for d in candidates), []) # Need to give a list as starting value to sum
+        #if dom1.Complex and any(dom1.Complex == d.Complex for d in candidates):
+        #    candidates = sum(([d]*d.effective_conc(dom1) if d.Complex == dom1.Complex else [d]
+        #                      for d in candidates), []) # Need to give a list as starting value to sum
 
         # Simple way: just add the two together (then we won't have to worry about len(candidates) >= empty_volume_number)
         # If empty_volume_number = 0, there should be 100% chance of selecting a candidate, so subtract 1:
-        n_cands = len(candidates)
-        event_number = random.randint(0, empty_volume_number + len(candidates) - 1)
+        #n_cands = len(candidates)
+        #event_number = random.randint(0, empty_volume_number + len(candidates) - 1)
         # More complex: empty_volume_number is the "total volume" of which the domains can occupy a certain portion.
-        if len(candidates) < empty_volume_number:
-            event_number = random.randint(0, empty_volume_number)
-            # event_number = random.randint(0, empty_volume_number - len(candidates)) # No...?
-        else:
-            # Will most likely never happen
-            event_number = random.randint(0, len(candidates) - 1)
-        if event_number >= len(candidates):
-            # Nothing should happen, dom1 did not find a partner in the "allotted time".
-            return (dom1, None)
-        dom2 = candidates[event_number]
-        return (dom1, dom2)
+        #if len(candidates) < empty_volume_number:
+        #    event_number = random.randint(0, empty_volume_number)
+        #    # event_number = random.randint(0, empty_volume_number - len(candidates)) # No...?
+        #else:
+        #    # Will most likely never happen
+        #    event_number = random.randint(0, len(candidates) - 1)
+        #if event_number >= len(candidates):
+        #    # Nothing should happen, dom1 did not find a partner in the "allotted time".
+        #    return (dom1, None)
+        #dom2 = candidates[event_number]
 
 
-    def calculate_energy(self, domain, configuration):
-        pass
+        ### New concentration-based weighting and selection:
+
+        domain_weights = [d.effective_activity(dom1, volume=self.Volume, oversampling=oversampling)
+                          for d in candidates]
+        # Do you add a specific "water/None" option?
+        # Or do you first calculate "is a domain gonna be selected?" and then select which domain is selected?
+        domain_weights_sum = sum(domain_weights)
+        # Adding a specific "None" option:
+        if domain_weights_sum < 1:
+            domain_weights.append(1-domain_weights_sum)
+            candidates.append(None)
+        # http://docs.scipy.org/doc/numpy/reference/generated/numpy.random.choice.html
+        if domain_weights_sum > 1:
+            # Normalize...:
+            domain_weights = [w/domain_weights_sum for w in domain_weights]
+        dom2 = np.random.choice(candidates, p=domain_weights)
+        return dom1, dom2, is_hybridized
 
 
     def hybridization_energy(self, domain1, domain2, T):
@@ -219,36 +285,61 @@ class Simulator():
         It would, perhaps, be nice to have the updated values from David Zhang..
         """
         # returned is (5p domain-exists, 5p domain-hybridized, 3p domain-exists, 3p domain-hybridized)
-        d1_params, d2_params = domain1.neighbor_state_tuple(), domain2.neighbor_state_tuple()
-        param_tuple = d1_params + d2_params
-
+        # d1_params, d2_params = domain1.neighbor_state_tuple(), domain2.neighbor_state_tuple()
+        # param_tuple = d1_params + d2_params
         # indexed as [<domain-name-uppercase>][<8-bit-tuple>][0 or 1]
-        # Edit: Currently just saving the dH_dS sequence result as [<domain-name-uppercase>]
-        # Will perform neighbor adjustments on the fly...
-        deltaH, deltaS = self.Domain_dHdS.setdefault(domain1.Name.upper(), #{})\
-                                         #.setdefault(param_tuple,       # WAIT, this does not capture or save any dependence on the param_tuple!!
-                                                     melting_dH_dS(domain1.Sequence,
-                                                                    domain2.Sequence))
-        # Perform neighbor adjustments on the fly...
-        # Dangling adjustment... (electrostatic repulsion)
+        # Edit: Currently just saving the dH_dS result as [<domain-name-uppercase>]
+        # and performing neighbor-induced adjustments on the fly...
+        # Do not use dict.setdefault(key, energy-if-no-key()) for this!
+        # This will call energy-if-no-key() before checking whether keys is in the dict.
+        if domain1.Name not in self.Domain_dHdS:
+            deltaH, deltaS = self.Domain_dHdS[domain1.Name] = hybridization_dH_dS(domain1.Sequence, domain2.Sequence)
+        else:
+            deltaH, deltaS = self.Domain_dHdS[domain1.Name]
+
+        ### Dangling adjustment from electrostatic repulsion ###
         # Seems like this should be sequence dependent, based on DNA_DE1 lookup table.
         # There is even a difference whether a nucleotide is on the 5p end or 3p... sigh...
-        deltaH_corr =  -3.0 * sum(param_tuple[idx] for idx in range(0, 8, 2))
-        deltaS_corr = -10.0 * sum(param_tuple[idx] for idx in range(0, 8, 2))
+        # Use dG = dH - dS*T with T = 330 K (57 C) to get a feeling for the contributions.
+        # According to the DNA_DE1 table, dangling ends actually repel primarily via entropic effects?
+        # - both dH and dS are negative.
+        # Actually, it seems most dangling ends contribute a negative ΔΔG to hybridization energy:
+        # DE_dG = {k: (v[0]-0.300*v[1], v[0]-0.360*v[1]) for k, v in DNA_DE1.items()}   # from about 30 C to 90 C:
+        # [pyplot.plot([300, 360], v) for v in DE_dG.values()]  # followed by display(*getfigs()), with %pylab enabled
+        # In all cases the ΔΔG is between -1 and +1 kcal/mol.
+        # FWIW, -1 kcal/mol corresponds to a change in K of exp(-ΔG/RT) = exp(ΔS/R-ΔH/RT) = 4.6
+        # At 60 C: RT = 1.987 cal/mol/K * 330 K = 0.65 kcal/mol.
+        # Hmm... It also seems to me that the effect of electrostatic repulsion should be salt dependent.
+        N_neighbors = sum(bool(n) for n in
+                          (domain1.domain5p(), domain2.domain3p(),
+                           domain2.domain5p() or domain1.domain3p()))
+        deltaH_corr = -3.0 * N_neighbors    #  -3 cal/mol   electrostatic repulsion for each neighboring domain
+        deltaS_corr = -10.0 * N_neighbors   # -10 cal/mol/K electrostatic repulsion for each neighboring domain
+        # Domain repulsion: ΔΔG of 0 kcal/mol at 300 K (30 C) and +0.4 kcal/mol at 340 K (70 C) - seems reasonable.
+
         # Stacking interactions when the neighboring domain is hybridized:
-        deltaH_corr += -10.0 * sum(param_tuple[idx] for idx in range(1, 8, 2))
-        deltaS_corr += -20.0 * sum(param_tuple[idx] for idx in range(1, 8, 2))
+        # Again, this should probably be sequence dependent:
+        N_stacking = (domain1.domain5p_is_hybridized() or domain2.domain3p_is_hybridized() +
+                      domain2.domain5p_is_hybridized() or domain1.domain3p_is_hybridized())
+        # A CG/GC NN has dH, dS: 'CG/GC': (-10.6, -27.2), while AT/TA has: 'AT/TA': (-7.2, -20.4)
+        deltaH_corr += -7.0 * N_stacking    # -10 cal/mol/K for each stacking interaction
+        deltaS_corr += -20.0 * N_stacking   # -20 cal/mol   for each stacking interaction
+        # Stacking: ΔΔG of -1 kcal/mol at 300 K (30 C) and -0.2 kcal/mol at 340 K (70 C) - seems reasonable.
 
         # It is probably a lot better to compare the two states directly using NuPack...!
-
+        # (or at least see what they do and do the same...)
 
         # ΔG° = ΔH° - T*ΔS°             # Standard Gibbs free energy
         # ΔG = ΔG° + RT ln(Q)           # Gibbs free energy at non-equilibrium
         # ΔG° = ΔH° - T*ΔS° = -RT ln(K) # At equilibrium ΔG=0. Notice the minus in front of RT!
 
         # You may want to correct the deltaS depending on how the hybridization connects the strands.
+        # I.e. how domain hybridization will affect the overall entropy of the complex.
+        #  - strand hybridization will reduce the conformational freedom of the complex.
         # This is a dynamic function of the current complex structure and cannot be stored for later use.
-        deltaS_corr += 0
+        # Obviously, this is only applicable if the two domains are already in the same complex.
+        if domain1.Complex == domain2.Complex:
+            deltaS_corr += 4
 
         # Add corrigating factors
         deltaH += deltaH_corr
@@ -258,7 +349,7 @@ class Simulator():
         # The initial entropy of formation are rather negligible.
         deltaG = deltaH*1000 - T * deltaS    # Values in cal/mol - rather than kcal/mol
 
-        return deltaG, deltaH, deltaS
+        return deltaG, deltaH, deltaS, deltaH_corr, deltaS_corr
 
 
 
@@ -285,7 +376,8 @@ class Simulator():
             parameters for RNA in 1M Na+ (Serra and Turner, 1995; Mathews et al., 1999) or DNA in user-specified
             Na+ and Mg++ concentrations (SantaLucia, 1998; SantaLucia and Hicks, 2004; Koehler and Peyret, 2005)"
         """
-        deltaG, deltaH, deltaS = self.hybridization_energy(domain1, domain2, T)    # return value in cal/mol
+        deltaG, deltaH, deltaS, deltaH_corr, deltaS_corr = \
+            self.hybridization_energy(domain1, domain2, T)    # return value in cal/mol
         #R = 1.987  # universal gas constant in cal/mol/K
         ## Note: R = k * NA , where k is the boltzmann constant and NA is Avogadro's constant.
         #K = exp(-deltaG/(R*T))
@@ -345,7 +437,7 @@ class Simulator():
         # low -- like 1 in a millionth to 1 in a billionth. This requires a lot of fruitless "dice rolling",
         # before the system actually changes state. And that is at T=Tm...
         # One way to mitigate this is to do oversampling (or whatever it should be called):
-        # Multiplying both p_on and p_off by a certain probablistic_oversampling_constant, to ensure that something
+        # Multiplying both p_on and p_off by a certain probablity_oversampling_factor, to ensure that something
         # actually happens within a reasonable timeframe.
         # The thing here is that you need to take state into account:
         # If the strand/domain is currently hybridized, you need to increase the chance that it will melt.
@@ -356,7 +448,6 @@ class Simulator():
             #Q = 1e3 # select_event_domains() selects to 1 mM.
             #Q = 1e6 # select_event_domains() selects to 1 uM.
             # Q = (concentration) # If p_selection = 1
-
         p_hyb = binary_state_probability(deltaG, T, Q=Q)
 
         return p_hyb
@@ -366,7 +457,8 @@ class Simulator():
         """
         Perform a single step in the simulation at temperature T.
         """
-        domain1, domain2 = self.select_event_domains()
+        oversampling = self.Params['probablity_oversampling_factor']
+        domain1, domain2, is_hybridized = self.select_event_domains(oversampling=oversampling)
         if not domain2:
             # If we are selecting for an activity of 1 (or equal to the duplex activity, whatever that is),
             # then there must be a very high probability of NOT finding a domain2. Like, 1 in a million..
@@ -382,55 +474,166 @@ class Simulator():
             # This will still get a lot of failed attempts, failing at p < random.random() instead of during
             # duplex2 selection, but it is probably a lot easier to get right for a novice like me :)
             # https://en.wikipedia.org/wiki/Thermodynamic_activity
-            print("Failed to select a 2nd domain for domain 1.")
+            #print("Failed to select a 2nd domain for domain 1.")
+            #sys.stdout.write(".")  # No, even this is too much.
             return
-        print("Selected domain1 and 2:", domain1, domain2)
-        # Probability that the two strands are in hybridized state:
-        p = self.hybridization_probability(domain1, domain2, T)
-        print("Hybridization probability:", p)
-        if p < random.random():
-            if domain1.Partner == domain2:
-                print("De-hybridizing domain1 and domain2.")
-                ## TODO: disassociate the two domains, splitting the complex if required.
-                ## TODO: Update rendering/visualization
+
+        # Assertion check (at least while we are still debugging and ensuring compliancy).
+        # Eventually we might allow self-complementary domains... (I.e. two different domain objects but with same name)
+        assert domain1 != domain2 and domain1.Name != domain2.Name
+
+        p_hyb = self.hybridization_probability(domain1, domain2, T)
+        if self.VERBOSE > 2:
+            print("\nSelected domain 1 and 2:", domain1, domain2)
+            # Probability that the two strands are in hybridized state:
+            print("- Hybridization probability:", p_hyb)
+        if is_hybridized and oversampling:
+            # If duplexes are hybridized, increase p_off by decreasing p_hyb:
+            p_hyb = 1 - oversampling*(1-p_hyb)
+            # If duplexes are not hybridized, probablity_oversampling_factor is applied during domain selection.
+
+        ## Change hybridization state, depending on p_hyb and a dice roll:
+        # p_hyb will typically be very close to 1.0 (e.g. 0.999997), since we assume Q=1 after domain selection
+        # (although oversampling might reduce this slightly)
+        if p_hyb < random.random():
+            # Dices say that domains should be henceforth be in *de-hybridized* state:
+            if is_hybridized:
+                if self.VERBOSE > 1:
+                    print("- DE-HYBRIDIZING domain 1 and 2 (%s and %s)" % (domain1, domain2))
+                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                domain1.dehybridize(domain2)
+                self.N_domains_hybridized -= 2
+                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                if self.Record_stats:
+                    self.record_stats_snapshot(T)
+                if self.Visualization_hook:
+                    self.Visualization_hook(updated_domains=(domain1, domain2))
             else:
-                print("Domain 1 did not hybridize to domain2 (p=%s)" % p)
+                if self.VERBOSE > 0:
+                    print("- Domain 1 (%s) did not hybridize to domain2 (%s) (p_hyb = %s) [rare event]" % \
+                        (domain1, domain2, p_hyb))
         else:
-            if domain1.Partner == domain2:
-                print("Domain1 remains hybridized to domain2")
+            # Dices say that domains should be henceforth be in *hybridized* state:
+            if is_hybridized:
+                if self.VERBOSE > 2:
+                    print("- Domain1 REMAINS HYBRIDIZED to domain2 (%s ... %s)" % (domain1, domain2))
             else:
                 # HYBRIDIZE:  (separate this logic out)
-                domain1.Partner = domain2
-                domain2.Partner = domain1
-                # Make complex if required:
-                # if domain1.Complex and domain2.Complex
-                ## TODO: Update rendering/visualization
+                if self.VERBOSE > 1:
+                    print("- HYBRIDIZING domain 1 and 2 (%s and %s)" % (domain1, domain2))
+                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                domain1.hybridize(domain2)
+                self.N_domains_hybridized += 2
+                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                if self.Record_stats:
+                    self.record_stats_snapshot(T)
+                if self.Visualization_hook:
+                    self.Visualization_hook(updated_domains=(domain1, domain2))
 
 
 
-    def simulate(self, T, n_steps=1000):
+    def simulate(self, T, n_steps_max=100000):
         """
         Simulate at most n_steps number of rounds at temperature T.
         """
+        assert self.n_hybridized_domains() == self.N_domains_hybridized
         n_done = 0
-        while n_done < n_steps:
-            self.step(T)
+        while n_done < n_steps_max:
+            try:
+                self.step(T)
+            except AssertionError as e:
+                print("AssertionError:", e)
+                print("self.n_hybridized_domains(), self.N_domains_hybridized = %s, %s" % \
+                      (self.n_hybridized_domains(), self.N_domains_hybridized))
+                raise(e)
+            n_done += 1
+            if n_done % 10000 == 0:
+                print("Simulated %s of %s steps at T=%s K (%s stats entries)" % \
+                      (n_done, n_steps_max, T, len(self.Stats_cache)))
+        assert self.n_hybridized_domains() == self.N_domains_hybridized
 
 
-    def anneal(self, T_start, T_finish, delta_T, n_steps_per_T=1000):
+    def anneal(self, T_start, T_finish, delta_T=-1, n_steps_per_T=100000):
         """
         Simulate annealing repeatedly from T_start to T_finish,
         decreasing temperature by delta_T for every round,
         doing at most n_steps number of steps at each temperature.
+        # TODO: I am currently only capturing stats whenever the state changs (hybridization/melting).
+        # This means that if we only have two states, those two states will be equally represented in the data,
+        # even though one state might be favored and system spends the majority of the total time in this state.
+        # It would probably be nice to also capture "time-interspersed" snapshots, so that I can distinguish this.
         """
 
         for T in range(T_start, T_finish, delta_T):
+            print("\nSimulating at %s K for %s steps (ramp is %s K to %s K in %s K increments)" % \
+                  (T, n_steps_per_T, T_start, T_finish, delta_T))
             self.simulate(T, n_steps_per_T)
+        self.save_stats_cache()
 
+
+    def save_stats_if_large(self, **kwargs):
+        """ Save stats cache when it is sufficiently large. """
+        if len(self.Stats_cache) > 1000:
+            self.save_stats_cache()
+
+    def save_stats_cache(self, outputfn=None):
+        """ Save stats cache to outputfn. """
+        if self.Print_statsline_when_saving:
+            print("| Total domain hybridization percentage: {:.0%} ({} of {})".format(
+                self.N_domains_hybridized/self.N_domains,
+                self.N_domains_hybridized, self.N_domains))
+            print(", ".join(str(i) for i in self.Stats_cache[-1]))
+        if outputfn is None:
+            outputfn = self.Outputstatsfile
+        if not outputfn:
+            print("Unable to save stats cache: outputstatsfile is:", outputfn)
+            return
+        with open(outputfn, 'a') as fp:
+            # self.Stats_cache = [(Temperature, N_doms_hybridized, %_doms_hybridized), ...]
+            fp.write("\n".join(", ".join(str(i) for i in line) for line in self.Stats_cache)+"\n")
+        self.Stats_cache = []
+
+    def record_stats_snapshot(self, T):
+        """ Save stats snapshot to stats cache. """
+        self.Stats_cache.append((T,
+                                 self.N_domains_hybridized,
+                                 self.N_domains_hybridized/self.N_domains,
+                                 self.N_strands_hybridized,
+                                 self.N_strands_hybridized/self.N_strands
+                                ))
+
+    def randomly_print_stats(self, **kwargs):
+        """ Print stats at random intervals. """
+        if random.random() < 0.05:
+            self.print_domain_hybridization_stats(**kwargs)
+
+
+    def print_domain_hybridization_stats(self, updated_domains=None):
+        """ Print domain hybridization stats """
+        N_domains = len(self.Domains)
+        N_hybridized = sum(1 for domain in self.Domains if domain.Partner)
+        if self.VERBOSE > 1:
+            print("| - Updated domains %s and %s" % updated_domains)
+        print("| Total domain hybridization percentage: {:.0%} ({} of {})".format(
+            N_hybridized/N_domains, N_hybridized, N_domains))
 
 
 
 
 
 if __name__ == '__main__':
-    pass
+
+    import os
+    from .dom_utils import parse_strand_domains_file
+
+    strand_defs_file = os.path.join(os.path.dirname(__file__), "testfiles", "strand_defs01.txt")
+    input_oligos = parse_strand_domains_file(strand_defs_file)
+
+    # Some calculations:
+    # * Consider a volume of 1 um^3 = (1e-5 dm)^3 = 1e-15 L = 1 femto-liter.
+    # * For c = 1 nM: n = 1e-15 L * 1e-9 mol/L = 1e-24 mol = 0.6
+    #     N_Avogagro = 6.02e23 /mol
+
+    #
+    adhoc_params = {}
+    simulator = Simulator(volume=1e-15, strands=input_oligos, params=adhoc_params)

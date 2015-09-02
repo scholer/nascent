@@ -29,6 +29,8 @@ def gc_percent(seq):
     return (seq.count("G")+seq.count("C"))/len(seq)
 
 
+# Values are (deltaH, deltaS) pairs = (kcal/mol, cal/mol/K)
+
 # Allawi and SantaLucia (1997), Biochemistry 36: 10581-10594
 DNA_NN3 = {
     'init': (0, 0), 'init_A/T': (2.3, 4.1), 'init_G/C': (0.1, -2.8),
