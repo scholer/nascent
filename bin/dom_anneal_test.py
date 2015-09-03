@@ -75,11 +75,16 @@ if __name__ == '__main__':
                     'print_statsline_when_saving': True,
                    }
     simulator = Simulator(volume=al, strands=input_oligos, params=adhoc_params,
-                          outputstatsfile=outputstatsfile, verbose=1)
+                          outputstatsfiles=outputstatsfile, verbose=0)
 
     #simulator.anneal(T_start=273+90, T_finish=273+20, n_steps_per_T=100000)
     try:
-        simulator.anneal(T_start=273+90, T_finish=273+20, n_steps_per_T=100000)
+        offset = 0.3
+        start = 80  # deg C
+        stop = 40   # deg C
+        start, stop = stop, start   # invert
+        step = -1 if start > stop else +1   # deg C
+        simulator.anneal(T_start=273+start+offset, T_finish=273+stop+offset, delta_T=step, n_steps_per_T=50000)
     except KeyboardInterrupt:
         simulator.save_stats_cache()
 
