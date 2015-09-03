@@ -28,7 +28,7 @@ TODO: Change all mentions of "strand" to "oligo" to conform with cadnano's nomen
 import random
 import math
 from collections import deque
-from itertools import zip_longest, chain
+from itertools import zip_longest, chain#, accumulate
 
 
 N_AVOGADRO = 6.022e23
@@ -148,11 +148,11 @@ class Complex():
         return dist, new_complex, delete_this
 
     def add_connection(self, domain1, domain2):
-        print("Adding connection to Complex: %s<->%s" % (domain1, domain2))
+        #print("Adding connection to Complex: %s<->%s" % (domain1, domain2))
         self.Connections.add(frozenset((domain1, domain2)))
 
     def remove_connection(self, domain1, domain2):
-        print("Removing connection from Complex: %s<->%s" % (domain1, domain2))
+        #print("Removing connection from Complex: %s<->%s" % (domain1, domain2))
         self.Connections.remove(frozenset((domain1, domain2)))
 
 
@@ -404,7 +404,7 @@ class Domain():
         """
         # First create an iterator strategy for visiting all nodes in order of distance to self:
         distances = {}
-        parents = {}
+        #parents = {}
         Q = deque()
         distances[self] = 0     # distance to self is 0
         Q.append(self)          # We append "to the right"
@@ -418,7 +418,7 @@ class Domain():
                     return distances[u]
                 if d not in distances:
                     distances[d] = distances[u] + 1
-                    parents[d] = u
+                    #parents[d] = u
                     Q.append(d)
 
     def connected_components(self):
@@ -432,7 +432,6 @@ class Domain():
         Return list of immediate neighbors a distance-based.
         This list only includes domains that are directly to the 5p or 3p of this domain, or this domain's Partner.
         """
-        from itertools import accumulate
         return [domain for domain in (self.domain5p(), self.domain3p(), self.Partner)
                 if domain is not None]
 
@@ -442,9 +441,10 @@ class Domain():
         Unlike immediate_neighbors, this method returns all domains connected to the same strand as self,
         as well as self.Partner (in third place).
         """
-        from itertools import accumulate
-        return [domain for domain in chain(*zip_longest(self.domains5p(), self.domains3p(), [self.Partner]))
-                if domain is not None]
+        if self.Partner:
+            yield self.Partner
+        yield from (domain for domain in chain(*zip_longest(self.Strand.domains5p(self), self.Strand.domains3p(self)))
+                    if domain is not None)
 
     def domains5p(self):
         """ Return a slice of all domains towards the 5p end on the same strand from this domain. """

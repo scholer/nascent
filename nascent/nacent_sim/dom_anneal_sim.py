@@ -121,6 +121,7 @@ Some calculations:
 """
 
 #import sys
+import os
 import random
 #from random import choice
 from collections import defaultdict
@@ -140,7 +141,11 @@ class Simulator():
     Simulator class to hold everything required for a single simulation.
     """
 
-    def __init__(self, volume, strands, params, verbose=0, domain_pairs=None, outputstatsfile=None):
+    def __init__(self, volume, strands, params, verbose=0, domain_pairs=None,
+                 outputstatsfiles=None):
+        """
+        outputstatsfiles : A dict of <stat type>: <outputfilename>
+        """
         self.Tube = Tube(volume, strands)
         self.Volume = volume
         self.Strands = strands
@@ -168,12 +173,22 @@ class Simulator():
         self.Domain_dHdS = {}
         #self.Visualization_hook = self.print_domain_hybridization_percentage
         #self.Visualization_hook = self.randomly_print_stats
-        self.Visualization_hook = self.save_stats_if_large
+        self.Default_statstypes = ("timesampling", "changesampling")
+        self.Visualization_hook = None # self.save_stats_if_large
 
-        self.Outputstatsfile = outputstatsfile
+        if isinstance(outputstatsfiles, str):
+            base, ext = os.path.splitext(outputstatsfiles)
+            outputstatsfiles = {k: base+"_"+k+ext for k in self.Default_statstypes}
+        self.Outputstatsfiles = outputstatsfiles    # dict with <stats type>: <outputfilepath> entries
         self.Record_stats = params.get("record_stats", True)    # Enable or disable stats recording
+        # Record stats every N number of steps.
+        self.Timesampling_frequency = self.Params.get('timesampling_frequency', 10)
+        self.N_steps = 0    # Total number of steps
+        self.N_changes = 0  # Number of state changes (hybridizations or de-hybridizations)
         # Save stats to a cache and only occationally append them to file on disk.
-        self.Stats_cache = []   # list of tuples: (Temperature, N_dom_hybridized, %_dom_hybridized, N_oligos_hybridized, %_oligos_hybridized)
+        # Stats_cache: dict <stats type>: <stats>, where stats is a list of tuples:
+        # [(Temperature, N_dom_hybridized, %_dom_hybridized, N_oligos_hybridized, %_oligos_hybridized), ...]
+        self.Stats_cache = {k: [] for k in self.Default_statstypes}
 
         print("Simulator initiated at V=%s with %s strands spanning %s domains." \
               % (self.Volume, len(self.Strands), len(self.Domains)))
@@ -183,20 +198,24 @@ class Simulator():
 
 
 
-    def n_hybridized_domains(self, ):
-        count =  sum(1 for domain in self.Domains_list if domain.Partner)
+    def n_hybridized_domains(self):
+        """ Count the number of hybridized domains. """
+        count = sum(1 for domain in self.Domains_list if domain.Partner)
         if not count % 2 == 0:
             print("Weird - n_hybridized_domains counts to %s (should be an even number)" % count)
             print("Hybridized domains:", ", ".join(str(domain) for domain in self.Domains_list if domain.Partner))
         return count
 
-    def n_hybridized_strands(self, ):
+    def n_hybridized_strands(self):
+        """ Count the number of hybridized strands. """
         return sum(1 for oligo in self.Strands if oligo.is_hybridized())
 
 
-    def get_complexes(self, ):
+    def get_complexes_and_strands(self):
+        """ Return all complexes and strands that are in a complex. """
         complexed_strands = [strand for strand in self.Strands if strand.Complex]
         complexes = {strand.Complex for strand in complexed_strands}
+        return complexed_strands, complexes
 
 
     def select_event_domains(self, oversampling=1):
@@ -208,6 +227,15 @@ class Simulator():
         dom1 = random.choice(self.Domains_list)
         if dom1.Partner:
             return (dom1, dom1.Partner, True)
+
+        ## Note: The steps speed up considerably when reaching low temperatures where most domains are hybridized.
+        ## That indicates that the steps below takes up considerable computation time.
+        ## I imagine calling d.effective_activity when calculating domain_weights takes considerable time.
+        ## However, this should only be slow when the two domains are in the same complex and we have to calculate
+        ## the distance between the two domains.
+        ## Note sure about np.random.choice(...), but I imagine that is fairly fast.
+        ## OK, think I optimized it a bit. Now simulations slows down when there are lots of state *changes*.
+
         # Only consider domains that are not already paired up:
         candidates = [d for d in self.Domains_by_name[self.Domain_pairs[dom1.Name]] if not d.Partner]
         # Whether we find a candidate depends on (1) the number of candidates and (2) the volume.
@@ -244,6 +272,8 @@ class Simulator():
 
         domain_weights = [d.effective_activity(dom1, volume=self.Volume, oversampling=oversampling)
                           for d in candidates]
+
+
         # Do you add a specific "water/None" option?
         # Or do you first calculate "is a domain gonna be selected?" and then select which domain is selected?
         domain_weights_sum = sum(domain_weights)
@@ -500,10 +530,11 @@ class Simulator():
             if is_hybridized:
                 if self.VERBOSE > 1:
                     print("- DE-HYBRIDIZING domain 1 and 2 (%s and %s)" % (domain1, domain2))
-                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                # assert self.n_hybridized_domains() == self.N_domains_hybridized
                 domain1.dehybridize(domain2)
+                self.N_changes += 1
                 self.N_domains_hybridized -= 2
-                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                # assert self.n_hybridized_domains() == self.N_domains_hybridized
                 if self.Record_stats:
                     self.record_stats_snapshot(T)
                 if self.Visualization_hook:
@@ -521,10 +552,11 @@ class Simulator():
                 # HYBRIDIZE:  (separate this logic out)
                 if self.VERBOSE > 1:
                     print("- HYBRIDIZING domain 1 and 2 (%s and %s)" % (domain1, domain2))
-                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                # assert self.n_hybridized_domains() == self.N_domains_hybridized
                 domain1.hybridize(domain2)
+                self.N_changes += 1
                 self.N_domains_hybridized += 2
-                assert self.n_hybridized_domains() == self.N_domains_hybridized
+                # assert self.n_hybridized_domains() == self.N_domains_hybridized
                 if self.Record_stats:
                     self.record_stats_snapshot(T)
                 if self.Visualization_hook:
@@ -547,9 +579,12 @@ class Simulator():
                       (self.n_hybridized_domains(), self.N_domains_hybridized))
                 raise(e)
             n_done += 1
+            self.N_steps += 1
             if n_done % 10000 == 0:
-                print("Simulated %s of %s steps at T=%s K (%s stats entries)" % \
-                      (n_done, n_steps_max, T, len(self.Stats_cache)))
+                print("Simulated %s of %s steps at T=%s K (%s state changes in %s total steps)" % \
+                      (n_done, n_steps_max, T, self.N_changes, self.N_steps))
+            if self.Record_stats and (self.N_steps % self.Timesampling_frequency == 0):
+                self.record_stats_snapshot(T, statstype="timesampling")
         assert self.n_hybridized_domains() == self.N_domains_hybridized
 
 
@@ -564,43 +599,51 @@ class Simulator():
         # It would probably be nice to also capture "time-interspersed" snapshots, so that I can distinguish this.
         """
 
-        for T in range(T_start, T_finish, delta_T):
+        # Range only useful for integers...
+        T = T_start
+        assert delta_T != 0
+        assert T_start > T_finish if delta_T < 0 else T_finish > T_start
+        while T >= T_finish if delta_T < 0 else T <= T_finish:
             print("\nSimulating at %s K for %s steps (ramp is %s K to %s K in %s K increments)" % \
                   (T, n_steps_per_T, T_start, T_finish, delta_T))
             self.simulate(T, n_steps_per_T)
-        self.save_stats_cache()
+            T += delta_T
+            self.save_stats_cache() # Save cache once per temperature
 
 
     def save_stats_if_large(self, **kwargs):
         """ Save stats cache when it is sufficiently large. """
-        if len(self.Stats_cache) > 1000:
+        if any(len(cache) > 10000 for cache in self.Stats_cache.values()):
             self.save_stats_cache()
 
-    def save_stats_cache(self, outputfn=None):
+    def save_stats_cache(self, outputfilenames=None):
         """ Save stats cache to outputfn. """
         if self.Print_statsline_when_saving:
             print("| Total domain hybridization percentage: {:.0%} ({} of {})".format(
                 self.N_domains_hybridized/self.N_domains,
                 self.N_domains_hybridized, self.N_domains))
-            print(", ".join(str(i) for i in self.Stats_cache[-1]))
-        if outputfn is None:
-            outputfn = self.Outputstatsfile
-        if not outputfn:
-            print("Unable to save stats cache: outputstatsfile is:", outputfn)
+            #print(", ".join(str(i) for i in self.Stats_cache[-1]))
+        if outputfilenames is None:
+            outputfilenames = self.Outputstatsfiles
+        if not outputfilenames:
+            print("Unable to save stats cache: outputstatsfile is:", outputfilenames)
             return
-        with open(outputfn, 'a') as fp:
-            # self.Stats_cache = [(Temperature, N_doms_hybridized, %_doms_hybridized), ...]
-            fp.write("\n".join(", ".join(str(i) for i in line) for line in self.Stats_cache)+"\n")
-        self.Stats_cache = []
+        for statstype, outputfn in outputfilenames.items():
+            with open(outputfn, 'a') as fp:
+                # self.Stats_cache = [(Temperature, N_doms_hybridized, %_doms_hybridized), ...]
+                fp.write("\n".join(", ".join(str(i) for i in line) for line in self.Stats_cache[statstype])+"\n")
+            self.Stats_cache[statstype] = []    # Reset the cache
 
-    def record_stats_snapshot(self, T):
+
+    def record_stats_snapshot(self, T, statstype="changesampling"):
         """ Save stats snapshot to stats cache. """
-        self.Stats_cache.append((T,
-                                 self.N_domains_hybridized,
-                                 self.N_domains_hybridized/self.N_domains,
-                                 self.N_strands_hybridized,
-                                 self.N_strands_hybridized/self.N_strands
-                                ))
+        self.Stats_cache[statstype].append((T,
+                                            self.N_domains_hybridized,
+                                            self.N_domains_hybridized/self.N_domains,
+                                            self.N_strands_hybridized,
+                                            self.N_strands_hybridized/self.N_strands
+                                           ))
+
 
     def randomly_print_stats(self, **kwargs):
         """ Print stats at random intervals. """
