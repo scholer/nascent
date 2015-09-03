@@ -1,0 +1,2 @@
+Strand	Domains	Sequence
+3w-3	H2D, h2b	AGTGAGCGCAACGCAA, GGAAACCTGTCGTGCC
