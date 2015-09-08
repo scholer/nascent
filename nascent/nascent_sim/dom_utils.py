@@ -52,7 +52,7 @@ def parse_strand_domains_file(filepath, sep1="\t", sep2=",", n_clones_default=1)
     for i, line in enumerate(lines, 2):
         strand_name = line[0]
         try:
-            n_clones = line[3]
+            n_clones = int(line[3])
         except IndexError:
             n_clones = n_clones_default
         for _ in range(n_clones):

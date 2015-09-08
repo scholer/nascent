@@ -142,7 +142,7 @@ DNA_DE1 = {
 
 def canonical_partitions(energies, T, unit='cal/mol'):
     """
-    Return list [exp(-E_s / kT) for s in microstates]
+    Return list [exp(-E_s / kT) for s in energies microstates]
     """
     k = {'J/K': 1.380e-23, 'cal/K': 0.329e-23}
     R = {'J/mol/K': 8.314, 'cal/mol/K': 1.987}
@@ -188,11 +188,14 @@ def binary_state_probability(energy, T, unit='cal/mol', Q=1):
     At T = 330 K, this will give a correction factor of
         RT ln(Q) = 1.987 cal/mol/K * 330 K * ln(1e3) = 4529 cal/mol.
 
+    TODO: Notice - Pierce et al often use Q to denote partition functions rather than
+        reaction fractions. Consider using "K" instead of Q.
     """
     if Q is None:
         Q = 1
-    k = {'J/K': 1.380e-23, 'cal/K': 0.329e-23}
-    R = {'J/mol/K': 8.314, 'cal/mol/K': 1.987}
+    # TODO: Optimize this to make it more efficient.
+    k = {'J/K': 1.380e-23, 'cal/K': 0.329e-23}  # Boltzman. For single particle states.
+    R = {'J/mol/K': 8.314, 'cal/mol/K': 1.987}  # Gas constant. For molar quantities.
     if 'mol' in unit:
         beta = 1/(R['cal/mol/K' if 'cal' in unit else 'J/mol/K']*T)
     else:
@@ -202,9 +205,30 @@ def binary_state_probability(energy, T, unit='cal/mol', Q=1):
     if Q is not None and Q != 1:
         energy = energy + math.log(Q)/beta # ΔG = ΔG° + RT ln(Q), beta = 1/RT
     p_i = 1 / (1 + math.exp(beta*energy))   # Same as e^(ΔE/kT)...
-    # The minus is lost during algebraic transformation:
+    # The minus in part = e^(-ΔE/kT) is lost during algebraic transformation:
     # p_i = exp(-ΔE/kT) / (exp(-ΔE/kT) + 1) = 1/(1+exp(ΔE/kT))
     return p_i
+
+def binary_state_probability_cal_per_mol(deltaE, T, Q=1):
+    """
+    Optimized calculation of binary state probability from deltaE, T and Q.
+    Gives the probability of being in state f, considering the a system of two
+    states, i and f and the state change: i -> f where deltaE is E_f - E_i
+    If the initial and final states have multiple components, and the given
+    deltaE is for another system, you can include a proper Q, which is the
+    molecualar ratio: Q = [f_1]*[f_2]*(...) / [i_1]*[i_2]*(...)
+    For a hybridization reaction, this is Q = [duplex] / ([strandA]*[strandB])
+    """
+    #if Q and Q != 1:
+    #    deltaE = deltaE + math.log(Q)/beta
+    # e^(ΔE/RT) = e^((ΔE° + RT ln(Q))/RT) =
+    #           = e^(ΔE°/RT + ln(Q)) = e^(ΔE°/RT)*Q
+    # Equivalently,
+    #   e^(-ΔE/RT) = e^(-ΔE°/RT) * 1/Q
+    R = 1.987 # cal/mol/K
+    p_i = 1 / (1 + math.exp(deltaE/(R*T))*Q)    # Verified, is OK.
+    return p_i
+
 
 def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
                         tmm_table=DNA_TMM1, imm_table=DNA_IMM1, de_table=DNA_DE1,
@@ -423,10 +447,9 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
         # Symmetry addition:
         deltaH += nn_table['sym'][dH]
         deltaS += nn_table['sym'][dS]
-    if saltcorr:
+    if saltcorr and saltcorr == 5:
         corr = salt_correction(Na=Na, K=K, Tris=Tris, Mg=Mg, dNTPs=dNTPs,
                                method=saltcorr, seq=seq)
-    if saltcorr == 5:
         deltaS += corr
     return deltaH, deltaS
 
@@ -435,7 +458,7 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
 def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
           tmm_table=DNA_TMM1, imm_table=DNA_IMM1, de_table=DNA_DE1,
           dnac1=25, dnac2=25, selfcomp=False, Na=50, K=0, Tris=0, Mg=0,
-          dNTPs=0, saltcorr=5):
+          dNTPs=0, saltcorr=5, molar_unit='nM'):
     """
     Return the Tm using nearest neighbor thermodynamics.
 
@@ -507,8 +530,11 @@ def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
                                          nn_table, tmm_table, imm_table, de_table,
                                          selfcomp, Na, K, Tris, Mg, dNTPs, saltcorr)
 
+    units = {'M': 1, 'm': 1e-3, 'u': 1e-6, 'n': 1e-9, 'p': 1e-12, 'f': 1e-15, 'a': 1e-18}
+    molar_unit = units[molar_unit[0]]
+
     if selfcomp:
-        k = dnac1 * 1e-9    # equilibrium constant for bi-molecular homo-dimerization reaction
+        k = dnac1 * molar_unit    # equilibrium constant for bi-molecular homo-dimerization reaction
         # We are looking at *melting* temperature, and all thermodynamic data are for the melting reaction:
         #   duplex -> strandA + strandB
         # K = [strandA]*[strandA] / [hybridized] = [strandA]    # because [strandA] = [hybridized] at Tm.
@@ -516,8 +542,16 @@ def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
     else:
         # "x equals 4 for nonself-complementary duplexes and equals 1 for self-complementary duplexes."
         # For bi-molecular hybridization reaction:
-        # K = [strandA]*[strandB]/[hybridized] =        # because [hybridized] = ([strandA]+[strandB])/2
-        k = (dnac1 - (dnac2 / 2.0)) * 1e-9      # I don't get it... If dnac2 > 2 dnac1 then this is negative...?
+        # K = [strandA]*[strandB]/[duplex]
+        # StrandB (in excess): [strandB] = [strandB]_init - [duplex]
+        # At T=Tm (half of strandA is in duplex), [duplex] = [strandA] = [strandA]_init/2
+        # and let dnac2 = [strandA]_init/2, dnac1 = [strandB]_init:
+        # At T=Tm: K = [strandB]*[strandA]/[duplex] = [strandB] # since [duplex] = [strandA]
+        #            = [strandB]_init - [duplex]                # since [strandB] = [strandB]_init - [duplex]
+        #            = [strandB]_init - [strandA]_init/2        # since [duplex] = [strandA]_init/2
+        #            = dnac1 - dnac2 / 2
+        k = (dnac1 - (dnac2 / 2.0)) * molar_unit    # Note: This is not for hybridization but for MELTING!
+        # I don't get it... If dnac2 > 2 dnac1 then this is negative...?
         # dnac2 MUST be the lower of the two concentrations.
         # if dnac2 = dnac1, then dnac1 - (dnac2 / 2) = (2*dnac1/2 - (dnac1 / 2)) = dnac1/2
 
@@ -543,7 +577,8 @@ def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
     # We want K = Q = [products]/[reagents] = 1
     # Note: This is based on a two-state approximation, where the melted strands
     # only has a single un-basepaired structure and does not form any secondary structures.
-    if saltcorr:
+    # if saltcorr == 5, then e have already done salt correction when calculating deltaS above:
+    if saltcorr and saltcorr != 5:
         corr = salt_correction(Na=Na, K=K, Tris=Tris, Mg=Mg, dNTPs=dNTPs,
                                method=saltcorr, seq=seq)
     if saltcorr in (1, 2, 3, 4):

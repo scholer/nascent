@@ -29,10 +29,5 @@ Simple module for loading simulation stats back into a python data structure:
 def load_statsfile(statsfile):
     with open(statsfile) as fp:
         lines = (line.strip() for line in fp if line.strip())
-        #data = [[float(val.strip()) for val in  cell]
-        #        for line in fp for cell in line.strip().split(",") if line.strip()]
         data = [[float(cell.strip()) for cell in line.split(",")] for line in lines]
-
     return data
-
-
