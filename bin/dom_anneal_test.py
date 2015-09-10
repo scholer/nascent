@@ -73,7 +73,7 @@ def main():
     structure = "duplex1"
     #structure = "duplex1_2"
     #n_strand_copies_default = 100
-    n_strand_copies_default = 40
+    n_strand_copies_default = 20
 
     # Load strand def and check the strands:
     strand_defs_file = os.path.join(strand_defs_folder, "strand_defs_{}.txt".format(structure))
@@ -113,8 +113,16 @@ def main():
     #note = "First simulation with new probability model (repeat, now with r_hyb). Still selection based. Setting oversampling to 1."
     #note = "Second simulation with new probability model. Removing random.random() > math.exp(deltaG/(R*T)) before hybridizing selected strands."
     #note = "Third simulation with new probability model. Adding *0.5 to r_hyb to account for the fact that for every duplex we have two domains."
-    note = "Fourth simulation with new probability model. Still with factor 0.5 before r_hyb (r_mel = exp(+ΔG°/RT) * r_mel), but now re-introducing random.random() > math.exp(deltaG/(R*T))*r_hyb before hybridizing selected strands. Also increasing n_steps_per_T to 2e6."
-
+    #note = "Decreasing oversampling and n_strands."
+    #note = "Adding an arbitrary factor 10 to p_hyb: p_hyb_old = 1 / (1 + math.exp(dG_std/(R*T))*self.Oversampling*10/compl_activity)."
+    #note = "Still that arbitrary factor 10 to p_hyb, but ramping up oversampling to 2000."
+    # That factor 10 helped... but why? Maybe I calculate the wrong dG_std?
+    note = ("""Fixed dG calculation (although only off by 4 cal/mol/K).
+Still, that's a factor 1/exp(dS/R) = 1/exp(2) = 7.39! That could explain why multiplying by a factor 10 helped.""" +
+            #"This run I still have the factor 10. Starting hot."
+            #"This run I removed the factor 10, starting hot."
+            "This run I removed the factor 10, starting cold."
+           )
     nl = 1e-15  # If volume = 1 nl, then each domain is approx 1.67 nM.
     al = 1e-18  # If volume = 1 al, then each domain is approx 1.67 uM.
     volume = al # / 1000
@@ -132,10 +140,10 @@ def main():
         oversampling_factor, n_steps_per_T = int(oversampling_max), int(n_steps_min)
     else:
         #n_steps_per_T = 20000
-        n_steps_per_T = 2000000
+        n_steps_per_T = 200000
         #n_steps_per_T = 500000
         # oversampling_factor = 100*n_strand_copies_default
-        oversampling_factor = 1
+        oversampling_factor = 2000
 
 
     print("oversampling_factor:", oversampling_factor, "(max is %s)" % int(oversampling_max))
@@ -163,10 +171,10 @@ def main():
     # Perform calculations and start simulation
     try:
         offset = 0 #0.3
-        start = 40  # deg C
+        start = 50  # deg C
         #start = 60  # deg C
-        stop = 90   # deg C
-        start, stop = stop, start   # invert
+        stop = 80   # deg C
+        #start, stop = stop, start   # invert => start hot
         step = -1 if start > stop else +1   # deg C
         T_start, T_finish = [273+val+offset for val in (start, stop)]
 
@@ -196,14 +204,18 @@ def main():
                        'note': note
                       }, fp)
 
-
         ## INITIATE ANNEALING
         simulator.anneal(T_start=T_start, T_finish=T_finish, delta_T=step)
 
-
     except KeyboardInterrupt:
         print("\n\nABORT: KeyboardInterrupt.\n\n")
-        simulator.save_stats_cache()
+        answer = input("Do you want to save the simulation data for this aborted run? [yes]/no  ")
+        if answer and answer[0].lower() == 'n':
+            os.remove(outputstatsfile)  # clean up, if we are not saving.
+            return
+
+    simulator.save_stats_cache()
+
     Tm_filename = os.path.splitext(outputstatsfile)[0] + ".energies.yaml"
     with open(Tm_filename, 'w') as fp:
         yaml.dump(simulator.Domain_dHdS, fp)

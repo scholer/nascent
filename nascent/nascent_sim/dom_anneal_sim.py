@@ -355,9 +355,10 @@ class Simulator():
         ## Note: At the moment we rely on complexes being garbage collected when it is not bound by any strands
         ## via strand.Complex attribute.
         self.NN_Table = nn_table if nn_table else DNA_NN4
-        self.Complexes = []
+        self.Params = params
         self.Tube = Tube(volume, strands)
         self.Volume = volume
+        self.Complexes = []
         self.Strands = strands
         self.Strands_by_name = defaultdict(list)
         for strand in strands:
@@ -375,6 +376,7 @@ class Simulator():
         self.N_domains_hybridized = sum(1 for domain in self.Domains_list if domain.Partner)
         self.N_strands_hybridized = sum(1 for oligo in self.Strands if oligo.is_hybridized())
         self.Domains_by_name = defaultdict(list)
+        self.Compl_dom_selection = "conc"
         for d in self.Domains:
             self.Domains_by_name[d.Name].append(d)
         print("Domains in self.Domains_by_name:")
@@ -390,7 +392,6 @@ class Simulator():
         self.Domain_pairs = domain_pairs
         self.Uppers = [d for d in self.Domains if d == d.upper()]
         self.Lowers = [d for d in self.Domains if d == d.lower()]
-        self.Params = params
         # Standard enthalpy and entropy of hybridization,
         # indexed as [<domain-name-uppercase>][0 or 1]
         self.Domain_dHdS = {}
@@ -406,9 +407,11 @@ class Simulator():
         self.Record_stats = params.get("record_stats", True)    # Enable or disable stats recording
         # Record stats every N number of steps.
         self.Timesampling_frequency = self.Params.get('timesampling_frequency', 10)
+        self.Oversampling = self.Params['probablity_oversampling_factor']
         self.N_steps_per_T = params.get('n_steps_per_T', 100000)
         self.N_steps = 0    # Total number of steps
         self.N_changes = 0  # Number of state changes (hybridizations or de-hybridizations)
+        self.N_selections = 0 # Total number of succeessfull selection of domain1 and domain2.
         # Save stats to a cache and only occationally append them to file on disk.
         # Stats_cache: dict <stats type>: <stats>, where stats is a list of tuples:
         # [(Temperature, N_dom_hybridized, %_dom_hybridized, N_oligos_hybridized, %_oligos_hybridized), ...]
@@ -511,9 +514,9 @@ class Simulator():
         candidates = [d for d in self.Domains_by_name[self.Domain_pairs[dom1.Name]] if not d.Partner]
         return candidates
 
-    def select_event_domains(self, oversampling=1):
+    def select_event_domains(self):
         """
-        Returns a tuple with (domain1, domain2).
+        Returns a tuple with (domain1, domain2, is_hybridized, compl_activity).
         If domain2 is None, then no domain was found for domain1 and nothing should happen.
         Notes:
             For strandA + strandB --> duplex reaction,
@@ -528,7 +531,7 @@ class Simulator():
             # TODO: Consider flipping a coin here, since [duplex] = 0.5 * [duplexed domain or complement]
             # Note: This will decrease p_melt
             # dom2 = dom1.Partner if random.random() < 0.5 else None
-            return (dom1, dom1.Partner, True)
+            return (dom1, dom1.Partner, True, 1)
 
         ## Note: The steps speed up considerably when reaching low temperatures where most domains are hybridized.
         ## That indicates that the steps below takes up considerable computation time.
@@ -574,12 +577,12 @@ class Simulator():
         # Note: oversampling is only used if the domains are not in the same complex:
         # return oversampling*c, c = 1/(N_AVOGADRO*volume)
         # Are we sure oversampling can be applied linearly?
-        domain_weights = [d.effective_activity(dom1, volume=self.Volume, oversampling=oversampling)
+        domain_weights = [d.effective_activity(dom1, volume=self.Volume, oversampling=self.Oversampling)
                           for d in candidates]
 
         # Adding constant water solvent option:
-        candidates.append(None)
-        domain_weights.append(1)    # 1 or maybe even 56 = the molarity of water?
+        #candidates.append(None)
+        #domain_weights.append(1)    # 1 or maybe even 56 = the molarity of water?
         domain_weights_sum = sum(domain_weights)
 
         # Do you add a specific "water/None" option?  (yes, if domain_weights_sum < 1)
@@ -596,7 +599,7 @@ class Simulator():
         dom2 = np.random.choice(candidates, p=domain_weights)
         #print("Candidates and weights: (dom1=%s)" % dom1)
         #print("\n".join("{:<30}: {:.9g}".format(str(d), w) for d, w in zip(candidates, domain_weights)))
-        return dom1, dom2, is_hybridized
+        return dom1, dom2, is_hybridized, domain_weights_sum
 
 
     def hybridization_energy(self, domain1, domain2, T):
@@ -644,6 +647,7 @@ class Simulator():
         deltaH_NN_domain, deltaS_NN_domain = None, None
         NN_domains = [False, False]
         deltaH_corr, deltaS_corr = (0, 0)
+        return deltaH*1000 - T * deltaS, deltaH, deltaS, deltaH_corr, deltaS_corr
 
         ## TODO: If we split a large domain into two half-sized domains, we should get the same result.
         if domain1.domain5p() and domain2.domain3p() \
@@ -658,7 +662,7 @@ class Simulator():
                                           domain1.Sequence[0],
                                           domain2.domain3p().Sequence[0],
                                           domain2.Sequence[-1])
-            deltaH_NN_domain, deltaS_NN_domain = DNA_NN3[NN_stack]
+            deltaH_NN_domain, deltaS_NN_domain = self.NN_Table[NN_stack]
             NN_domains[0] = True
             deltaH_corr += deltaH_NN_domain
             deltaS_corr += deltaS_NN_domain
@@ -669,7 +673,7 @@ class Simulator():
                                           domain2.Sequence[0],
                                           domain1.domain3p().Sequence[0],
                                           domain1.Sequence[-1])
-            deltaH_NN_domain, deltaS_NN_domain = DNA_NN3[NN_stack]
+            deltaH_NN_domain, deltaS_NN_domain = self.NN_Table[NN_stack]
             NN_domains[1] = True
             deltaH_corr += deltaH_NN_domain
             deltaS_corr += deltaS_NN_domain
@@ -721,9 +725,10 @@ class Simulator():
             #  - strand hybridization will reduce the conformational freedom of the complex.
             # This is a dynamic function of the current complex structure and cannot be stored for later use.
             # Obviously, this is only applicable if the two domains are already in the same complex.
-            if domain1.Complex == domain2.Complex:
+            if domain1.Complex and domain1.Complex == domain2.Complex:
                 # TODO: Calculate a better entropy correction for intra-complex hybridizations
-                deltaS_corr += 4
+                # deltaS_corr += 4
+                pass
 
         ### Add corrigating factors
         deltaH += deltaH_corr
@@ -739,110 +744,13 @@ class Simulator():
 
 
 
-    def hybridization_probability(self, domain1, domain2, T, Q=None):
-        """
-        Calculate the partition
-
-        SantaLucia, Dirks (Ann Rev Biophys, 2004): "We note that the database presented is not appropriate
-        for partition function computations (50; J. SantaLucia, unpublished results)." - WTF?
-        Ahh... they are only good for determining Tm.. Not for partition functions far from Tm.
-            - The most likely reason is that either there's some ensemble effects that are not properpy captured
-            by the NN models, or the values are just not accurate enough for partition calculations.
-
-        SantaLucia, Dirks (Ann Rev Biophys, 2004): "Note that many duplexes have competing single-strand structure,
-        and this compromises the validity of the two-state approximation and results in systematically lower TMs than
-        would be predicted by Equation 3 [the equation used to predict Tm]."
-
-        Perhaps I should look at how NuPack calculates its partition functions...
-        NuPack refs:
-            http://www.nupack.org/home/model
-            "The free energy of an unpseudoknotted secondary structure is calculated using nearest-neighbor empirical
-            parameters for RNA in 1M Na+ (Serra and Turner, 1995; Mathews et al., 1999) or DNA in user-specified
-            Na+ and Mg++ concentrations (SantaLucia, 1998; SantaLucia and Hicks, 2004; Koehler and Peyret, 2005)"
-        """
-        deltaG, deltaH, deltaS, deltaH_corr, deltaS_corr = \
-            self.hybridization_energy(domain1, domain2, T)    # return value in cal/mol
-        #R = 1.987  # universal gas constant in cal/mol/K
-        ## Note: R = k * NA , where k is the boltzmann constant and NA is Avogadro's constant.
-        #K = exp(-deltaG/(R*T))
-        ## Not really sure how to convert from equilibrium constant K to probability that they will hybridize
-        ##   the deltaG used to calculate the equilibrium constant is at standard conditions (1 M) !
-        ## Probably refer to NuPack or similar to make sure you get it right...
-        ## Also remember that K = k_on/k_off
-        ##                         k_on              [1/M/s]      # v_on = k_on [strandA] [strandB]
-        ##     domainA + domainB --------> duplex
-        ##                       <--------
-        ##                         k_off             [1/s]       # v_off = k_off [duplex]
-        #if domain1.Complex and domain2.Complex and domain1.Complex == domain2.Complex:
-        #    # What if we are breaking the bond, and the bond is the only bond holding the domains in the same complex?
-        #    # Well, that is a k_off rate, that shouldn't be affected by concentrations anyways.
-        #    c = 1
-        #else:
-        #    # Different complexes
-        #    # 1 nM is about 1 molecule per femto-liter: c = 1 nM: n = 1e-15 L * 1e-9 mol/L = 1e-24 mol = 0.6
-        #    # N_Avogadro = 6.022e23/mol
-        #    c = 1/N_Avogadro/self.Volume
-        #
-        ## Fuck that, I can't see how to include the concentration in the probability.
-        ## As I see it, it should already be included
-        #p = K/(1+K)     # If K = 7/2, then p = 7/(7+2) = K/(K+1) = 1/(1+1/K)
-        #
-        ## Edit: How to include concentration in probability:
-        ## 1) Calculate non-standard ΔG: ΔG = ΔG° + RT ln(Q)
-        ##       where Q = [duplex]/([strandA] [strandB])    # If concentrations are around 1 uM, then Q = 1e6.
-
-        # Note that the concentration is obviously very important. If you have a duplex at T=Tm (so p_duplex = 50%),
-        # at a concentration of 1 uM. If you then increase the concentration/activity to 1 M, then suddenly
-        # the p_duplex is something like 99.9998 % !
-        # Another way to see this is to compare Tm at c = 25 nM with Tm at c = 1 M.
-        # -- typically increases about 30 degC !!
-        # If you want to simulate this, then you need to incorporate this at the earlier "selection" step.
-        # This essentially boils down to setting a very high empty_volume_number in select_event_domains() above.
-        # Alternatively, you can use a lower empty_volume_number (and thus get more selections), but
-        # then you have to compensate using a correcting Q.
-        # For instance, instead of saying "we put the strands so close together that they have an activity of 1",
-        # you could say, "we put them within a distance so their concentrations are 1 mM", and then give Q = 1e3.
-        # Note: Requiring an activity of 1 before hybridization can occour might be way too high:
-        # DNA strands has a certain extend, and can interact at great distances.
-        # Of course, they have to eventually end up in a duplex state, where we can assume an activity of 1...
-        # But that might still yield kinetics that are quite wrong.. Maybe they don't have an activity of 1 in the
-        # duplex state?
-        # Note: There is also a certain probability that the standard ΔH°, ΔS°, and ΔG° values are not suited for
-        # these types of partition calculations (they've stated that them self).
-        # Again: Try to look at what NuPack does.
-        # Edit: Essentially, we just need to assure that at T=Tm, p_on == p_off.
-        # p_on is defined at two stages: selection and hybridization (after it has been selected).
-        #       p_on = p_selection * p_hyb
-        # There are only two easy ways to guarantee that you get the correct p_on:
-        # 1) set p_selection = 1 -- and use concentration to calculate Q which is then used when calculating p_hyb.
-        # 2) Use concentration to calculate p_selection, and use the same p_hyb for both hybridization and melting.
-        #
-        # Another concern is that for low concentrations (1 uM - 1 nM), p_on and p_off will both be very, very
-        # low -- like 1 in a millionth to 1 in a billionth. This requires a lot of fruitless "dice rolling",
-        # before the system actually changes state. And that is at T=Tm...
-        # One way to mitigate this is to do oversampling (or whatever it should be called):
-        # Multiplying both p_on and p_off by a certain probablity_oversampling_factor, to ensure that something
-        # actually happens within a reasonable timeframe.
-        # The thing here is that you need to take state into account:
-        # If the strand/domain is currently hybridized, you need to increase the chance that it will melt.
-        # If it is not currently hybridized, then increase the chance that it (1) find a partner,
-        # (2) to which it will hybridize.
-        if Q is None:
-            Q = 1   # Do selection in select_event_domains()
-            #Q = 1e3 # select_event_domains() selects to 1 mM.
-            #Q = 1e6 # select_event_domains() selects to 1 uM.
-            # Q = (concentration) # If p_selection = 1
-        p_hyb = binary_state_probability_cal_per_mol(deltaG, T, Q=Q)
-
-        return p_hyb
-
 
     def step(self, T):
         """
         Perform a single step in the simulation at temperature T.
         """
-        oversampling = self.Params['probablity_oversampling_factor']
-        domain1, domain2, is_hybridized = self.select_event_domains(oversampling=oversampling)
+        domain1, domain2, is_hybridized, compl_activity = \
+            self.select_event_domains()
         if not domain2:
             # If we are selecting for an activity of 1 (or equal to the duplex activity, whatever that is),
             # then there must be a very high probability of NOT finding a domain2. Like, 1 in a million..
@@ -870,19 +778,50 @@ class Simulator():
         # strands together to Q=1:
         #p_hyb = self.hybridization_probability(domain1, domain2, T)
 
+        self.N_selections += 1
         state_change = False
-        r_hyb = 0.1         # If two domains are selected and not hybridized, what is the chance they will hybridize?
-        deltaG, deltaH, deltaS, deltaH_corr, deltaS_corr = \
+        # r_hyb = 0.1         # If two domains are selected and not hybridized, what is the chance they will hybridize?
+        # deltaG, deltaH, deltaS, deltaH_corr, deltaS_corr
+        # dG_std, dH_std, dS_std, dH_corr, dS_corr
+        #dG_std, *rest = \
+        dG_std, dH_std, dS_std, dH_corr, dS_corr = \
             self.hybridization_energy(domain1, domain2, T)    # return value in cal/mol
+        # The returned dH_std and dS_std are *after* adding dH_corr or dS_corr respectively.
+        #if dH_corr or dS_corr or dG_std != dH_std - T*dS_std:
+        #    print("Unexpected values for dG_std, dH_std, dS_std, dH_corr, dS_corr:")
+        #    print(", ".join("%0.5g" % val for val in (dG_std, dH_std, dS_std, dH_corr, dS_corr)))
+        #    print("dH_std - T*dS_std = %0.6g" % (dH_std*1000 - T*dS_std))
+        #    raise AssertionError("Unexpected event")
+        # Old p_hyb model:
+        # p_hyb_old = 1 / (1 + math.exp(dG_std/(R*T))*Q)    # always used Q=1 after selection.
+        # compl_activity ~0...1 so dividing by compl_activity makes the denominator larger = smaller p_hyb.
+        # oversampling also makes the denominator larger -> smaller p_hyb
+        #p_hyb_old = 1 / (1 + math.exp(dG_std/(R*T))/compl_activity*self.Oversampling) # oversampling might be included in compl_activity.
+        # exp(dG/(R*T) = exp(dH/RT-dS/R) = exp(dH/RT)/exp(dS/R)
+        #p_hyb_old = 1 / (1 + math.exp(dG_std/(R*T))*self.Oversampling*10/compl_activity)
+        p_hyb_old = 1 / (1 + math.exp(dH_std*1000/(R*T)-dS_std/R)*self.Oversampling/compl_activity)
+        # We have shown that p_mel = 1 - p_hyb and p_mel = exp(+ΔG°/RT) * p_hyb
+        # is in agreement with p_hyb = x * 1/(1+exp(+ΔG°/RT)
         if is_hybridized:
             # Are we sure that a linear 0...1 choice is the best probability distribution?
-            if random.random() < math.exp(deltaG/(R*T))*r_hyb*0.5:
+            # Since math.exp(dG_std/(R*T)) can be > 1
+            # r_mel = exp(+ΔG°/RT) * r_hyb = exp(+ΔG°/RT) * 0.1
+            # Here we are looking at melting probability/rate.
+            #if random.random() < math.exp(dG_std/(R*T))*r_hyb*0.5*self.Oversampling:
+            if random.random() >= p_hyb_old:
                 domain1.dehybridize(domain2)
                 state_change = True
         else:
             #
             # possibly add random.random() > exp(+ΔG°/RT) dependency ?
-            if random.random() > math.exp(deltaG/(R*T))*r_hyb:
+            # Usually, I would say that if two domains have been selected, they should (almost) always be hybridized.
+            # But, that introduces a "sampling bias", since the state might be very short lived.
+            # Or maybe add check for compl_activity (Q) ?
+            # You could also add oversampling to
+            # K = exp(dG/RT) = exp(dG/(RT*oversampling)) = exp(dG/RT)^(1/oversampling)
+            # This would make K larger for negative dG and smaller for positive dG.
+            #if random.random() > math.exp(dG_std/(R*T))*r_hyb*self.Oversampling: # sim #41
+            if random.random() < p_hyb_old:
                 domain1.hybridize(domain2)
                 state_change = True
 
@@ -895,186 +834,6 @@ class Simulator():
                 self.Visualization_hook(updated_domains=(domain1, domain2))
 
         return
-
-        #if self.VERBOSE > 2:
-        #    print("\nSelected domain 1 and 2:", domain1, domain2)
-        #    # Probability that the two strands are in hybridized state:
-        #    print("- Hybridization probability:", p_hyb)
-        #if is_hybridized and oversampling:
-        #    # If duplexes are hybridized, increase p_off by decreasing p_hyb:
-        #    p_hyb = 1 - oversampling*(1-p_hyb)
-        #    # If duplexes are not hybridized, probablity_oversampling_factor is applied during domain selection.
-
-        ## Change hybridization state, depending on p_hyb and a dice roll:
-        # p_hyb will typically be very close to 1.0 (e.g. 0.999997), since we assume Q=1 after domain selection
-        # (although oversampling might reduce this slightly)
-        # Note: random is not really random:
-        # It uses a deterministic algorithm to produce numbers, based on a seed.
-        if p_hyb < random.random():
-            # Dices say that domains should be henceforth be in *de-hybridized* state:
-            if is_hybridized:
-                if self.VERBOSE > 1:
-                    print("- DE-HYBRIDIZING domain 1 and 2 (%s and %s)" % (domain1, domain2))
-                # assert self.n_hybridized_domains() == self.N_domains_hybridized
-
-                try:
-                    # If the two strands are already hybridized together, they should already
-                    # be in the same complex:
-                    assert domain1.Complex == domain2.Complex != None
-                except AssertionError as e:
-                    print(e, ": domain1.Complex == domain2.Complex != None ::")
-                    print("domain1.Complex:", domain1.Complex)
-                    print("domain2.Complex:", domain2.Complex)
-                    print("domain1.Strand:", domain1.Strand)
-                    print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                    print("domain2.Strand:", domain2.Strand)
-                    print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                    print("domain1.Complex.Strands:", domain1.Complex.Strands)
-                    raise e
-                try:
-                    assert set(domain1.Strand.connected_oligos()) | {domain1.Strand} \
-                        == set(domain2.Strand.connected_oligos()) | {domain2.Strand} \
-                        == domain1.Complex.Strands
-                except AssertionError as e:
-                    print("domain1:", repr(domain1))
-                    print("domain1.Strand:", repr(domain1.Strand))
-                    print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                    print("domain2:", repr(domain2))
-                    print("domain2.Strand:", repr(domain2.Strand))
-                    print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                    print("domain1.Complex.Strands:", domain1.Complex.Strands)
-                    raise e
-
-                domain1.dehybridize(domain2)
-                #print("domain1.Complex:", domain1.Complex,
-                #      "domain1.Strand.Complex:", domain1.Strand.Complex)
-                #print("domain2.Complex:", domain2.Complex,
-                #      "domain2.Strand.Complex:", domain2.Strand.Complex)
-
-                if domain1.Complex == domain2.Complex:  # They are still connected: Or both are None.
-                    if domain1.Complex is None:
-                        # Both complexes are None
-                        try:
-                            assert domain1.Strand.connected_oligos() == []    # Does not include domain1.Strand it self.
-                            assert domain2.Strand.connected_oligos() == []
-                        except AssertionError as e:
-                            print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                            print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                            print("domain1.Strand:", domain1.Strand)
-                            print("domain2.Strand:", domain2.Strand)
-                            raise e
-                    else:
-                        try:
-                            assert set(domain1.Strand.connected_oligos()) | {domain1.Strand} \
-                                == set(domain2.Strand.connected_oligos()) | {domain2.Strand} \
-                                == domain1.Complex.Strands
-                        except AssertionError as e:
-                            print("domain1.Complex:", domain1.Complex,
-                                  "domain1.Strand.Complex:", domain1.Strand.Complex)
-                            print("domain2.Complex:", domain2.Complex,
-                                  "domain2.Strand.Complex:", domain2.Strand.Complex)
-                            print("domain1.Strand:", domain1.Strand)
-                            print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                            print("domain2.Strand:", domain2.Strand)
-                            print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                            print("domain1.Complex.Strands:", domain1.Complex.Strands)
-                            raise e
-
-                self.N_changes += 1
-                self.N_domains_hybridized -= 2
-                # assert self.n_hybridized_domains() == self.N_domains_hybridized
-                if self.Record_stats:
-                    self.record_stats_snapshot(T)
-                if self.Visualization_hook:
-                    self.Visualization_hook(updated_domains=(domain1, domain2))
-            else:
-                # Dice says domains should be dehybridized, which they already are (is_hybridized = False)
-                if self.VERBOSE > 0:
-                    print("- Domain 1 (%s) did not hybridize to domain2 (%s) (p_hyb = %s) [rare event]" % \
-                        (domain1, domain2, p_hyb))
-        else:
-            # Dices say that domains should be henceforth be in *hybridized* state:
-            if is_hybridized:
-                if self.VERBOSE > 2:
-                    print("- Domain1 REMAINS HYBRIDIZED to domain2 (%s ... %s)" % (domain1, domain2))
-            else:
-                # HYBRIDIZE:  (separate this logic out)
-                if self.VERBOSE > 1:
-                    print("- HYBRIDIZING domain 1 and 2 (%s and %s)" % (domain1, domain2))
-                # assert self.n_hybridized_domains() == self.N_domains_hybridized
-
-                # Assert that the complex is correct before hybridizing the domains:
-                if domain1.Complex == domain2.Complex:  # They are already connected: Or both are None.
-                    if domain1.Complex is None:
-                        # Both complexes are None
-                        try:
-                            assert domain1.Strand.connected_oligos() == []    # Does not include domain1.Strand it self.
-                            assert domain2.Strand.connected_oligos() == []
-                        except AssertionError as e:
-                            print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                            print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                            print("domain1.Strand:", domain1.Strand)
-                            print("domain2.Strand:", domain2.Strand)
-                            raise e
-                    else:
-                        # The two complexes are already connected. Make sure the complex is correct
-                        try:
-                            assert set(domain1.Strand.connected_oligos()) | {domain1.Strand} \
-                                == set(domain2.Strand.connected_oligos()) | {domain2.Strand} \
-                                == domain1.Complex.Strands
-                        except AssertionError as e:
-                            print("domain1.Complex:", domain1.Complex,
-                                  "domain2.Complex:", domain2.Complex)
-                            print("domain1.Strand:", domain1.Strand, "domain2.Strand:", domain2.Strand)
-                            print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                            print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                            print("domain1.Complex.Strands:", domain1.Complex.Strands)
-                            print("domain1.Complex.Strands_history:", domain1.Complex.Strands_history)
-                            print("domain1.Complex.Strands_changes:", domain1.Complex.Strands_changes)
-                            raise e
-
-
-                domain1.hybridize(domain2)
-
-                # Assert that the two domains are now hybridized:
-                # and that their strands are in the common complex and connected:
-                try:
-                    # If the two strands are already hybridized together, they should already
-                    # be in the same complex:
-                    assert domain1.Complex == domain2.Complex != None
-                except AssertionError as e:
-                    print(e, ": domain1.Complex == domain2.Complex != None ::")
-                    print("domain1.Complex:", domain1.Complex)
-                    print("domain2.Complex:", domain2.Complex)
-                    print("domain1.Strand:", domain1.Strand)
-                    print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                    print("domain2.Strand:", domain2.Strand)
-                    print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                    print("domain1.Complex.Strands:", domain1.Complex.Strands)
-                    raise e
-                try:
-                    assert set(domain1.Strand.connected_oligos()) | {domain1.Strand} \
-                        == set(domain2.Strand.connected_oligos()) | {domain2.Strand} \
-                        == domain1.Complex.Strands
-                except AssertionError as e:
-                    print("domain1:", repr(domain1))
-                    print("domain1.Strand:", repr(domain1.Strand))
-                    print("domain1.Strand.connected_oligos():", domain1.Strand.connected_oligos())
-                    print("domain2:", repr(domain2))
-                    print("domain2.Strand:", repr(domain2.Strand))
-                    print("domain2.Strand.connected_oligos():", domain2.Strand.connected_oligos())
-                    print("domain1.Complex.Strands:", domain1.Complex.Strands)
-                    raise e
-
-
-                self.N_changes += 1
-                self.N_domains_hybridized += 2
-                # assert self.n_hybridized_domains() == self.N_domains_hybridized
-                if self.Record_stats:
-                    self.record_stats_snapshot(T)
-                if self.Visualization_hook:
-                    self.Visualization_hook(updated_domains=(domain1, domain2))
-
 
 
     def simulate(self, T, n_steps_max=100000):
@@ -1094,8 +853,8 @@ class Simulator():
             n_done += 1
             self.N_steps += 1
             if n_done % 10000 == 0:
-                print("Simulated %s of %s steps at T=%s K (%s state changes in %s total steps)" % \
-                      (n_done, n_steps_max, T, self.N_changes, self.N_steps))
+                print("Simulated %s of %s steps at T=%s K (%0.0f C). %s state changes with %s selections in %s total steps." % \
+                      (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
             if self.Record_stats and (self.N_steps % self.Timesampling_frequency == 0):
                 self.record_stats_snapshot(T, statstype="timesampling")
         assert self.n_hybridized_domains() == self.N_domains_hybridized
