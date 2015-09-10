@@ -305,6 +305,7 @@ from .energymodels.biopython import (binary_state_probability_cal_per_mol,
 
 
 N_AVOGADRO = 6.022e23   # /mol
+R = 1.987  # universal gas constant in cal/mol/K
 
 
 def get_NN_stacks(domain1, domain2):
@@ -867,16 +868,42 @@ class Simulator():
 
         # Selection takes care of the concentration-dependent probability of bringing non-complexed
         # strands together to Q=1:
-        p_hyb = self.hybridization_probability(domain1, domain2, T)
+        #p_hyb = self.hybridization_probability(domain1, domain2, T)
 
-        if self.VERBOSE > 2:
-            print("\nSelected domain 1 and 2:", domain1, domain2)
-            # Probability that the two strands are in hybridized state:
-            print("- Hybridization probability:", p_hyb)
-        if is_hybridized and oversampling:
-            # If duplexes are hybridized, increase p_off by decreasing p_hyb:
-            p_hyb = 1 - oversampling*(1-p_hyb)
-            # If duplexes are not hybridized, probablity_oversampling_factor is applied during domain selection.
+        state_change = False
+        r_hyb = 0.1         # If two domains are selected and not hybridized, what is the chance they will hybridize?
+        deltaG, deltaH, deltaS, deltaH_corr, deltaS_corr = \
+            self.hybridization_energy(domain1, domain2, T)    # return value in cal/mol
+        if is_hybridized:
+            # Are we sure that a linear 0...1 choice is the best probability distribution?
+            if random.random() < math.exp(deltaG/(R*T))*r_hyb*0.5:
+                domain1.dehybridize(domain2)
+                state_change = True
+        else:
+            #
+            # possibly add random.random() > exp(+ΔG°/RT) dependency ?
+            if random.random() > math.exp(deltaG/(R*T))*r_hyb:
+                domain1.hybridize(domain2)
+                state_change = True
+
+        if state_change:
+            self.N_changes += 1
+            self.N_domains_hybridized += -2 if is_hybridized else 2
+            if self.Record_stats:
+                self.record_stats_snapshot(T)
+            if self.Visualization_hook:
+                self.Visualization_hook(updated_domains=(domain1, domain2))
+
+        return
+
+        #if self.VERBOSE > 2:
+        #    print("\nSelected domain 1 and 2:", domain1, domain2)
+        #    # Probability that the two strands are in hybridized state:
+        #    print("- Hybridization probability:", p_hyb)
+        #if is_hybridized and oversampling:
+        #    # If duplexes are hybridized, increase p_off by decreasing p_hyb:
+        #    p_hyb = 1 - oversampling*(1-p_hyb)
+        #    # If duplexes are not hybridized, probablity_oversampling_factor is applied during domain selection.
 
         ## Change hybridization state, depending on p_hyb and a dice roll:
         # p_hyb will typically be very close to 1.0 (e.g. 0.999997), since we assume Q=1 after domain selection

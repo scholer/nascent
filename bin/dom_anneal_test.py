@@ -110,14 +110,17 @@ def main():
     note = ""
     #note = "Explicit water during selection of domain2 - lower oversampling"
     #note = "Back to standard 1 al volume = 1.67 uM of each individual strand."
-    note = "Reducing added water solvent choice to c = 1M. Reducing coverage to 0.1."
+    #note = "First simulation with new probability model (repeat, now with r_hyb). Still selection based. Setting oversampling to 1."
+    #note = "Second simulation with new probability model. Removing random.random() > math.exp(deltaG/(R*T)) before hybridizing selected strands."
+    #note = "Third simulation with new probability model. Adding *0.5 to r_hyb to account for the fact that for every duplex we have two domains."
+    note = "Fourth simulation with new probability model. Still with factor 0.5 before r_hyb (r_mel = exp(+ΔG°/RT) * r_mel), but now re-introducing random.random() > math.exp(deltaG/(R*T))*r_hyb before hybridizing selected strands. Also increasing n_steps_per_T to 2e6."
 
     nl = 1e-15  # If volume = 1 nl, then each domain is approx 1.67 nM.
     al = 1e-18  # If volume = 1 al, then each domain is approx 1.67 uM.
     volume = al # / 1000
     volume = volume*n_strand_copies_default     # If you want to keep the strand concentration constant
 
-    auto_oversample_and_steps = True
+    auto_oversample_and_steps = False
 
     # Increase chance of selection or dehybridization by 1000
     oversampling_max, n_steps_min = get_max_oversampling_and_min_n_steps(
@@ -129,10 +132,10 @@ def main():
         oversampling_factor, n_steps_per_T = int(oversampling_max), int(n_steps_min)
     else:
         #n_steps_per_T = 20000
-        n_steps_per_T = 100000
+        n_steps_per_T = 2000000
         #n_steps_per_T = 500000
         # oversampling_factor = 100*n_strand_copies_default
-        oversampling_factor = 5000
+        oversampling_factor = 1
 
 
     print("oversampling_factor:", oversampling_factor, "(max is %s)" % int(oversampling_max))
