@@ -175,14 +175,56 @@ TODOS:
         oversampling_factor_max = 1000 / domain_concentration
                                 = 1000 * N_Avogadro * volume
 
+* TODO: Investigate the current issue (Sep 7th) where a simple duplex (duplex1) simulation
+        yields an annealing curve with a prominent shoulder between T=80C and T=64 C (Tm=62C).
+        - also present for melting curve (duplex1/#15).
+        - more n_steps_per_T makes it worse.
+        - high oversampling_factor makes it worse.
+
+        It definitely seems to be an issue with oversampling.
+
+* TODO: Review domain selection vs thermodynamic probability.
+        Currently, probability selection of a complementary domain is:
+            p_hyb = k * [compl_domain]
+        Which is similar to
+            Q = [duplex]/([domain]*[complement])
+        and:
+            p_i = 1 / (1 + math.exp(deltaE/(R*T))*Q)
+        The idea with selection was that
+            p_hyb = p_selection * (p_hyb|selection)
+        But that doesn't sound like it would give the same as above:
 
 
+
+
+* TODO: Implement option to do hybridization selection through thermodynamic calculation
+        rather than during selection.
+
+
+* TODO: Go back and review simulation strategy and model with respect
+        to v_hyb, v_melt and K = k_hyb/k_melt
+
+* TODO: Implement graph-based visualization
+
+* TODO: Implement complex manager/tracker.
+
+
+* Done: Calculate the thermodynamicly correct melting curve for reference.
+        This is just calculating the partition functions for the two states for every T in the range.
+        Probably even just use
+            K = 1 / ([strandB]_init - [strandA]_init/2)    # Equilibrium constant, because we are at equilibrium.
+            ΔG° = ΔH° - T*ΔS°
+            binary_state_probability_cal_per_mol(ΔG°, T, Q=K)
 
 Done:
 * Done: Plotting of multiple simulation datasets.
 * Done: Re-check probability functions
 * Done: Re-check selection function.
 * Done: Check the quality of random and numpy.random - both seem good.
+* Done: thermodynamic_meltingcurve calculation -- based on K from deltaG from deltaH and deltaS.
+* Done: plotting: plot_thermodynamic_meltingcurve
+* Done: plot_nupack_f_complexed_strands_vs_T - using downloaded job data from NuPack.
+* Done: Plotting of f_hyb_vs_N_steps, with temperature range selection.
 
 
 ==== Comparison with NuPack ====
@@ -251,6 +293,8 @@ import os
 import random
 #from random import choice
 from collections import defaultdict
+import math
+from datetime import datetime
 #from math import log, exp
 
 import numpy as np
@@ -302,13 +346,14 @@ class Simulator():
     """
 
     def __init__(self, volume, strands, params, verbose=0, domain_pairs=None,
-                 outputstatsfiles=None):
+                 outputstatsfiles=None, nn_table=None):
         """
         outputstatsfiles : A dict of <stat type>: <outputfilename>
         """
         ## TODO: Implement a ComplexManager to keep track of all the complexes.
         ## Note: At the moment we rely on complexes being garbage collected when it is not bound by any strands
         ## via strand.Complex attribute.
+        self.NN_Table = nn_table if nn_table else DNA_NN4
         self.Complexes = []
         self.Tube = Tube(volume, strands)
         self.Volume = volume
@@ -316,6 +361,9 @@ class Simulator():
         self.Strands_by_name = defaultdict(list)
         for strand in strands:
             self.Strands_by_name[strand.Name].append(strand)
+        print("Strands in self.Strands_by_name:")
+        print("\n".join("- %10s: %s species" % (sname, len(strands))
+                        for sname, strands in self.Strands_by_name.items()))
         self.VERBOSE = verbose
         self.Print_statsline_when_saving = params.get('print_statsline_when_saving', False)
         # random.choice requires a list, not a set.
@@ -328,7 +376,14 @@ class Simulator():
         self.Domains_by_name = defaultdict(list)
         for d in self.Domains:
             self.Domains_by_name[d.Name].append(d)
+        print("Domains in self.Domains_by_name:")
+        print("\n".join("- %10s: %s species" % (dname, len(domains))
+                        for dname, domains in self.Domains_by_name.items()))
         if domain_pairs is None:
+            # mapping: dom_a -> dom_A, dom_A -> dom_a
+            # TODO: This could perhaps be a list, if you want to have different types of domains interacting,
+            # E.g. dom_a could be perfect match for dom_A, while dom_ax has 1 mismatch.
+            # But then you would also have to adjust Domain_dHdS to account for different types of interacting domains.
             domain_pairs = {d.Name: d.lower() if d.Name == d.upper() else d.upper() for d in self.Domains_list}
         assert not any(k == v for k, v in domain_pairs.items())
         self.Domain_pairs = domain_pairs
@@ -395,22 +450,32 @@ class Simulator():
             Tm_params = {}
         #statdict = {}
         for sname, strands in self.Strands_by_name.items():
-            c_strand_total = len(strands)/(N_AVOGADRO*self.Volume)
+            c_each = 1/(N_AVOGADRO*self.Volume)
+            c_strand_total = len(strands)*c_each
             # Perhaps also calculate the concentration of dnac2 explicitly
             # (insted of assuming it to be the same as c_strand_total)
-            print("\n[", sname, "strand: ]", file=fp)
+            print("\n[ %s strand ]" % sname, file=fp)
+            print("c_each: {:0.04g} uM".format(c_each*1e6), file=fp)
+            print("n_species (copies):", len(strands), file=fp)
             print("c_strand_total: {:0.04g} uM".format(c_strand_total*1e6), file=fp)
             for domain in strands[0].Domains:
                 print("Domain:", domain.Name, file=fp)
+                print(" - total copy count of this domain:", len(self.Domains_by_name[domain.Name]), file=fp)
                 print("\n".join(" - %s: %s" % (att, getattr(domain, att))
                                 for att in ('Sequence', )), file=fp)
-                print("deltaH, deltaS: {:.04g} kcal/mol, {:.04g} cal/mol/K".format(
-                    *self.Domain_dHdS[domain.Name]))
-                print(" - Tm: {:.04g}".format(
-                    # Tm_NN concentration unit is nM:
-                    Tm_NN(domain.Sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9,
-                          **Tm_params)),
-                    file=fp)
+                deltaH, deltaS = self.Domain_dHdS[domain.Name]
+                print(" - deltaH, deltaS: {:.04g} kcal/mol, {:.04g} cal/mol/K".format(
+                    *self.Domain_dHdS[domain.Name]), file=fp)
+                # Tm_NN concentration unit is nM:
+                R = 1.987
+                Q_melt = (c_strand_total - c_strand_total/2)
+                Tm = (1000 * deltaH) / (deltaS + (R * (math.log(Q_melt)))) - 273.15
+                print(" - Tm: {:.04g} (from deltaH, deltaS)".format(Tm), file=fp)
+                Tm = Tm_NN(domain.Sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9, **Tm_params)
+                print(" - Tm: {:.04g} (from Tm_NN)".format(Tm), file=fp)
+                Tm = Tm_NN(domain.Sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9, nn_table=DNA_NN4, **Tm_params)
+                print(" - Tm: {:.04g} (from Tm_NN using DNA_NN4)".format(Tm), file=fp)
+
 
     def save_domain_stats(self, reportfile, Tm_params=None):
         with (open(reportfile, 'w') if isinstance(reportfile, str) else reportfile) as fp:
@@ -437,6 +502,13 @@ class Simulator():
         complexes = {strand.Complex for strand in complexed_strands}
         return complexed_strands, complexes
 
+    def get_potential_partners(self, dom1):
+        """
+        Return a list of possible binding partners for domain <dom1>.
+        The activity or biding energy of the individual domains is not necessarily the same.
+        """
+        candidates = [d for d in self.Domains_by_name[self.Domain_pairs[dom1.Name]] if not d.Partner]
+        return candidates
 
     def select_event_domains(self, oversampling=1):
         """
@@ -452,6 +524,9 @@ class Simulator():
         is_hybridized = None
         dom1 = random.choice(self.Domains_list)
         if dom1.Partner:
+            # TODO: Consider flipping a coin here, since [duplex] = 0.5 * [duplexed domain or complement]
+            # Note: This will decrease p_melt
+            # dom2 = dom1.Partner if random.random() < 0.5 else None
             return (dom1, dom1.Partner, True)
 
         ## Note: The steps speed up considerably when reaching low temperatures where most domains are hybridized.
@@ -500,11 +575,16 @@ class Simulator():
         # Are we sure oversampling can be applied linearly?
         domain_weights = [d.effective_activity(dom1, volume=self.Volume, oversampling=oversampling)
                           for d in candidates]
+
+        # Adding constant water solvent option:
+        candidates.append(None)
+        domain_weights.append(1)    # 1 or maybe even 56 = the molarity of water?
         domain_weights_sum = sum(domain_weights)
 
         # Do you add a specific "water/None" option?  (yes, if domain_weights_sum < 1)
         # Or do you first calculate "is a domain gonna be selected?" and then select which domain is selected?
         # Adding a specific "None" option as "water":
+        ## Consider maybe always adding the "water/solvent" option...?
         if domain_weights_sum < 1:
             domain_weights.append(1-domain_weights_sum)
             candidates.append(None)
@@ -553,7 +633,8 @@ class Simulator():
         # This will call energy-if-no-key() before checking whether keys is in the dict.
         if domain1.Name not in self.Domain_dHdS:
             print(domain1.Name, "domain not in self.Domain_dHdS - calculating...")
-            self.Domain_dHdS[domain1.Name] = deltaH, deltaS = hybridization_dH_dS(domain1.Sequence, domain2.Sequence)
+            self.Domain_dHdS[domain1.Name] = deltaH, deltaS = \
+                hybridization_dH_dS(domain1.Sequence, domain2.Sequence, nn_table=self.NN_Table)
             print(domain1.Name, "deltaH, deltaS = {:.04g}, {:.04g}".format(deltaH, deltaS),
                   "({} entries in self.Domain_dHdS".format(len(self.Domain_dHdS)))
         else:
@@ -1015,7 +1096,7 @@ class Simulator():
             self.simulate(T, n_steps_per_T)
             T += delta_T
             self.save_stats_cache() # Save cache once per temperature
-        print("Annealing complete")
+        print("Annealing complete! (%s)" % datetime.now().strftime("%Y-%m-%d %H:%M"))
         self.print_setup()
 
     def save_stats_if_large(self, **kwargs):
@@ -1068,6 +1149,110 @@ class Simulator():
             N_hybridized/N_domains, N_hybridized, N_domains))
 
 
+    def thermodynamic_meltingcurve(self, T_start, T_finish, delta_T=None, volume=None):
+        """ Calculate thermodynamic melting curve. """
+        if delta_T is None:
+            delta_T = -0.5 if T_start > T_finish else +0.5
+        if volume is None:
+            volume = self.Volume
+
+        # from collections import OrderedDict
+        cum_stats = {} #OrderedDict()       # Has T: <fraction of duplexed domains>
+        domain_stats = {} #OrderedDict()    # Same as cum_stats, but for individual domains
+        concentrations = {dname: len(domains)/(volume*N_AVOGADRO)
+                          for dname, domains in self.Domains_by_name.items()}
+        T = T_start
+        while T >= T_finish if delta_T < 0 else T <= T_finish:
+            hybridized = 0      # can be a fraction
+            non_hybridized = 0
+            total_conc = 0
+            domains_total = 0
+            domain_stats[T] = {}
+            for dname, domains in self.Domains_by_name.items():
+                if dname not in self.Domain_dHdS:
+                    self.Domain_dHdS[dname] = hybridization_dH_dS(domains[0].Sequence)
+                # standard-condition energies:
+                deltaH, deltaS = self.Domain_dHdS[dname]
+                # deltaH in kcal/mol, deltaS in cal/mol/K:
+                deltaG = deltaH*1000 - T*deltaS
+                R = 1.987  # universal gas constant in cal/mol/K
+                try:
+                    # If deltaG is really large, we might get overflow error
+                    K = math.exp(-deltaG/(R*T))
+                except OverflowError:
+                    print("Warning: OverflowError while calculating K = math.exp(-deltaG/(R*T)) " +
+                          "= math.exp(-{:0.03g}/({}*{})). Setting K=1e10.".format(deltaG, R, T))
+                    K = 1e10
+                # We assume all partnering domains are perfect complements:
+                c_domain = concentrations[dname]
+                c_complement = concentrations[self.Domain_pairs[dname]]
+                # f_hyb = binary_state_probability_cal_per_mol(deltaG)
+                if c_complement > c_domain:
+                    # Ai must be the higher of the two concentrations:
+                    D, A, B, K2 = solvetwocomponent(c_complement, c_domain, K)
+                    x = D/B
+                else:
+                    #
+                    D, A, B, K2 = solvetwocomponent(c_domain, c_complement, K)
+                    x = D/A
+                if abs(K2-K)/K > 0.1:
+                    print(("- Note: solvetwocomponent output K={:0.04g} is different " +
+                          "from input K={:0.04g} (T={}, dname={}").format(K, K2, T, dname))
+                # x is the fraction of domain that is hybridized:
+                # Actually, we just want the concentration of duplexed ?
+                # TODO: We could scale by number of bases in each domain...
+                hybridized += D         # is a concentration
+                non_hybridized += c_domain - D
+                total_conc += c_domain
+                domains_total += len(domains)
+                domain_stats[T]['dname'] = [D, c_domain - D, c_domain, len(domains), x]
+            cum_stats[T] = (hybridized, non_hybridized, total_conc, domains_total)
+            T += delta_T
+        return cum_stats, domain_stats
+
+
+def solvepol2(a, b, c):
+    det = math.sqrt(b**2-4*a*c)
+    x1, x2 = (-b + det) / (2*a), (-b - det) / (2*a)
+    return x1, x2, det
+
+def report_weird(x1, x2, Ai, Bi):
+    print("(x1, x2):", (x1, x2))
+    for x in (x1, x2):
+        D = x
+        A = Ai - D
+        B = Bi - D
+        print("\nx = D =", D)
+        print("A =", A)
+        print("B =", B)
+
+
+def solvetwocomponent(Ai, Bi, K):
+    """
+     0  = D^2 + (-Bi-Ai-1/K)*D + Ai*Bi
+    """
+    a = 1
+    b = (-Bi-Ai-1/K)
+    c = Ai*Bi
+    #print("a=%s, b=%s, c=%s" % (a, b, c))
+    x1, x2, _ = solvepol2(a, b, c)
+    D = None
+    if not any(M-x1 < 0 for M in (Ai, Bi)):
+        # x1 is a viable solution
+        D = x1
+    if not any(M-x2 < 0 for M in (Ai, Bi)):
+        # x1 is a viable solution
+        if D:
+            print("Both x1 and x2 seems to be good solutions?!?!")
+            report_weird(x1, x2, Ai, Bi)
+        D = x2
+    if D is None:
+        print("Neither x1 nor x2 are viable solutions?")
+        report_weird(x1, x2, Ai, Bi)
+    A = Ai-D
+    B = Bi-D
+    K = D/(A*B)
+    return D, A, B, K
 
 
 

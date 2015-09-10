@@ -217,7 +217,8 @@ def binary_state_probability_cal_per_mol(deltaE, T, Q=1):
     If the initial and final states have multiple components, and the given
     deltaE is for another system, you can include a proper Q, which is the
     molecualar ratio: Q = [f_1]*[f_2]*(...) / [i_1]*[i_2]*(...)
-    For a hybridization reaction, this is Q = [duplex] / ([strandA]*[strandB])
+    For a hybridization reaction, the reaction quotient is
+        Q = [duplex] / ([strandA]*[strandB])
     """
     #if Q and Q != 1:
     #    deltaE = deltaE + math.log(Q)/beta
@@ -230,7 +231,7 @@ def binary_state_probability_cal_per_mol(deltaE, T, Q=1):
     return p_i
 
 
-def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
+def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
                         tmm_table=DNA_TMM1, imm_table=DNA_IMM1, de_table=DNA_DE1,
                         selfcomp=False, Na=50, K=0, Tris=0, Mg=0, dNTPs=0, saltcorr=5):
     """

@@ -28,6 +28,10 @@ Refs:
 * https://bitbucket.org/gorelab/flowcytometrytools/src/
 
 
+
+
+
+
 """
 
 import sys
@@ -88,9 +92,19 @@ def bilinear_interpolate(x, y, bins=None):
 def parse_args(argv=None):
     """ Parse command line arguments. """
     parser = argparse.ArgumentParser(description="Plot dataset description", prog="sim_stats_plotting")
-    parser.add_argument("statsfiles", nargs="+")
+    parser.add_argument("statsfiles", nargs="*")
 
-    parser.add_argument("--plottype", default="scatter", nargs="?")
+    # Different ways to plot/view the data:
+    # * f_hyb_hist_vs_T: default, plots T on x-axis and a histogram of f_hyb on the y-axis.
+    # * f_hyb_vs_N_steps: Plots N_steps on x-axis and f_hyb on y-axis.
+    parser.add_argument("--plot", default="f_hyb_hist_vs_T")
+
+    parser.add_argument("--plottype", default="scatter")
+    parser.add_argument("--T-range", nargs=2, type=float)
+    parser.add_argument("--figsize", nargs=2, type=float, default=[16, 10])
+
+    parser.add_argument("--nupack_hist_vs_T",
+                        help="Plot NuPack histogram files vs T. Input must be directory containing a folder for each T.")
 
     # The field to plot on the y-axis:
     parser.add_argument("--plotfieldx",
@@ -115,14 +129,22 @@ def parse_args(argv=None):
     ## one_mark_per_xy
     parser.add_argument("--one_mark_per_xy", action="store_true", default=None,
                         help="Reduce the dataset to (x, y) = <count>. This will greatly improve plotting performance.")
+
+    parser.add_argument("plot_average", action="store_true", default=None)
+
     #
     ## show plot
-    parser.add_argument("--showplot", action="store_true", default=None,
+    parser.add_argument("--no-showplot", dest="showplot", action="store_false",
+                        help="Do not show the plot figure after plotting.")
+    parser.add_argument("--showplot", action="store_true",
                         help="Show the plot figure after plotting.")
-    parser.add_argument("plot_average", action="store_true", default=None)
+
     ## save plot
-    parser.add_argument("--saveplot", action="store_true", default=None,
+    parser.add_argument("--no-saveplot", dest="saveplot", action="store_false",
+                        help="Do not save the plot figure after plotting.")
+    parser.add_argument("--saveplot", action="store_true",
                         help="Save the plot figure after plotting.")
+
     ## Interact with the plotting environment showing the plot:
     parser.add_argument("--interactive", action="store_true", default=None,
                         help="Interact with the plotting environment showing the plot.")
@@ -160,6 +182,9 @@ def parse_args(argv=None):
     parser.add_argument("--colormap_after_point_noise", action="store_true",
                         help="Calculate the colormap after applying noise. It might be appropriate \
                              to calculate the colormap after randomization, but usually it is not.")
+
+    parser.add_argument("--thermocurves", nargs="*")#, default="bgrcmyk")
+
 
     return parser.parse_args(argv)
 
@@ -251,24 +276,59 @@ def average_by_T(data, Toffset=0):
     return hyb_by_T
 
 
-def plot_statsfile(statsfile, color=None, **kwargs):
-    """ Plot simulation dataset from statsfile. """
+def plot_thermodynamic_meltingcurve(cumstatsfile, KtoC=True, linespec=':', **kwargs):
+    """
+    Plot meltingcurve cumstatsfile.
+    Format is:
+        cum_stats[T] = (hybridized, non_hybridized, total_conc, domains_total)
+    """
+    if isinstance(cumstatsfile, str):
+        with open(cumstatsfile) as fd:
+            cumstats = yaml.load(fd)
+    else:
+        cumstats = cumstatsfile
+    # Plot fraction hybridized:
+    KtoC = 273.15 if KtoC else 0
+    Ts, f_hyb = zip(*[(T-KtoC, stats[0]/stats[2]) for T, stats in sorted(cumstats.items())])
+    label = kwargs.pop('label', os.path.splitext(os.path.basename(cumstatsfile))[0])
+    pyplot.plot(Ts, f_hyb, linespec, label=label, **kwargs)
+
+
+def load_and_process_statsfile(statsfile, **kwargs):
+    """
+    The data structure is a list of rows, each row with:
+        (T, N_domains_hyb, f_domains_hyb, N_strands_hyb, f_strands_hyb)
+    """
     print("Loading stats from file ", statsfile)
     stats = load_statsfile(statsfile)
     print("-", len(stats), "lines loaded from file.")
-
+    KtoC = 273.15
+    if kwargs['T_range']:
+        minT, maxT = [K+KtoC for K in kwargs['T_range']] # Convert to Kelvin
+        #print("type(minT), type(maxT), type(stats[0][0]):", type(minT), type(maxT), type(stats[0][0]))
+        stats = [line for line in stats if line[0] >= minT and line[0] <= maxT]
 
     if kwargs['max_lines'] and len(stats) > kwargs['max_lines']:
         sample_freq = int(len(stats)/kwargs['max_lines'])
         stats = [line for i, line in enumerate(stats) if i % sample_freq == 0]
         print("- Stats reduced to", len(stats), "lines (sample_freq=%s)." % sample_freq)
 
+    return stats
+
+
+def plot_statsfile(statsfile, color=None, **kwargs):
+    """ Plot simulation dataset from statsfile. """
+
+    stats = load_and_process_statsfile(statsfile, **kwargs)
+
     print("- Pre-processing data...")
     #[(Temperature, N_doms_hybridized, %_doms_hybridized), ...]
     xdata = [line[0]-273 for line in stats]
     if kwargs['normalize'] or kwargs['normalize_by_field']:
         if kwargs['normalize_by_field']:
-            ydata = [line[1]/line[kwargs['normalize_by_field']] for line in stats]
+            # As long as the data rows are tuples/lists and not dicts, index must be an integer:
+            normalize_by_field = int(kwargs['normalize_by_field'])
+            ydata = [line[1]/line[normalize_by_field] for line in stats]
         else:
             # Normalize by the maximum value in stats
             ydata = [line[1] for line in stats]
@@ -336,7 +396,7 @@ def plot_statsfile(statsfile, color=None, **kwargs):
 
     if kwargs['plottype'] == "scatter":
         # Using a scatter plot is good for density-based data (e.g. flow cytometry):
-        print("- Plotting data as scatter plot...")
+        print("- Plotting data as scatter plot... (color=%s)" % color)
         pyplot.scatter(xdata, ydata,
                        marker=kwargs["markershape"],
                        s=sizes,
@@ -345,27 +405,36 @@ def plot_statsfile(statsfile, color=None, **kwargs):
                        cmap=kwargs["colormap"],
                        label=label)
     else:
-        print("- Plotting data as regular plot...")
+        print("- Plotting data as regular plot... (color=%s)" % color)
         # Regular "one-marker-per-datapoint" plot
         # Different sizes are not supported (you can call plot repeatedly or pass in multiple sets of
         # xdata, ydata, **specs, xdata2, ydata2, **specs -- but that is not really suitable for us.
-        pyplot.plot(xdata, ydata, marker=kwargs['markershape'], ms=kwargs['min_marker_size'])
+        pyplot.plot(xdata, ydata, c=color, marker=kwargs['markershape'], ms=kwargs['min_marker_size'])
 
-    if argns.plot_average:
+    if kwargs.get('plot_average'):
         print("- Making data average plot...")
         #fhyb_by_T = average_by_T(stats)
         fhyb_by_T = average_by_T(zip(xdata_org, ydata_org))
         xdata, ydata = zip(*sorted(fhyb_by_T.items()))
-        pyplot.plot(xdata, ydata, '.-k')
+        pyplot.plot(xdata, ydata, marker=' ', c=color, ls='-', markeredgecolor='k')  # '.-k'
 
 
 def saveplot(plotfilename=None, **kwargs):
     """ Save the plot to file. """
 
     if plotfilename is None:
-        plotfilename = os.path.splitext(kwargs['statsfiles'][0])[0]
-        if len(kwargs['statsfiles']) > 1:
-            plotfilename += "and_%s_other_plots" % (len(kwargs['statsfiles'])-1)
+        if kwargs['statsfiles']:
+            plotfilename = os.path.splitext(kwargs['statsfiles'][0])[0]
+            if len(kwargs['statsfiles']) > 1:
+                plotfilename += "and_%s_other_plots" % (len(kwargs['statsfiles'])-1)
+        elif kwargs['thermocurves']:
+            plotfilename = os.path.splitext(kwargs['thermocurves'][0])[0]
+        elif kwargs['nupack_hist_vs_T']:
+            plotfilename = os.path.splitext(kwargs['nupack_hist_vs_T'][0])[0]
+        else:
+            plotfilename = "sim_stats_plot"
+        if kwargs['plot'] != 'f_hyb_hist_vs_T':
+            plotfilename += "_" + kwargs['plot']
         plotfilename += '.png'
     print("Saving plot to file:", plotfilename)
     pyplot.savefig(plotfilename)
@@ -384,7 +453,133 @@ def showplot(**kwargs):
         code.interact("Interact with the data...")
 
 
-if __name__ == '__main__':
+def plot_nupack_f_complexed_strands_vs_T(nupack_hist_dir, jobid=None, **kwargs):
+    """
+    Plot the fraction of complexed strands (strands that are not alone) as a function of T,
+    using data from nupack.
+    """
+    # data structure is:
+    # dict with dicts:
+    # {T: {ComplexID: (ordered-complex-id, (strands stoichiometry list), deltaG, concentration}}
+    hist_vs_T_data = load_nupack_hist_vs_T_dir(nupack_hist_dir, jobid=None)
+    f_complexed_vs_T = calc_f_complexed_vs_T(hist_vs_T_data)
+    x, y = zip(*((k, tup[0]) for k, tup in sorted(f_complexed_vs_T.items())))
+    pyplot.plot(x, y, **kwargs)
+
+
+
+def load_nupack_hist_vs_T_dir(nupack_hist_dir, jobid=None):
+    """
+    return a dict of {T: <hist-data-for-T>}
+    where <hist-data-for-T> is:
+        {ComplexID: (ordered-complex-id, (strands stoichiometry list), deltaG, concentration)}
+    The total number of strands in a complex is:
+        sum(strands stoichiometry list)
+    """
+    if jobid is None:
+        head, tail = os.path.split(nupack_hist_dir)
+        if not tail:
+            # folder given as "/path/to/nupack/job/" with trailing slash
+            head, tail = os.path.split(head)
+            if not tail:
+                raise ValueError("nupack_hist_dir does not have a folder name, and jobid was not given.")
+        try:
+            jobid = int(tail)
+        except ValueError:
+            jobid = int(tail.rsplit("_", 1)[-1])
+    if str(jobid) in os.listdir(nupack_hist_dir):
+        nupack_hist_dir = os.path.join(nupack_hist_dir, str(jobid))
+    hist_vs_T_data = {}
+    for folder in os.listdir(nupack_hist_dir):
+        fpath = os.path.join(nupack_hist_dir, folder)
+        if not os.path.isdir(fpath):
+            continue
+        try:
+            T = float(folder)
+        except ValueError:
+            continue
+        hist_filename = "%s_hist.dat" % jobid
+        hist_file = os.path.join(fpath, hist_filename)
+        hist_vs_T_data[T] = parse_nupack_hist_data_file(hist_file)
+    return hist_vs_T_data
+
+
+def calc_f_complexed_vs_T(hist_vs_T_data):
+    """
+    Return a dict with
+        {T: fraction_of_strands_in_a_complex}
+    """
+    return {T: calc_f_complexed_strands(hist_data) for T, hist_data in hist_vs_T_data.items()}
+
+def calc_f_complexed_strands(hist_data):
+    """
+    Calculate the fraction of strands that are part of a complex.
+    hist_data structure is:
+        {ComplexID: (ordered-complex-id, (strands stoichiometry list), deltaG, concentration)}
+    Returns a tuple of,
+        c_complexed/(c_complexed+c_singles), c_complexed, c_singles
+    """
+    c_complexed = 0
+    c_singles = 0
+    for cid, (oid, strands_stroichiometry, deltaG, conc) in hist_data.items():
+        N_strands = sum(strands_stroichiometry)
+        if N_strands > 1:
+            c_complexed += conc*N_strands   # Should we multiply by N_strands?
+        else:
+            c_singles += conc
+    return c_complexed/(c_complexed+c_singles), c_complexed, c_singles
+
+
+
+
+
+def parse_nupack_hist_data_file(hist_file):
+    """
+    Parse a NuPack <job-no>_hist.dat data file.
+    Returns a <hist-data-for-T> dict:
+        {ComplexID: (ordered-complex-id, (strands stoichiometry list), deltaG, concentration)}
+    The total number of strands in a complex is:
+        sum(strands stoichiometry list)
+    """
+    with open(hist_file) as fd:
+        rows = [line.strip().split("\t") for line in fd if line and line.strip()[0] != "%"]
+    hist_data = {}
+    for row in rows:
+        assert len(row) > 4
+        complexid = int(row[0])
+        oid = int(row[1])
+        try:
+            strand_stoichiometry = [int(val) for val in row[2:-2]]
+        except ValueError as e:
+            print("ValueError parsing strand_stoichiometry in row")
+            print("row:       %s" % row)
+            print("row[2:-2]: %s" % row[2:-2])
+            raise e
+        deltaG = float(row[-2])
+        conc = float(row[-1])
+        hist_data[complexid] = (oid, strand_stoichiometry, deltaG, conc)
+    return hist_data
+
+
+def plot_f_hyb_vs_N_steps(statsfile, plotargs=None, **kwargs):
+    """
+    Plot fraction of hybridized domains versus line number
+    (because we are currently not storing the N_step in the simulation statsfile)
+    """
+    if plotargs is None:
+        plotargs = {}
+    stats = load_and_process_statsfile(statsfile, **kwargs)
+    if len(stats) < 1:
+        print("No stats returned after processing:")
+        print(stats)
+        return
+    y = [row[2] for row in stats]
+    print("Plotting %s f_hyb points, average value is %s" % (
+        len(y), sum(y)/len(y)))
+    pyplot.plot(y, **plotargs)
+
+
+def main():
 
     argns = parse_args()
     args = argns.__dict__.copy()
@@ -393,14 +588,55 @@ if __name__ == '__main__':
     process_args(args)
     #sys.exit()
 
-    colors = iter(args.get('colors') or "rgbcmyk")
+    colors = iter(args.get('colors') or "rgbcmyk")  # make cyclic?
 
     if args['legend'] is None:
         args['legend'] = len(args['statsfiles']) > 1
 
-    for statsfile in args['statsfiles']:
+    for i, statsfile in enumerate(args['statsfiles']):
         color = next(colors)
-        plot_statsfile(statsfile, color=color, **args)
+        if args['plot'] == 'f_hyb_vs_N_steps':
+            plotargs = {'color': color, 'figsize': args['figsize']}
+            print("Plotting f_hyb_vs_N_steps...")
+            plot_f_hyb_vs_N_steps(statsfile, plotargs=plotargs, **args)
+        else:
+            plot_statsfile(statsfile, color=color, **args)
+        # We may have specified a "thermocurve" for each of the simulations:
+        if args['thermocurves'] and (len(args['thermocurves']) > 1 or args['thermocurves'][0] == 'auto'):
+            try:
+                # Done: Add 'auto' argument.
+                if args['thermocurves'][0] == 'auto':
+                    cumstatsfile = os.path.splitext(statsfile)[0].rsplit("_", 1)[0]+".thermo_melting.yaml"
+                else:
+                    cumstatsfile = args['thermocurves'][i]
+            except IndexError as e:
+                print("\n- WARNING: IndexError while finding cumstatsfilename. args['thermocurves'] =",
+                      args['thermocurves'], ". Error is:", e, "\n")
+            else:
+                print("- Plotting thermodynamic melting curve from", cumstatsfile)
+                try:
+                    plot_thermodynamic_meltingcurve(cumstatsfile, c=color)
+                except OSError as e:
+                    print("\n- WARNING: OSError while printing thermocurve:", e, "\n")
+
+    if args['thermocurves'] and len(args['thermocurves']) == 1 \
+        and args['thermocurves'][0] != 'auto':
+        if args['plot'] != 'f_hyb_vs_N_steps':
+            cumstatsfile = args['thermocurves'][0]
+            plot_thermodynamic_meltingcurve(cumstatsfile, c='k')
+
+    ## TODO: Make f_hyb vs N_steps plot (rather than the current f_hyb-vs-T histogram plot)
+
+    ## TODO: Make NuPack f_complexed_hist-vs-T plot
+    if args.get('nupack_hist_vs_T'):
+        nupack_hist_dir = args['nupack_hist_vs_T']
+        if args['plot'] != 'f_hyb_vs_N_steps':
+            plot_nupack_f_complexed_strands_vs_T(nupack_hist_dir, color='orange', label="NuPack % complexed strands")
+
+    if args['figsize']:
+        fig = matplotlib.pyplot.gcf()
+        print("Setting figure size to:", args['figsize'])
+        fig.set_size_inches(*args['figsize'])
 
     if args['legend']:
         pyplot.legend()
@@ -412,3 +648,8 @@ if __name__ == '__main__':
         showplot(**args)
 
     print("Done!")
+
+
+
+if __name__ == '__main__':
+    main()
