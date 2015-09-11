@@ -35,11 +35,11 @@ def parse_strand_domains_file(filepath, sep1="\t", sep2=",", n_clones_default=1)
     Parse strand domain definition file and return as list of strands.
 
     Typical file structure is: (case: 4-way /holliday junction)
-        Strand	Domains 	Sequence
-        strandA	H1A, H1B	...
-        strandB	H2B, H2A	...
-        strandC	h2a, h1a	...
-        strandD	h1b, h2b	...
+        Strand	Domains 	Sequence	Stoichiometry
+        strandA	H1A, H1B	.........	1
+        strandB	H2B, H2A	.........	3
+        strandC	h2a, h1a	.........	3
+        strandD	h1b, h2b	.........	2
 
     Nomenclature is that h1a is complementary to H1A. (Upper vs lower case)
 
@@ -52,9 +52,10 @@ def parse_strand_domains_file(filepath, sep1="\t", sep2=",", n_clones_default=1)
     for i, line in enumerate(lines, 2):
         strand_name = line[0]
         try:
-            n_clones = int(line[3])
+            stoichiometry = int(line[3])
         except IndexError:
-            n_clones = n_clones_default
+            stoichiometry = 1
+        n_clones = stoichiometry*n_clones_default
         for _ in range(n_clones):
             dom_names = [domain_name.strip() for domain_name in line[1].split(sep2)]
             dom_seqs = [domain_seq.strip() for domain_seq in line[2].split(sep2)]

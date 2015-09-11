@@ -208,6 +208,8 @@ TODOS:
 
 * TODO: Implement complex manager/tracker.
 
+* TODO: Add complex size histogram data to output stats.
+
 
 * Done: Calculate the thermodynamicly correct melting curve for reference.
         This is just calculating the partition functions for the two states for every T in the range.
@@ -298,6 +300,8 @@ from datetime import datetime
 #from math import log, exp
 
 import numpy as np
+import yaml
+import glob
 
 from .dom_anneal_models import Tube #, Strand, Domain, Complex
 from .energymodels.biopython import (binary_state_probability_cal_per_mol,
@@ -340,6 +344,16 @@ def get_NN_stacks(domain1, domain2):
 # sys_random = random.SystemRandom()
 
 
+def complex_sizes_hist(complexes):
+    hist = {}
+    for c in complexes:
+        N = len(c.Strands)
+        if N not in hist:
+            hist[N] = 0
+        hist[N] += 1
+    return hist
+
+
 
 class Simulator():
     """
@@ -376,7 +390,6 @@ class Simulator():
         self.N_domains_hybridized = sum(1 for domain in self.Domains_list if domain.Partner)
         self.N_strands_hybridized = sum(1 for oligo in self.Strands if oligo.is_hybridized())
         self.Domains_by_name = defaultdict(list)
-        self.Compl_dom_selection = "conc"
         for d in self.Domains:
             self.Domains_by_name[d.Name].append(d)
         print("Domains in self.Domains_by_name:")
@@ -397,8 +410,10 @@ class Simulator():
         self.Domain_dHdS = {}
         #self.Visualization_hook = self.print_domain_hybridization_percentage
         #self.Visualization_hook = self.randomly_print_stats
+        self.Compl_dom_selection = "conc"
         self.Default_statstypes = ("timesampling", "changesampling")
         self.Visualization_hook = None # self.save_stats_if_large
+        self.Visualization_hook = self.print_complexes  # print the complexes at every change.
 
         if isinstance(outputstatsfiles, str):
             base, ext = os.path.splitext(outputstatsfiles)
@@ -416,6 +431,7 @@ class Simulator():
         # Stats_cache: dict <stats type>: <stats>, where stats is a list of tuples:
         # [(Temperature, N_dom_hybridized, %_dom_hybridized, N_oligos_hybridized, %_oligos_hybridized), ...]
         self.Stats_cache = {k: [] for k in self.Default_statstypes}
+        self.Complex_size_stats = {k: [] for k in self.Default_statstypes}
         print("Simulator initiated at V=%s with %s strands spanning %s domains." \
               % (self.Volume, len(self.Strands), len(self.Domains)))
         self.print_setup()
@@ -453,8 +469,8 @@ class Simulator():
         if Tm_params is None:
             Tm_params = {}
         #statdict = {}
+        c_each = 1/(N_AVOGADRO*self.Volume)
         for sname, strands in self.Strands_by_name.items():
-            c_each = 1/(N_AVOGADRO*self.Volume)
             c_strand_total = len(strands)*c_each
             # Perhaps also calculate the concentration of dnac2 explicitly
             # (insted of assuming it to be the same as c_strand_total)
@@ -467,14 +483,17 @@ class Simulator():
                 print(" - total copy count of this domain:", len(self.Domains_by_name[domain.Name]), file=fp)
                 print("\n".join(" - %s: %s" % (att, getattr(domain, att))
                                 for att in ('Sequence', )), file=fp)
-                deltaH, deltaS = self.Domain_dHdS[domain.Name]
-                print(" - deltaH, deltaS: {:.04g} kcal/mol, {:.04g} cal/mol/K".format(
-                    *self.Domain_dHdS[domain.Name]), file=fp)
-                # Tm_NN concentration unit is nM:
-                R = 1.987
-                Q_melt = (c_strand_total - c_strand_total/2)
-                Tm = (1000 * deltaH) / (deltaS + (R * (math.log(Q_melt)))) - 273.15
-                print(" - Tm: {:.04g} (from deltaH, deltaS)".format(Tm), file=fp)
+                try:
+                    deltaH, deltaS = self.Domain_dHdS[domain.Name]
+                    print(" - deltaH, deltaS: {:.04g} kcal/mol, {:.04g} cal/mol/K".format(
+                        *self.Domain_dHdS[domain.Name]), file=fp)
+                except KeyError:
+                    pass
+                else:
+                    # Tm_NN concentration unit is nM:
+                    Q_melt = (c_strand_total - c_strand_total/2)
+                    Tm = (1000 * deltaH) / (deltaS + (R * (math.log(Q_melt)))) - 273.15
+                    print(" - Tm: {:.04g} (from deltaH, deltaS)".format(Tm), file=fp)
                 Tm = Tm_NN(domain.Sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9, **Tm_params)
                 print(" - Tm: {:.04g} (from Tm_NN)".format(Tm), file=fp)
                 Tm = Tm_NN(domain.Sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9, nn_table=DNA_NN4, **Tm_params)
@@ -809,7 +828,7 @@ class Simulator():
             # Here we are looking at melting probability/rate.
             #if random.random() < math.exp(dG_std/(R*T))*r_hyb*0.5*self.Oversampling:
             if random.random() >= p_hyb_old:
-                domain1.dehybridize(domain2)
+                new_dist, new_complexes, obsolete_complexes = domain1.dehybridize(domain2)
                 state_change = True
         else:
             #
@@ -822,12 +841,45 @@ class Simulator():
             # This would make K larger for negative dG and smaller for positive dG.
             #if random.random() > math.exp(dG_std/(R*T))*r_hyb*self.Oversampling: # sim #41
             if random.random() < p_hyb_old:
-                domain1.hybridize(domain2)
+                new_dist, new_complexes, obsolete_complexes = domain1.hybridize(domain2)
                 state_change = True
 
         if state_change:
             self.N_changes += 1
             self.N_domains_hybridized += -2 if is_hybridized else 2
+
+            if new_complexes:
+                for c in new_complexes:
+                    if c in self.Complexes:
+                        print("WEIRD: new complex %s is already in self.Complexes:" % c)
+                        print(self.Complexes)
+                    self.Complexes.append(c)
+            if obsolete_complexes:
+                for c in obsolete_complexes:
+                    if self.Complexes.count(c) > 1:
+                        print("WEIRD: obsolete complex %s is present %s times in self.Complexes:" \
+                              % (c, self.Complexes.count(c)))
+                        print(self.Complexes)
+                    try:
+                        self.Complexes.remove(c)
+                    except ValueError:
+                        print("Error removing complex", str(c))
+                        print(" - domain1:", domain1)
+                        print(" - domain2:", domain2)
+                        print(" - len(self.Complexes):", len(self.Complexes))
+                        print(" - self.Complexes:", self.Complexes)
+                        print(" - len(obsolete_complexes):", len(obsolete_complexes))
+                        print(" - obsolete_complexes:", obsolete_complexes)
+                        print(" - new_complexes:", new_complexes)
+                        print(" - is_hybridized:", is_hybridized)
+                        print(" - new_dist:", new_dist)
+                        if c:
+                            print("c.Strands:", c.Strands)
+                            print("c.Connections:", c.Connections)
+                            print("c.N_strand_changes:", c.N_strand_changes)
+                            print("c.Strands_changes:", c.Strands_changes)
+                            print("c.Strands_history:", c.Strands_history)
+                        # if is_hybridized, then we've used domain1.dehybridize(domain2)
             if self.Record_stats:
                 self.record_stats_snapshot(T)
             if self.Visualization_hook:
@@ -907,7 +959,20 @@ class Simulator():
                 # self.Stats_cache = [(Temperature, N_doms_hybridized, %_doms_hybridized), ...]
                 fp.write("\n".join(", ".join(str(i) for i in line) for line in self.Stats_cache[statstype])+"\n")
             self.Stats_cache[statstype] = []    # Reset the cache
-
+            c_size_fn = os.path.splitext(outputfn)[0] + '.complex_sizes.txt'
+            if self.Complex_size_stats[statstype]:
+                with open(c_size_fn, 'a') as fp:
+                    # dumping a list of dicts should be append'able.
+                    # yaml ends dump with \n
+                    #yaml.dump(self.Complex_size_stats[statstype], fp, default_flow_style=False)
+                    # yaml is not reliable for large data files, plus it is SUPER SLOW.
+                    # list of dicts:
+                    # [{T: {N: count of complexes with size N}}]
+                    # T: size,count  size,count  ...
+                    fp.write("\n".join("%s: " % T + "\t".join("%s,%s" % tup for tup in hist.items())
+                                       for entry in self.Complex_size_stats[statstype]
+                                       for T, hist in entry.items()) + "\n")
+                self.Complex_size_stats[statstype] = [] # reset cache
 
     def record_stats_snapshot(self, T, statstype="changesampling"):
         """ Save stats snapshot to stats cache. """
@@ -917,12 +982,19 @@ class Simulator():
                                             self.N_strands_hybridized,
                                             self.N_strands_hybridized/self.N_strands
                                            ))
+        #
+        self.Complex_size_stats[statstype].append({T: complex_sizes_hist(self.Complexes)})
 
 
     def randomly_print_stats(self, **kwargs):
         """ Print stats at random intervals. """
         if random.random() < 0.05:
             self.print_domain_hybridization_stats(**kwargs)
+
+
+    def print_complexes(self, *args, **kwargs):
+        """ For use as visualization hook. """
+        print("- viz-hook: Complexes = ", self.Complexes)
 
 
     def print_domain_hybridization_stats(self, updated_domains=None):
@@ -955,6 +1027,9 @@ class Simulator():
             domains_total = 0
             domain_stats[T] = {}
             for dname, domains in self.Domains_by_name.items():
+                if dname not in self.Domain_pairs or self.Domain_pairs[dname] not in concentrations:
+                    # domain has no complementary domains:
+                    continue
                 if dname not in self.Domain_dHdS:
                     self.Domain_dHdS[dname] = hybridization_dH_dS(domains[0].Sequence)
                 # standard-condition energies:

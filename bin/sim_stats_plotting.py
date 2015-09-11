@@ -106,6 +106,13 @@ def parse_args(argv=None):
     parser.add_argument("--nupack_hist_vs_T",
                         help="Plot NuPack histogram files vs T. Input must be directory containing a folder for each T.")
 
+    # complex_size_hist_vs_T
+    parser.add_argument("--complex_size_hist_vs_T", nargs="*",
+                        help="Plot complex size histogram data vs T.")
+
+    parser.add_argument("--thermocurves", nargs="*")#, default="bgrcmyk")
+
+
     # The field to plot on the y-axis:
     parser.add_argument("--plotfieldx",
                         help="The field to plot on the x-axis.")
@@ -183,7 +190,6 @@ def parse_args(argv=None):
                         help="Calculate the colormap after applying noise. It might be appropriate \
                              to calculate the colormap after randomization, but usually it is not.")
 
-    parser.add_argument("--thermocurves", nargs="*")#, default="bgrcmyk")
 
 
     return parser.parse_args(argv)
@@ -292,6 +298,149 @@ def plot_thermodynamic_meltingcurve(cumstatsfile, KtoC=True, linespec=':', **kwa
     Ts, f_hyb = zip(*[(T-KtoC, stats[0]/stats[2]) for T, stats in sorted(cumstats.items())])
     label = kwargs.pop('label', os.path.splitext(os.path.basename(cumstatsfile))[0])
     pyplot.plot(Ts, f_hyb, linespec, label=label, **kwargs)
+
+
+def load_complex_size_hist_file(complex_size_hist_file):
+
+    filenameroot, ext = os.path.splitext(complex_size_hist_file)
+    if 'yaml' in ext or 'yml' in ext:
+        print(" - loading as yaml file")
+        data = yaml.load(open(complex_size_hist_file))
+    else:
+        # Format is:
+        # # T: size,count  size,count  ...
+        # output is list with list of dicts:
+        # [{T: {N: count of complexes with size N}}]
+        with open(complex_size_hist_file) as fp:
+            #complex_size_hist_raw = [{int(T): {int(size), int(count) for pair in pairs
+            #                                   for size, count in (int(N) for N in pair.split(","))}}
+            #                         for T, pairs in ((T, rest.split("\t"))
+            #                            for T, rest in (line.split(":") for line in fp))]
+
+            #for T,
+            #(T, (pair.split(",") for pair in rest.split("\t"))
+            ## for T, rest in (line.split(":") for line in fp))]
+            #data = []
+            #for line in fp:
+            #    try:
+            #        T, pairs = line.strip().split(":")
+            #    except ValueError as e:
+            #        print("ValueError (a),", e)
+            #        print(line)
+            #        raise e
+            #    entry = {}
+            #    try:
+            #        for pair in pairs.split("\t"):
+            #            if pair.strip():
+            #                size, count = (int(v) for v in pair.split(","))
+            #                entry[size] = count
+            #        data.append(entry)
+            #        #data.append({int(T): {int(size): int(count)})
+            #        #data.append({int(T): {int(size): int(count)
+            #        #                      for size, count in [(int(v) for v in pair.split(","))
+            #        #                                          for pair in pairs.split("\t") if pair.strip()]
+            #        #                     }
+            #        #            })
+            #    except ValueError as e:
+            #        #input("hej")
+            #        print("ValueError,", e)
+            #        print(line)
+            #        print(T)
+            #        print(pairs)
+            #        #raise(e)
+            #    #hist = dict(map(int, pair.split(",")) for pair in sizes_and_counts.split("\t"))
+            #    #hist = {int(size): int(count) for pair in sizes_and_counts.split("\t") for k, v in )
+            #for line in fp:
+            #    T, sizes_and_counts = line.split(":")
+            #    #for pair in sizes_and_counts.split("\t"):
+            #    #    size, count = (int(v) for v in pair.split(","))
+            data = [{int(T): {int(size): int(count)
+                              for size, count in ((int(v) for v in pair.split(","))
+                                                  for pair in pairs.strip().split("\t") if pair.strip())
+                             }
+                             # if pairs.strip() else {int(T): {}} # include empty as {T: {}}
+                    } for T, pairs in (line.strip().split(":") for line in fp if line.strip())]
+            #        if pairs.strip()]
+    return data
+
+
+
+def plot_complex_size_hist_vs_T(complex_size_hist_file, color=None, **kwargs):
+
+    # A list of dicts: [{T: {N: number of complexes of size N}}]
+    print("\nLoading size_hist_file", complex_size_hist_file)
+    complex_size_hist_raw = load_complex_size_hist_file(complex_size_hist_file)
+    print(" - %s entries loaded!" % len(complex_size_hist_raw))
+    print(" - Pre-processing size hist data...")
+    # Count data points for each (T, sizeN):
+    counts_list = defaultdict(lambda: defaultdict(list))  # A defaultdict with defaultdict(list) default entries
+    counts_agg = defaultdict(lambda: defaultdict(int))  # A defaultdict with defaultdict(int) default entries
+    # counts = {T: {c_size: [1,2,5,6,8 list of counts]}}
+    grouped_by_T = defaultdict(list)    # {T: [{size: count}}}
+    for entry in complex_size_hist_raw:
+        for T, hist in entry.items():
+            grouped_by_T[T].append(hist)
+            for c_size, count in hist.items():
+                counts_list[T][c_size].append(count)
+                counts_agg[T][c_size] += (count)
+
+
+    #means = {}  # {T: }
+    #for T, t_stats in counts.items():
+    #    for c_size, size_counts in
+
+    avg_counts = {(T, c_size): sum(counts_lst)/len(counts_lst)
+                   for T, counts_at_T in counts_list.items()
+                   for c_size, counts_lst in counts_at_T.items()}
+
+    # The highest value of counts_agg[T][c_size]:
+    agg_counts_max = max(total for agg_counts_at_T in counts_agg.values() for total in agg_counts_at_T.values())
+    agg_counts_avg = {(T, c_size): total/agg_counts_max
+                      for T, agg_counts_at_T in counts_agg.items()
+                      for c_size, total in agg_counts_at_T.items()}
+
+    #xdata, ydata = zip(*[(T, c_size) for T, count_at_T in counts_list.items() for c_size, counts_lst in count_at_T.items()])
+    xdata, ydata = zip(*[(T, c_size) for T, agg_count_at_T in counts_agg.items() for c_size, total in agg_count_at_T.items()])
+
+    print("- Max (T, N) count:", agg_counts_max)
+    # Make marker sizes array:
+    #sizes = [int(kwargs['max_marker_size']*kwargs['size_scaling_fun'](avg_counts[(x,y)]/agg_counts_max))+kwargs['min_marker_size']+5
+    sizes = [int(kwargs['max_marker_size']*kwargs['size_scaling_fun'](counts_agg[x][y]/agg_counts_max))+kwargs['min_marker_size']+5
+             for x, y in zip(xdata, ydata)]
+    print("- Average marker size: %0.1f" % (sum(sizes)/len(sizes)))
+
+    if isinstance(kwargs['use_colormap'], str):
+        if kwargs['use_colormap'] == "auto":
+            kwargs['use_colormap'] = len(kwargs['complex_size_hist_vs_T']) < 2
+        elif kwargs['use_colormap'][0].lower() == "n":
+            kwargs['use_colormap'] = False
+    if kwargs['use_colormap']:
+        colors = sizes
+    else:
+        colors = color
+
+    label = os.path.splitext(os.path.basename(complex_size_hist_file))[0]
+
+    # convert K to C:
+    xdata = [T-273.15 for T in xdata]
+
+    if kwargs['plottype'] == "scatter":
+        # Using a scatter plot is good for density-based data (e.g. flow cytometry):
+        print("- Plotting data as scatter plot... (color=%s)" % color)
+        pyplot.scatter(xdata, ydata,
+                       marker=kwargs["markershape"],
+                       s=sizes,
+                       c=colors,
+                       edgecolors='none',
+                       cmap=kwargs["colormap"],
+                       label=label)
+
+    if kwargs.get('plot_average') and False:
+        print("- Making data average plot...")
+        avg_by_T = average_by_T(zip(xdata, ydata))
+        xdata, ydata = zip(*sorted(avg_by_T.items()))
+        pyplot.plot(xdata, ydata, marker=' ', c=color, ls='-', markeredgecolor='k')  # '.-k'
+    print(" - finished plotting data from", os.path.basename(complex_size_hist_file))
 
 
 def load_and_process_statsfile(statsfile, **kwargs):
@@ -427,7 +576,11 @@ def saveplot(plotfilename=None, **kwargs):
             plotfilename = os.path.splitext(kwargs['statsfiles'][0])[0]
             if len(kwargs['statsfiles']) > 1:
                 plotfilename += "and_%s_other_plots" % (len(kwargs['statsfiles'])-1)
-        elif kwargs['thermocurves']:
+        elif kwargs['complex_size_hist_vs_T']:
+            plotfilename = os.path.splitext(kwargs['complex_size_hist_vs_T'][0])[0]
+            if len(kwargs['complex_size_hist_vs_T']) > 1:
+                plotfilename += "and_%s_other_plots" % (len(kwargs['complex_size_hist_vs_T'])-1)
+        elif kwargs['thermocurves'] and kwargs['thermocurves'][0] != "auto":
             plotfilename = os.path.splitext(kwargs['thermocurves'][0])[0]
         elif kwargs['nupack_hist_vs_T']:
             plotfilename = os.path.splitext(kwargs['nupack_hist_vs_T'][0])[0]
@@ -624,6 +777,11 @@ def main():
         if args['plot'] != 'f_hyb_vs_N_steps':
             cumstatsfile = args['thermocurves'][0]
             plot_thermodynamic_meltingcurve(cumstatsfile, c='k')
+
+    if args.get('complex_size_hist_vs_T'):
+        color = next(colors)
+        for size_hist_file in args['complex_size_hist_vs_T']:
+            plot_complex_size_hist_vs_T(size_hist_file, color=color, **args)
 
     ## TODO: Make f_hyb vs N_steps plot (rather than the current f_hyb-vs-T histogram plot)
 
