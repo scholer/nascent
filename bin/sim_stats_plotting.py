@@ -38,7 +38,10 @@ import sys
 import os
 import argparse
 import random
-import numpy
+try:
+    import numpy
+except ImportError:
+    pass
 import math
 import yaml
 from collections import defaultdict
@@ -297,70 +300,84 @@ def plot_thermodynamic_meltingcurve(cumstatsfile, KtoC=True, linespec=':', **kwa
     KtoC = 273.15 if KtoC else 0
     Ts, f_hyb = zip(*[(T-KtoC, stats[0]/stats[2]) for T, stats in sorted(cumstats.items())])
     label = kwargs.pop('label', os.path.splitext(os.path.basename(cumstatsfile))[0])
+    if "dom_anneal_stats" in label:
+        label = label.replace("dom_anneal_stats", "")
+        foldername = os.path.basename(os.path.dirname(os.path.abspath(
+            cumstatsfile)))
+        label = foldername + label
+
     pyplot.plot(Ts, f_hyb, linespec, label=label, **kwargs)
 
 
+def parse_complex_size_hist_data(fp):
+    data = ({int(T): {int(size): int(count)
+                      for size, count in ((int(v) for v in pair.split(","))
+                                          for pair in pairs.strip().split("\t") if pair.strip())
+                     }
+                     # if pairs.strip() else {int(T): {}} # include empty as {T: {}}
+            } for T, pairs in (line.strip().split(":") for line in fp if line.strip()))
+    return data
+
 def load_complex_size_hist_file(complex_size_hist_file):
 
-    filenameroot, ext = os.path.splitext(complex_size_hist_file)
-    if 'yaml' in ext or 'yml' in ext:
-        print(" - loading as yaml file")
-        data = yaml.load(open(complex_size_hist_file))
-    else:
+    if isinstance(complex_size_hist_file, str):
+        filenameroot, ext = os.path.splitext(complex_size_hist_file)
+        if ('yaml' in ext or 'yml' in ext):
+            print(" - loading as yaml file")
+            raise ValueError("YAML no longer supported.")
+        #data = yaml.load(open(complex_size_hist_file))
         # Format is:
         # # T: size,count  size,count  ...
         # output is list with list of dicts:
         # [{T: {N: count of complexes with size N}}]
+        print("Opening file...")
         with open(complex_size_hist_file) as fp:
             #complex_size_hist_raw = [{int(T): {int(size), int(count) for pair in pairs
             #                                   for size, count in (int(N) for N in pair.split(","))}}
             #                         for T, pairs in ((T, rest.split("\t"))
             #                            for T, rest in (line.split(":") for line in fp))]
-
-            #for T,
-            #(T, (pair.split(",") for pair in rest.split("\t"))
-            ## for T, rest in (line.split(":") for line in fp))]
-            #data = []
-            #for line in fp:
-            #    try:
-            #        T, pairs = line.strip().split(":")
-            #    except ValueError as e:
-            #        print("ValueError (a),", e)
-            #        print(line)
-            #        raise e
-            #    entry = {}
-            #    try:
-            #        for pair in pairs.split("\t"):
-            #            if pair.strip():
-            #                size, count = (int(v) for v in pair.split(","))
-            #                entry[size] = count
-            #        data.append(entry)
-            #        #data.append({int(T): {int(size): int(count)})
-            #        #data.append({int(T): {int(size): int(count)
-            #        #                      for size, count in [(int(v) for v in pair.split(","))
-            #        #                                          for pair in pairs.split("\t") if pair.strip()]
-            #        #                     }
-            #        #            })
-            #    except ValueError as e:
-            #        #input("hej")
-            #        print("ValueError,", e)
-            #        print(line)
-            #        print(T)
-            #        print(pairs)
-            #        #raise(e)
-            #    #hist = dict(map(int, pair.split(",")) for pair in sizes_and_counts.split("\t"))
-            #    #hist = {int(size): int(count) for pair in sizes_and_counts.split("\t") for k, v in )
-            #for line in fp:
-            #    T, sizes_and_counts = line.split(":")
-            #    #for pair in sizes_and_counts.split("\t"):
-            #    #    size, count = (int(v) for v in pair.split(","))
-            data = [{int(T): {int(size): int(count)
-                              for size, count in ((int(v) for v in pair.split(","))
-                                                  for pair in pairs.strip().split("\t") if pair.strip())
-                             }
-                             # if pairs.strip() else {int(T): {}} # include empty as {T: {}}
-                    } for T, pairs in (line.strip().split(":") for line in fp if line.strip())]
-            #        if pairs.strip()]
+            data = parse_complex_size_hist_data(fp)
+            data = list(data)   # Read data while file is still open
+    else:
+        data = parse_complex_size_hist_data(complex_size_hist_file)
+        #for T,
+        #(T, (pair.split(",") for pair in rest.split("\t"))
+        ## for T, rest in (line.split(":") for line in fp))]
+        #data = []
+        #for line in fp:
+        #    try:
+        #        T, pairs = line.strip().split(":")
+        #    except ValueError as e:
+        #        print("ValueError (a),", e)
+        #        print(line)
+        #        raise e
+        #    entry = {}
+        #    try:
+        #        for pair in pairs.split("\t"):
+        #            if pair.strip():
+        #                size, count = (int(v) for v in pair.split(","))
+        #                entry[size] = count
+        #        data.append(entry)
+        #        #data.append({int(T): {int(size): int(count)})
+        #        #data.append({int(T): {int(size): int(count)
+        #        #                      for size, count in [(int(v) for v in pair.split(","))
+        #        #                                          for pair in pairs.split("\t") if pair.strip()]
+        #        #                     }
+        #        #            })
+        #    except ValueError as e:
+        #        #input("hej")
+        #        print("ValueError,", e)
+        #        print(line)
+        #        print(T)
+        #        print(pairs)
+        #        #raise(e)
+        #    #hist = dict(map(int, pair.split(",")) for pair in sizes_and_counts.split("\t"))
+        #    #hist = {int(size): int(count) for pair in sizes_and_counts.split("\t") for k, v in )
+        #for line in fp:
+        #    T, sizes_and_counts = line.split(":")
+        #    #for pair in sizes_and_counts.split("\t"):
+        #    #    size, count = (int(v) for v in pair.split(","))
+        #        if pairs.strip()]
     return data
 
 
@@ -369,35 +386,40 @@ def plot_complex_size_hist_vs_T(complex_size_hist_file, color=None, **kwargs):
 
     # A list of dicts: [{T: {N: number of complexes of size N}}]
     print("\nLoading size_hist_file", complex_size_hist_file)
-    complex_size_hist_raw = load_complex_size_hist_file(complex_size_hist_file)
-    print(" - %s entries loaded!" % len(complex_size_hist_raw))
-    print(" - Pre-processing size hist data...")
-    # Count data points for each (T, sizeN):
-    counts_list = defaultdict(lambda: defaultdict(list))  # A defaultdict with defaultdict(list) default entries
-    counts_agg = defaultdict(lambda: defaultdict(int))  # A defaultdict with defaultdict(int) default entries
-    # counts = {T: {c_size: [1,2,5,6,8 list of counts]}}
-    grouped_by_T = defaultdict(list)    # {T: [{size: count}}}
-    for entry in complex_size_hist_raw:
-        for T, hist in entry.items():
-            grouped_by_T[T].append(hist)
-            for c_size, count in hist.items():
-                counts_list[T][c_size].append(count)
-                counts_agg[T][c_size] += (count)
-
+    with open(complex_size_hist_file) as fp:
+        # We can get a generator back if we give a file object rather than string.
+        #complex_size_hist_raw = load_complex_size_hist_file(complex_size_hist_file)
+        complex_size_hist_raw = load_complex_size_hist_file(fp)
+        # print(" - %s entries loaded!" % len(complex_size_hist_raw))
+        print(" - Pre-processing size hist data...")
+        # Count data points for each (T, sizeN):
+        #counts_list = defaultdict(lambda: defaultdict(list))  # A defaultdict with defaultdict(list) default entries
+        counts_agg = defaultdict(lambda: defaultdict(int))  # A defaultdict with defaultdict(int) default entries
+        # counts = {T: {c_size: [1,2,5,6,8 list of counts]}}
+        #grouped_by_T = defaultdict(list)    # {T: [{size: count}}}
+        for l, entry in enumerate(complex_size_hist_raw):
+            for T, hist in entry.items():
+                #grouped_by_T[T].append(hist)
+                for c_size, count in hist.items():
+                    #counts_list[T][c_size].append(count)
+                    counts_agg[T][c_size] += (count)
+                    if l % 100000 == 0:
+                        print(" - Loaded %s lines from file and counting..." % l)
+    print(" - Done loading pre-processing data!")
 
     #means = {}  # {T: }
     #for T, t_stats in counts.items():
     #    for c_size, size_counts in
 
-    avg_counts = {(T, c_size): sum(counts_lst)/len(counts_lst)
-                   for T, counts_at_T in counts_list.items()
-                   for c_size, counts_lst in counts_at_T.items()}
+    #avg_counts = {(T, c_size): sum(counts_lst)/len(counts_lst)
+    #               for T, counts_at_T in counts_list.items()
+    #               for c_size, counts_lst in counts_at_T.items()}
 
     # The highest value of counts_agg[T][c_size]:
     agg_counts_max = max(total for agg_counts_at_T in counts_agg.values() for total in agg_counts_at_T.values())
-    agg_counts_avg = {(T, c_size): total/agg_counts_max
-                      for T, agg_counts_at_T in counts_agg.items()
-                      for c_size, total in agg_counts_at_T.items()}
+    #agg_counts_avg = {(T, c_size): total/agg_counts_max
+    #                  for T, agg_counts_at_T in counts_agg.items()
+    #                  for c_size, total in agg_counts_at_T.items()}
 
     #xdata, ydata = zip(*[(T, c_size) for T, count_at_T in counts_list.items() for c_size, counts_lst in count_at_T.items()])
     xdata, ydata = zip(*[(T, c_size) for T, agg_count_at_T in counts_agg.items() for c_size, total in agg_count_at_T.items()])
@@ -420,6 +442,11 @@ def plot_complex_size_hist_vs_T(complex_size_hist_file, color=None, **kwargs):
         colors = color
 
     label = os.path.splitext(os.path.basename(complex_size_hist_file))[0]
+    if "dom_anneal_stats" in label:
+        label = label.replace("dom_anneal_stats", "")
+        foldername = os.path.basename(os.path.dirname(os.path.abspath(
+            complex_size_hist_file)))
+        label = foldername + label
 
     # convert K to C:
     xdata = [T-273.15 for T in xdata]
@@ -540,8 +567,13 @@ def plot_statsfile(statsfile, color=None, **kwargs):
             colors = bilinear_interpolate(xdata, ydata, bins=3)
 
     label = None
-    if kwargs['legend']:
-        label = os.path.splitext(os.path.basename(statsfile))[0]
+    label = os.path.splitext(os.path.basename(statsfile))[0]
+    if "dom_anneal_stats" in label:
+        label = label.replace("dom_anneal_stats", "")
+        foldername = os.path.basename(os.path.dirname(os.path.abspath(
+            statsfile)))
+        label = foldername + label
+
 
     if kwargs['plottype'] == "scatter":
         # Using a scatter plot is good for density-based data (e.g. flow cytometry):

@@ -34,6 +34,9 @@ from itertools import zip_longest, chain#, accumulate
 N_AVOGADRO = 6.022e23
 
 
+
+
+
 class Complex():
     """
     Probably not strictly needed; if you have a strand, it should be easy to
@@ -43,7 +46,15 @@ class Complex():
         self.Strands = set(strands) if strands else set()
         for strand in self.Strands:
             strand.Complex = self
+        self.Make_correctness_assertions = True
         self.Connections = set()
+        self.Strand_connections = set()
+        # Distances between domains.
+        # If we have N domains, then we have sum(1..(N-1)) possible distances?
+        self.Domain_distances = {} # {frozenset(d1, d2): dist}
+        # Distances between complementary domains (not neseccarily hybridized)
+        # Is a subset of domain_distances: {d1d2: v for d1d2 in domain_distances if d1.Name}
+        self.Compl_domain_distances = {} # {frozenset(d1, d2): dist}
         self.ruid = random.randint(0, 2147483647)   # for np.random.randint, max integer is 2**31-1 (signed int)
         # Make sure to store immutables, not sets or list or anything like that:
         self.N_strand_changes = 0
@@ -60,8 +71,8 @@ class Complex():
         self.Strands.add(strand)
         strand.Complex = self
         self.N_strand_changes += 1
-        self.Strands_changes.append((self.N_strand_changes, origin, str(strand), len(self.Strands)))
-        self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
+        #self.Strands_changes.append((self.N_strand_changes, origin, str(strand), len(self.Strands)))
+        #self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
 
     def remove_strand(self, strand, origin="-rm"):
         """ Make strand not part of this complex. """
@@ -70,8 +81,18 @@ class Complex():
         self.Strands.remove(strand)
         strand.Complex = None
         self.N_strand_changes -= 1
-        self.Strands_changes.append((self.N_strand_changes, origin, str(strand), len(self.Strands)))
-        self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
+        #self.Strands_changes.append((self.N_strand_changes, origin, str(strand), len(self.Strands)))
+        #self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
+
+    def add_connection(self, domain1, domain2):
+        #print("Adding connection to Complex: %s<->%s" % (domain1, domain2))
+        # Using frozenset to represent un-directed connection - (a, b) is equivalent to (b, a)
+        self.Connections.add(frozenset((domain1, domain2)))
+
+    def remove_connection(self, domain1, domain2):
+        #print("Removing connection from Complex: %s<->%s" % (domain1, domain2))
+        self.Connections.remove(frozenset((domain1, domain2)))
+
 
     def attach_domain(self, domain, to_domain=None, origin="+att_d"):
         """
@@ -88,15 +109,16 @@ class Complex():
         self.add_connection(domain, to_domain)
 
         # After attaching, make sure everything is right:
-        try:
-            assert self.Strands == set(to_domain.Strand.connected_oligos()) | {to_domain.Strand}
-        except AssertionError as e:
-            print("AssertionError during attach_domain:", e)
-            print("self.Strands:", self.Strands)
-            print("to_domain.Strand.connected_oligos():", to_domain.Strand.connected_oligos())
-            print("to_domain.Strand:", to_domain.Strand)
-            print("domain:", str(domain), " - to_domain:", str(to_domain))
-            raise e
+        if self.Make_correctness_assertions:
+            try:
+                assert self.Strands == set(to_domain.Strand.connected_oligos()) | {to_domain.Strand}
+            except AssertionError as e:
+                print("AssertionError during attach_domain:", e)
+                print("self.Strands:", self.Strands)
+                print("to_domain.Strand.connected_oligos():", to_domain.Strand.connected_oligos())
+                print("to_domain.Strand:", to_domain.Strand)
+                print("domain:", str(domain), " - to_domain:", str(to_domain))
+                raise e
 
 
     def detach_domain(self, domain, from_domain=None, origin="-det_d"):
@@ -228,15 +250,6 @@ class Complex():
         #    print("Domains are still in the same complex.")
         return dist, new_complexes, obsolete_complexes
 
-    def add_connection(self, domain1, domain2):
-        #print("Adding connection to Complex: %s<->%s" % (domain1, domain2))
-        # Using frozenset to represent un-directed connection - (a, b) is equivalent to (b, a)
-        self.Connections.add(frozenset((domain1, domain2)))
-
-    def remove_connection(self, domain1, domain2):
-        #print("Removing connection from Complex: %s<->%s" % (domain1, domain2))
-        self.Connections.remove(frozenset((domain1, domain2)))
-
 
     def merge(self, other_complex, new_connections=None):
         """
@@ -251,8 +264,8 @@ class Complex():
         #self.Strands += other_complex.Strands
         self.Strands |= other_complex.Strands
         self.N_strand_changes += other_complex.N_strand_changes
-        self.Strands_changes.append(("merge", str(other_complex.Strands_changes), len(self.Strands)))
-        self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
+        #self.Strands_changes.append(("merge", str(other_complex.Strands_changes), len(self.Strands)))
+        #self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
         self.Connections |= other_complex.Connections
         # | is the "union" operator for sets, & is intersection and ^ is symdiff
         if new_connections:
@@ -289,6 +302,7 @@ class Strand():
         self.Domains = domains          # List of strand domains from 5p to 3p.
         for domain in domains:
             domain.Strand = self
+        self.Strand_domain_distances = {} # could be {frozenset(d1, d2): dist} or a matrix.
 
     def sequence(self, sep=""):
         return sep.join(d.Sequence for d in self.Domains)
@@ -462,7 +476,7 @@ class Domain():
             # Although this will screw up the complex.Connections.
             if self.Strand.Complex:
                 self.Strand.Complex.add_connection(self, domain)
-            return None, None
+            return 0, None, None
 
         new_complexes, obsolete_complexes = None, None
         # Update Complex:
@@ -470,10 +484,13 @@ class Domain():
             # Both domains are in a pre-existing complex; merge the two complexes
             if self.Strand.Complex == domain.Strand.Complex:
                 #print("Intra-complex hybridization!")
+                assert domain.Strand in self.Strand.Complex.Strands
                 self.Strand.Complex.add_connection(self, domain)
             else:
                 self.Strand.Complex.merge(domain.Strand.Complex, new_connections=[(self, domain)])
                 # We dont expect a merge to produce any new complexes, but the complex that is "merged in" is obsolete.
+                # Oh -- we dont know which Complex is made obsolete by the merge!
+                # Actually, merge always makes "other_complex" obsolete.
                 obsolete_complexes = [domain.Strand.Complex]
             assert self.Strand.Complex == domain.Strand.Complex
         elif self.Strand.Complex:
@@ -516,21 +533,26 @@ class Domain():
         assert self.Strand.Complex == domain.Strand.Complex     # Can be None if hair-pin
 
         if self.Strand == domain.Strand:
-            # If forming an intra-strand connection, no need to make or merge any Complexes
+            # If breaking an intra-strand connection, no need to make or merge any Complexes
             return 0, None, None
 
-        # Update Complex:
-        if self.Strand.Complex:
-            # Detach domain from this complex:
-            dist, new_complex, obsolete_complexes = self.Strand.Complex.detach_domain(domain, self, origin="-d.dehyb det (a)")
-        elif domain.Strand.Complex:
-            assert not "This should never happen. \
-            Two hybridized domains must be in the same Complex, possibly None if hair-pin."
-            dist, new_complex, obsolete_complexes = domain.Strand.Complex.detach_domain(self, domain, origin="-d.dehyb det (b)")
-        else:
-            # Neither strands are in existing complex; that shouldn't happen either
-            print("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
-            raise Exception("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
+        assert self.Strand.Complex      # At this point it cannot be None.
+
+        dist, new_complex, obsolete_complexes = self.Strand.Complex.detach_domain(domain, self, origin="-d.dehyb det (a)")
+
+        ## Update Complex:
+        #if self.Strand.Complex:
+        #    # Detach domain from this complex:
+        #elif domain.Strand.Complex:
+        #    raise Exception("ERROR - BUG: Domain.dehybridize(): self (%s) Strand.Complex is None, but %s Strand.Complex isn't?" % (self, domain))
+        #    #assert not "This should never happen. \
+        #    #Two hybridized domains must be in the same Complex, possibly None if hair-pin."
+        #    dist, new_complex, obsolete_complexes = domain.Strand.Complex.detach_domain(self, domain, origin="-d.dehyb det (b)")
+        #else:
+        #    # Neither strands are in existing complex; that shouldn't happen either
+        #    # It could happen, if we have a single strand with complementary domains.
+        #    print("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
+        #    raise Exception("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
 
         assert self.Partner is None
         assert domain.Partner is None
@@ -583,6 +605,51 @@ class Domain():
         return oversampling/N_AVOGADRO/volume
 
 
+    def distance_cached(self, domain):
+        distances = self.Strand.Complex.Domain_distances
+        ftset = frozenset((self, domain)) # "from-to" set
+        if ftset in distances:
+            return distances[ftset]
+
+        # Complex.Domain_distances should incorporate Strand.Domain_distances
+        # when strand is added,
+        if domain == self:
+            print("domain == self - shouldn't happen, but OK.")
+            distances[ftset] = 0
+            return 0
+
+        Q = deque()
+        dset = frozenset((self, self))
+        #assert dset in distances and distances[dset] == 0
+        distances.setdefault(dset, 0)     # distance to self is 0
+        Q.append(self)          # We append "to the right"
+        ## TODO: Search could be optimized if you start by using a "strand node graph",
+        ## or, equivalently, if you use the domain-domain dist matrix where you search for zeros.
+        while Q:    # is not empty
+            u = Q.popleft()     # We pop "from the left"
+            uset = frozenset((self, u))
+            fset = frozenset((domain, u))
+            if fset in distances:
+                distances[ftset] = distances[uset] + distances[fset]
+
+            if u.Partner:
+                dset = frozenset((self, u.Partner))
+                if dset not in distances:
+                    print("Adding %s to distances = %s." % (dset, uset))
+                    distances[dset] = distances[uset]
+                if u.Partner == domain:
+                    return distances[dset]
+                Q.append(u.Partner)
+            for d in u.domain5p3p():
+                if d:   # could be None
+                    dset = frozenset((self, d))
+                    if dset not in distances:
+                        distances[dset] = distances[uset] + 1
+                    if d == domain:
+                        return distances[dset]
+                    Q.append(d)
+
+
     def distance(self, domain):
         """
         Find distance to domain using Breadth-first search.
@@ -603,7 +670,8 @@ class Domain():
                     # We've found the shortest (hopefully) distance to domain.
                     return distances[u]
                 if d not in distances:
-                    distances[d] = distances[u] + 1
+                    # Partner domains does not add extra distrance:
+                    distances[d] = distances[u] + (0 if d.Partner == u else 1)
                     #parents[d] = u
                     Q.append(d)
 
@@ -650,10 +718,44 @@ class Domain():
         Unlike immediate_neighbors, this method returns all domains connected to the same strand as self,
         as well as self.Partner (in third place).
         """
-        if self.Partner:
-            yield self.Partner
-        yield from (domain for domain in chain(*zip_longest(self.Strand.domains5p(self), self.Strand.domains3p(self)))
-                    if domain is not None)
+        partner = [self.Partner] if self.Partner else []
+        #if self.Partner:
+            #yield self.Partner
+            #return [self.Partner]
+        # yield from is not compatible with pypy's python 3.2
+        #yield from (domain for domain in chain(*zip_longest(self.Strand.domains5p(self), self.Strand.domains3p(self)))
+        #            if domain is not None)
+        return partner + [domain for domain in chain(*zip_longest(self.Strand.domains5p(self), self.Strand.domains3p(self)))
+                          if domain is not None]
+
+    def strand_neighbors(self):
+        """
+        """
+        sdomains = self.Strand.Domains
+        idx = sdomains.index(self)
+        if idx == 0:
+            # If we have the very first element, return an empty list.
+            domains5p = []
+        else:
+            domains5p = sdomains[idx-1::-1]
+        # We go backwards from idx-1:
+        domains3p = sdomains[idx+1:]
+        return (dom for dom in chain(*zip_longest(domains5p, domains3p)) if dom is not None)
+
+    def domain5p3p(self):
+        """
+        """
+        sdomains = self.Strand.Domains
+        idx = sdomains.index(self)
+        if idx == 0:
+            domain5p = None
+        else:
+            domain5p = sdomains[idx-1]
+        try:
+            domain3p = sdomains[idx+1]
+        except IndexError:
+            domain3p = None
+        return (domain5p, domain3p)
 
     def domains5p(self):
         """ Return a slice of all domains towards the 5p end on the same strand from this domain. """

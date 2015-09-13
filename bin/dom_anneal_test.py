@@ -29,6 +29,10 @@ import sys
 import yaml
 import glob
 from datetime import datetime
+from code import interact
+import rlcompleter
+import readline
+
 
 LIBPATH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, LIBPATH)
@@ -67,21 +71,67 @@ def touch(filepath):
         os.utime(filepath)
 
 
+def test(simulator):
+    """
+    Perform ad-hoc testing of simulator system.
+    """
+
+    #local = {'simulator': simulator}
+    #ns = locals()
+    readline.set_completer(rlcompleter.Completer(locals()).complete)
+    readline.parse_and_bind("tab: complete")
+    from importlib import reload
+    from nascent.nascent_sim.moves import hybridize, dehybridize
+    from nascent.nascent_sim import moves
+    domA = next(d for d in simulator.Domains if d.Name == 'A')
+    domB = next(d for d in simulator.Domains if d.Name == 'B')
+    domC = next(d for d in simulator.Domains if d.Name == 'C')
+    domb = next(d for d in simulator.Domains if d.Name == 'b')
+    domD = next(d for d in simulator.Domains if d.Name == 'D')
+    domE = next(d for d in simulator.Domains if d.Name == 'E')
+    domF = next(d for d in simulator.Domains if d.Name == 'F')
+    domc = next(d for d in simulator.Domains if d.Name == 'c')
+    domG = next(d for d in simulator.Domains if d.Name == 'G')
+    domH = next(d for d in simulator.Domains if d.Name == 'H')
+    domg = next(d for d in simulator.Domains if d.Name == 'g')
+    domK = next(d for d in simulator.Domains if d.Name == 'K')
+    domi = next(d for d in simulator.Domains if d.Name == 'i')
+    domL = next(d for d in simulator.Domains if d.Name == 'L')
+    newc, oldc = moves.hybridize(domb, domB)
+    interact(local=locals())
+
+
+
+def cleanup(outputstatsfile):
+    """ Remove all outputfiles related to outputstatsfile. """
+    os.remove(outputstatsfile)  # clean up, if we are not saving.
+    # TODO: You should remove all files explicitly. Some datafiles are appended, not overwritten.
+    for fn in glob.glob(os.path.splitext(outputstatsfile)[0]+"*"):
+        print("- Removing", fn)
+        os.remove(fn)
+
+
+
 def main():
     #strand_defs_file = os.path.join(os.path.dirname(__file__), "testfiles", "strand_defs01.txt")
     # LIBPATH,
+    do_testing = False
     strand_defs_folder = os.path.join(os.path.dirname(nascent.nascent_sim.__file__), "testfiles")
     #structure = "duplex1"
     #structure = "duplex1_2"
     #structure = "circ1"
+    #structure = "circfb1a"
     #structure = "lin3s1"
-    # structure = "polymer1h2s1"
+    #structure = "polymer1h2s1"
     # TODO: The above structure should polymerize, but does not because the model lacks awareness of structural rigidity.
-    # structure = "catenane"
-    structure = "circfb1a"
+    #structure = "catenane"
+    structure = "DistTest1"
+    do_testing = True
 
+    #n_strand_copies_default = 400
     #n_strand_copies_default = 100
-    n_strand_copies_default = 40
+    #n_strand_copies_default = 40
+    n_strand_copies_default = 1
 
     # Load strand def and check the strands:
     strand_defs_file = os.path.join(strand_defs_folder, "strand_defs_{}.txt".format(structure))
@@ -125,7 +175,7 @@ def main():
     #note = "Adding an arbitrary factor 10 to p_hyb: p_hyb_old = 1 / (1 + math.exp(dG_std/(R*T))*self.Oversampling*10/compl_activity)."
     #note = "Still that arbitrary factor 10 to p_hyb, but ramping up oversampling to 2000."
     # That factor 10 helped... but why? Maybe I calculate the wrong dG_std?
-    note = ("Testing complex size stats capture.")
+    note = ("Re-introducing the intra-strand entropy penalty (only +2 cal/mol/K).")
     nl = 1e-15  # If volume = 1 nl, then each domain is approx 1.67 nM.
     al = 1e-18  # If volume = 1 al, then each domain is approx 1.67 uM.
     volume = al # / 1000
@@ -143,8 +193,10 @@ def main():
         oversampling_factor, n_steps_per_T = int(oversampling_max), int(n_steps_min)
     else:
         #n_steps_per_T = 20000
+        #n_steps_per_T = 100000
         #n_steps_per_T = 200000
-        n_steps_per_T = 400000
+        #n_steps_per_T = 400000
+        n_steps_per_T = 1000000
         #n_steps_per_T = 2000000
         #n_steps_per_T = 500000
         # oversampling_factor = 100*n_strand_copies_default
@@ -174,6 +226,8 @@ def main():
     # Make and save thermodynamic melting curve:
 
     # Perform calculations and start simulation
+    if do_testing:
+        test(simulator)
     try:
         offset = 0 #0.3
         start = 40  # deg C
@@ -216,11 +270,16 @@ def main():
         print("\n\nABORT: KeyboardInterrupt.\n\n")
         answer = input("Do you want to save the simulation data for this aborted run? [yes]/no  ")
         if answer and answer[0].lower() == 'n':
-            os.remove(outputstatsfile)  # clean up, if we are not saving.
-            # TODO: You should remove all files explicitly. Some datafiles are appended, not overwritten.
-            for fn in glob.glob(os.path.splitext(outputstatsfile)[0]+"*"):
-                print("- Removing", fn)
-                os.remove(fn)
+            cleanup(outputstatsfile)
+            return
+    except Exception as e:
+        print("\n\nException during siumlation:", e)
+        answer = input("\nDo you want to enter interactive mode?  ")
+        if answer and answer[0].lower() == 'y':
+            interact(local=locals())
+        answer = input("Do you want to save the simulation data for this aborted run? [yes]/no  ")
+        if answer and answer[0].lower() == 'n':
+            cleanup(outputstatsfile)
             return
 
     simulator.save_stats_cache()

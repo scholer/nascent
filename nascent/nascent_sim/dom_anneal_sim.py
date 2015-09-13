@@ -299,8 +299,14 @@ import math
 from datetime import datetime
 #from math import log, exp
 
-import numpy as np
-import yaml
+try:
+    # Only used for the weighted choice
+    import numpy as np
+except ImportError:
+    print("Could not import numpy. Will use slower native alternative.")
+    np = None
+
+# import yaml
 import glob
 
 from .dom_anneal_models import Tube #, Strand, Domain, Complex
@@ -373,6 +379,7 @@ class Simulator():
         self.Tube = Tube(volume, strands)
         self.Volume = volume
         self.Complexes = []
+        self.Removed_complexes = []
         self.Strands = strands
         self.Strands_by_name = defaultdict(list)
         for strand in strands:
@@ -412,8 +419,10 @@ class Simulator():
         #self.Visualization_hook = self.randomly_print_stats
         self.Compl_dom_selection = "conc"
         self.Default_statstypes = ("timesampling", "changesampling")
-        self.Visualization_hook = None # self.save_stats_if_large
-        self.Visualization_hook = self.print_complexes  # print the complexes at every change.
+        # Visualization_hook - can easily become rather obtrusive and verbose.
+        self.Visualization_hook = None
+        # viz-hook options: self.save_stats_if_large
+        #self.Visualization_hook = self.print_complexes  # print the complexes at every change.
 
         if isinstance(outputstatsfiles, str):
             base, ext = os.path.splitext(outputstatsfiles)
@@ -609,13 +618,34 @@ class Simulator():
         # Adding a specific "None" option as "water":
         ## Consider maybe always adding the "water/solvent" option...?
         if domain_weights_sum < 1:
-            domain_weights.append(1-domain_weights_sum)
-            candidates.append(None)
+            # Maybe insert at pos 0 instead of the end, depending on the implementation of weighted choice?
+            # Result: Doesn't make much difference.
+            #domain_weights.append(1-domain_weights_sum)
+            #candidates.append(None)
+            domain_weights.insert(0, 1-domain_weights_sum)
+            candidates.insert(0, None)
         if domain_weights_sum > 1:
             # Normalize...:
             domain_weights = [w/domain_weights_sum for w in domain_weights]
-        # http://docs.scipy.org/doc/numpy/reference/generated/numpy.random.choice.html
-        dom2 = np.random.choice(candidates, p=domain_weights)
+        if np:
+            # http://docs.scipy.org/doc/numpy/reference/generated/numpy.random.choice.html
+            dom2 = np.random.choice(candidates, p=domain_weights)
+        else:
+            # If you want to do the same without using numpy, you could do something like:
+            rvalue = random.random()
+            dom2 = None
+            # Consider sorting the candidates by weight to increase # Nope, sorting takes considerable time.
+            #domain_weights, candidates = zip(*reversed(sorted(zip(domain_weights, candidates)))) # Only if domains are orderable
+            #candidates.sort(key=dict(zip(candidates, domain_weights)).get)  # First sort candidates by their weight,
+            #domain_weights.sort()                                           # Then sort the weights.
+            for i, w in enumerate(domain_weights):    # are normalized
+                if rvalue <= w:
+                    dom2 = candidates[i]
+                    break
+                rvalue -= w
+            else:
+                # Should not happen since sum(w) == 1.
+                raise ValueError("No domain found, sum(w) does not add up to 1.")
         #print("Candidates and weights: (dom1=%s)" % dom1)
         #print("\n".join("{:<30}: {:.9g}".format(str(d), w) for d, w in zip(candidates, domain_weights)))
         return dom1, dom2, is_hybridized, domain_weights_sum
@@ -666,7 +696,7 @@ class Simulator():
         deltaH_NN_domain, deltaS_NN_domain = None, None
         NN_domains = [False, False]
         deltaH_corr, deltaS_corr = (0, 0)
-        return deltaH*1000 - T * deltaS, deltaH, deltaS, deltaH_corr, deltaS_corr
+        #return deltaH*1000 - T * deltaS, deltaH, deltaS, deltaH_corr, deltaS_corr
 
         ## TODO: If we split a large domain into two half-sized domains, we should get the same result.
         if domain1.domain5p() and domain2.domain3p() \
@@ -746,8 +776,8 @@ class Simulator():
             # Obviously, this is only applicable if the two domains are already in the same complex.
             if domain1.Complex and domain1.Complex == domain2.Complex:
                 # TODO: Calculate a better entropy correction for intra-complex hybridizations
-                # deltaS_corr += 4
-                pass
+                #pass
+                deltaS_corr += 2 # exp(4/R) = 7.4 !
 
         ### Add corrigating factors
         deltaH += deltaH_corr
@@ -864,22 +894,26 @@ class Simulator():
                         self.Complexes.remove(c)
                     except ValueError:
                         print("Error removing complex", str(c))
-                        print(" - domain1:", domain1)
-                        print(" - domain2:", domain2)
-                        print(" - len(self.Complexes):", len(self.Complexes))
-                        print(" - self.Complexes:", self.Complexes)
-                        print(" - len(obsolete_complexes):", len(obsolete_complexes))
-                        print(" - obsolete_complexes:", obsolete_complexes)
-                        print(" - new_complexes:", new_complexes)
-                        print(" - is_hybridized:", is_hybridized)
-                        print(" - new_dist:", new_dist)
-                        if c:
-                            print("c.Strands:", c.Strands)
-                            print("c.Connections:", c.Connections)
-                            print("c.N_strand_changes:", c.N_strand_changes)
-                            print("c.Strands_changes:", c.Strands_changes)
-                            print("c.Strands_history:", c.Strands_history)
-                        # if is_hybridized, then we've used domain1.dehybridize(domain2)
+                        print(" - Is complex in self.Removed_complexes? -", c in self.Removed_complexes)
+                        if self.VERBOSE > 1:
+                            print(" - domain1:", domain1)
+                            print(" - domain2:", domain2)
+                            print(" - len(self.Complexes):", len(self.Complexes))
+                            print(" - self.Complexes:", self.Complexes)
+                            print(" - len(obsolete_complexes):", len(obsolete_complexes))
+                            print(" - obsolete_complexes:", obsolete_complexes)
+                            print(" - new_complexes:", new_complexes)
+                            print(" - is_hybridized:", is_hybridized)
+                            print(" - new_dist:", new_dist)
+                            if c:
+                                print("c.Strands:", c.Strands)
+                                print("c.Connections:", c.Connections)
+                                print("c.N_strand_changes:", c.N_strand_changes)
+                                print("c.Strands_changes:", c.Strands_changes)
+                                print("c.Strands_history:", c.Strands_history)
+                            # if is_hybridized, then we've used domain1.dehybridize(domain2)
+                    else:
+                        self.Removed_complexes.append(c)
             if self.Record_stats:
                 self.record_stats_snapshot(T)
             if self.Visualization_hook:
@@ -955,6 +989,7 @@ class Simulator():
             print("Unable to save stats cache: outputstatsfile is:", outputfilenames)
             return
         for statstype, outputfn in outputfilenames.items():
+            print(" - Saving stats cache to file:", outputfn)
             with open(outputfn, 'a') as fp:
                 # self.Stats_cache = [(Temperature, N_doms_hybridized, %_doms_hybridized), ...]
                 fp.write("\n".join(", ".join(str(i) for i in line) for line in self.Stats_cache[statstype])+"\n")
@@ -982,7 +1017,7 @@ class Simulator():
                                             self.N_strands_hybridized,
                                             self.N_strands_hybridized/self.N_strands
                                            ))
-        #
+        # TODO: Consider option to also count all "non-complexed strands (as complexes of size 1)."
         self.Complex_size_stats[statstype].append({T: complex_sizes_hist(self.Complexes)})
 
 
@@ -993,8 +1028,24 @@ class Simulator():
 
 
     def print_complexes(self, *args, **kwargs):
-        """ For use as visualization hook. """
+        """
+        For use as visualization hook.
+        Note: This one does become rather verbose, especially just below T=Tm.
+        """
+        p_update = self.Params.get('viz_hook_update_probability', 1)
+        if p_update < 1 and random.random > p_update:
+            return
         print("- viz-hook: Complexes = ", self.Complexes)
+
+    def print_N_complexes(self, *args, **kwargs):
+        """
+        For use as visualization hook.
+        Note: This one does become rather verbose, especially just below T=Tm.
+        """
+        p_update = self.Params.get('viz_hook_update_probability', 1)
+        if p_update < 1 and random.random > p_update:
+            return
+        print("- viz-hook: N Complexes = ", len(self.Complexes))
 
 
     def print_domain_hybridization_stats(self, updated_domains=None):
