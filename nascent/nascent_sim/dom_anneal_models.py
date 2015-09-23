@@ -30,6 +30,9 @@ import math
 from collections import deque, OrderedDict
 from itertools import zip_longest, chain#, accumulate
 
+from .domain import (distance_cached, print_connection,
+                     gen_parents_connection, check_acyclic_graph)
+
 
 N_AVOGADRO = 6.022e23
 
@@ -84,195 +87,195 @@ class Complex():
         #self.Strands_changes.append((self.N_strand_changes, origin, str(strand), len(self.Strands)))
         #self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
 
-    def add_connection(self, domain1, domain2):
-        #print("Adding connection to Complex: %s<->%s" % (domain1, domain2))
-        # Using frozenset to represent un-directed connection - (a, b) is equivalent to (b, a)
-        self.Connections.add(frozenset((domain1, domain2)))
-
-    def remove_connection(self, domain1, domain2):
-        #print("Removing connection from Complex: %s<->%s" % (domain1, domain2))
-        self.Connections.remove(frozenset((domain1, domain2)))
-
-
-    def attach_domain(self, domain, to_domain=None, origin="+att_d"):
-        """
-        Attach (hybridize) <domain> to this complex.
-            <to_domain> is the domain that is already part of this complex, to which the domain hybridizes.
-        """
-        if to_domain is None:
-            to_domain = domain.Partner
-        # self.Strands should be a set, so it doesn't matter if it is already there.
-        # Note: At this point we have already have set domain.Partner = to_domain and vice versa.
-        assert to_domain.Strand in self.Strands
-
-        self.add_strand(domain.Strand, origin=origin)
-        self.add_connection(domain, to_domain)
-
-        # After attaching, make sure everything is right:
-        if self.Make_correctness_assertions:
-            try:
-                assert self.Strands == set(to_domain.Strand.connected_oligos()) | {to_domain.Strand}
-            except AssertionError as e:
-                print("AssertionError during attach_domain:", e)
-                print("self.Strands:", self.Strands)
-                print("to_domain.Strand.connected_oligos():", to_domain.Strand.connected_oligos())
-                print("to_domain.Strand:", to_domain.Strand)
-                print("domain:", str(domain), " - to_domain:", str(to_domain))
-                raise e
-
-
-    def detach_domain(self, domain, from_domain=None, origin="-det_d"):
-        """
-        Detach (dehybridize) domain from complex.
-
-        Returns
-            dist, new_complex
-        Where dist is the new distance from domain to from_domain (None if the connection was broken)
-        and new_complex is the new complex that was generated in case detaching domain broke up the complex.
-
-        Note that the the domain's strand can still be part of the complex if it has another domain still attached.
-        Question: How to keep track of the network connectivity?
-        """
-        if from_domain is None:
-            from_domain = domain.Partner
-        assert domain.Strand.Complex == from_domain.Strand.Complex # It can be None, if single strand forming e.g. hairpin
-        try:
-            self.remove_connection(domain, from_domain)
-        except KeyError as e:
-            print("\n\nWARNING: KeyError %s for domain, from_domain = %s, %s\n\n" \
-                  % (e, domain, from_domain))
-        new_complexes = None
-        obsolete_complexes = None
-        # How to know if the strand is still part of this complex???
-        # Probably have to dig up some graph theory knowledge
-        # Essentially find whether the two domains are still part of the same "connected component".
-        # Edges = (domain hybridization connections + domain connected by the same strand)
-        # Vertices = domains... or strands? Yeah, it might be easier to assume strands.
-        # The easiest way might be to do a Breadth-first search from one domain to the other
-        from_domain.Partner = None  # Make sure to break this connection first before assessing the distance...
-        domain.Partner = None
-        dist = from_domain.distance(domain) # Returns None if no (other) connection could be found
-        if dist is None:
-            #print("No connection between domains", domain, "and", from_domain,
-            #      " -- breaking up complex", domain.Complex,
-            #      " with strands:", domain.Complex.Strands)
-            # There is nolonger any connection between the two domains.
-            # We have either of the following situations:
-            #       (a) Two smaller complexes
-            #       (b) One complex and one unhybridized strand (oligo)
-            #       (c) Two unhybridized strands
-            # Uhm, wait... maybe calculate connected component sizes for the two now separate graphs?
-            # There is, after all, also a probability that from_domain is now "no longer part of this complex".
-            # It might be better (and more efficient) to do this at the strand level, rather than at the domain level.
-            # I.e. a graph where each node is a strand, instead of a graph where each node is a domain.
-            dom1_cc_oligos = domain.Strand.connected_oligos()
-            dom0_cc_oligos = from_domain.Strand.connected_oligos()
-            # Pay attention: Is domain.Strand itself included in connected_oligos?
-            # - No. Then add 1 to lenght. (If complex consists of two strands,
-            #   then len(connected_oligos()) will be 1, but the complex size should be 2.
-            dom1_cc_size = len(dom1_cc_oligos) + 1  # cc = connected component
-            dom0_cc_size = len(dom0_cc_oligos) + 1
-            if domain.Strand.Complex:
-                if not len(domain.Strand.Complex.Strands) == dom1_cc_size + dom0_cc_size:
-                    print("WEIRD: Complex %s.Strands" % domain.Strand.Complex,
-                          "lenght does not equal the size of the two separate connected components:")
-                    print(" - %s.Strands (%s): %s" % (domain.Strand.Complex, len(domain.Strand.Complex.Strands),
-                                                      domain.Strand.Complex.Strands))
-                    print(" - dom1_cc_size + dom0_cc_size: %s + %s = %s" % \
-                          (dom1_cc_size, dom0_cc_size, dom1_cc_size+dom0_cc_size))
-            if dom0_cc_size > 1 or dom1_cc_size > 1:
-                # Case (a) Two smaller complexes or case (b) one complex and one unhybridized strand
-                if dom1_cc_size > dom0_cc_size:
-                    # We should revert our thinking, and remove from_domain from this complex:
-                    from_domain, domain = domain, from_domain
-                    new_complex_oligos = dom0_cc_oligos + [domain.Strand]
-                else:
-                    # Remember to add the departing domain.Strand to the new_complex_oligos list:
-                    new_complex_oligos = dom1_cc_oligos + [domain.Strand]
-                # from_domain is now guaranteed to be on the "bigger" complex, which should continue to be this one;
-                # Remove domain.Strand (which is on the new, smaller complex)
-                # domain.Strand.Complex = None    # is also done by self.remove_strand()
-                if dom0_cc_size > 1 and dom1_cc_size > 1:
-                    #print("detach: case (a)")
-                    # Remove all strands in the new complex from the old:
-                    # OMG, forgetting to do this took me 4+ hours to debug!
-                    # (I was just doing self.remove_strand(domain.Strand) -- grr)
-                    for oligo in new_complex_oligos:
-                        self.remove_strand(oligo, origin="-detach case (a)")
-                    try:
-                        assert domain.Strand in new_complex_oligos
-                        assert domain.Strand not in self.Strands
-                        assert from_domain.Strand in self.Strands
-                        assert from_domain.Strand not in new_complex_oligos
-                    except AssertionError as e:
-                        print("---")
-                        print("domain.Strand:", domain.Strand)
-                        print("new_complex_oligos:", new_complex_oligos)
-                        print("self.Strands:", self.Strands)
-                        print("from_domain.Strand", from_domain.Strand)
-                        print("---")
-                    # Case (a) Two smaller complexes - must create a new complex for detached domain:
-                    # Connections division needs to be calculated...
-                    # Make a set of domains for the new complex:
-                    new_complex_domains = {odomain for oligo in new_complex_oligos for odomain in oligo.Domains}
-                    new_complex_connections = {edge for edge in self.Connections
-                                               if any(dom in new_complex_domains for dom in edge)}
-                    # | is the "union" operator for sets, & is intersection, ^ is symdiff, - is difference.
-                    self.Connections -= new_complex_connections
-                    new_complex = Complex(strands=set(new_complex_oligos),
-                                          origin="-new via detach case (a)")
-                    new_complex.Connections = new_complex_connections
-                    new_complexes = [new_complex]
-                else:
-                    # case (b) one complex and one unhybridized strand - no need to do anything further
-                    #print("detach: case (b)")
-                    #pass
-                    self.remove_strand(domain.Strand, origin="-detach case (b)")
-            else:
-                # Case (c) Two unhybridized strands
-                #print("detach: case (c)")
-                if domain.Strand.Complex:
-                    # domain.Strand.Complex == other_domain.Strand.Complex
-                    obsolete_complexes = [domain.Strand.Complex] # Make sure to save before you set to None.
-                domain.Strand.Complex = None
-                from_domain.Strand.Complex = None
-                #print("domain.Complex:", domain.Complex,
-                #      "domain.Strand.Complex:", domain.Strand.Complex)
-                #print("from_domain.Complex:", from_domain.Complex,
-                #      "from_domain.Strand.Complex:", from_domain.Strand.Complex)
-                assert domain.Complex == from_domain.Complex == domain.Strand.Complex \
-                    == from_domain.Strand.Complex == None
-                self.remove_strand(domain.Strand, origin="-detach case (c1)")   # will also set strand.Complex = None
-                self.remove_strand(from_domain.Strand, origin="-detach case (c2)")
-
-                #print("detach: case (c): Complex disintegrated - two unhybridized strands.")
-        #else:
-        #    print("Domains are still in the same complex.")
-        return dist, new_complexes, obsolete_complexes
-
-
-    def merge(self, other_complex, new_connections=None):
-        """
-        Merge this complex with another.
-        You should compare sizes before determining which complex is the "surviving" one.
-        """
-        assert other_complex != self
-        #if other_complex == self:
-        #    return
-        for strand in other_complex.Strands:
-            strand.Complex = self
-        #self.Strands += other_complex.Strands
-        self.Strands |= other_complex.Strands
-        self.N_strand_changes += other_complex.N_strand_changes
-        #self.Strands_changes.append(("merge", str(other_complex.Strands_changes), len(self.Strands)))
-        #self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
-        self.Connections |= other_complex.Connections
-        # | is the "union" operator for sets, & is intersection and ^ is symdiff
-        if new_connections:
-            for domain1, domain2 in new_connections:
-                self.add_connection(domain1, domain2)
-        # del other_complex   # Deleting in this namespace will have no effect.
-        return self
+    #def add_connection(self, domain1, domain2):
+    #    #print("Adding connection to Complex: %s<->%s" % (domain1, domain2))
+    #    # Using frozenset to represent un-directed connection - (a, b) is equivalent to (b, a)
+    #    self.Connections.add(frozenset((domain1, domain2)))
+    #
+    #def remove_connection(self, domain1, domain2):
+    #    #print("Removing connection from Complex: %s<->%s" % (domain1, domain2))
+    #    self.Connections.remove(frozenset((domain1, domain2)))
+    #
+    #
+    #def attach_domain(self, domain, to_domain=None, origin="+att_d"):
+    #    """
+    #    Attach (hybridize) <domain> to this complex.
+    #        <to_domain> is the domain that is already part of this complex, to which the domain hybridizes.
+    #    """
+    #    if to_domain is None:
+    #        to_domain = domain.Partner
+    #    # self.Strands should be a set, so it doesn't matter if it is already there.
+    #    # Note: At this point we have already have set domain.Partner = to_domain and vice versa.
+    #    assert to_domain.Strand in self.Strands
+    #
+    #    self.add_strand(domain.Strand, origin=origin)
+    #    self.add_connection(domain, to_domain)
+    #
+    #    # After attaching, make sure everything is right:
+    #    if self.Make_correctness_assertions:
+    #        try:
+    #            assert self.Strands == set(to_domain.Strand.connected_oligos()) | {to_domain.Strand}
+    #        except AssertionError as e:
+    #            print("AssertionError during attach_domain:", e)
+    #            print("self.Strands:", self.Strands)
+    #            print("to_domain.Strand.connected_oligos():", to_domain.Strand.connected_oligos())
+    #            print("to_domain.Strand:", to_domain.Strand)
+    #            print("domain:", str(domain), " - to_domain:", str(to_domain))
+    #            raise e
+    #
+    #
+    #def detach_domain(self, domain, from_domain=None, origin="-det_d"):
+    #    """
+    #    Detach (dehybridize) domain from complex.
+    #
+    #    Returns
+    #        dist, new_complex
+    #    Where dist is the new distance from domain to from_domain (None if the connection was broken)
+    #    and new_complex is the new complex that was generated in case detaching domain broke up the complex.
+    #
+    #    Note that the the domain's strand can still be part of the complex if it has another domain still attached.
+    #    Question: How to keep track of the network connectivity?
+    #    """
+    #    if from_domain is None:
+    #        from_domain = domain.Partner
+    #    assert domain.Strand.Complex == from_domain.Strand.Complex # It can be None, if single strand forming e.g. hairpin
+    #    try:
+    #        self.remove_connection(domain, from_domain)
+    #    except KeyError as e:
+    #        print("\n\nWARNING: KeyError %s for domain, from_domain = %s, %s\n\n" \
+    #              % (e, domain, from_domain))
+    #    new_complexes = None
+    #    obsolete_complexes = None
+    #    # How to know if the strand is still part of this complex???
+    #    # Probably have to dig up some graph theory knowledge
+    #    # Essentially find whether the two domains are still part of the same "connected component".
+    #    # Edges = (domain hybridization connections + domain connected by the same strand)
+    #    # Vertices = domains... or strands? Yeah, it might be easier to assume strands.
+    #    # The easiest way might be to do a Breadth-first search from one domain to the other
+    #    from_domain.Partner = None  # Make sure to break this connection first before assessing the distance...
+    #    domain.Partner = None
+    #    dist = from_domain.distance(domain) # Returns None if no (other) connection could be found
+    #    if dist is None:
+    #        #print("No connection between domains", domain, "and", from_domain,
+    #        #      " -- breaking up complex", domain.Complex,
+    #        #      " with strands:", domain.Complex.Strands)
+    #        # There is nolonger any connection between the two domains.
+    #        # We have either of the following situations:
+    #        #       (a) Two smaller complexes
+    #        #       (b) One complex and one unhybridized strand (oligo)
+    #        #       (c) Two unhybridized strands
+    #        # Uhm, wait... maybe calculate connected component sizes for the two now separate graphs?
+    #        # There is, after all, also a probability that from_domain is now "no longer part of this complex".
+    #        # It might be better (and more efficient) to do this at the strand level, rather than at the domain level.
+    #        # I.e. a graph where each node is a strand, instead of a graph where each node is a domain.
+    #        dom1_cc_oligos = domain.Strand.connected_oligos()
+    #        dom0_cc_oligos = from_domain.Strand.connected_oligos()
+    #        # Pay attention: Is domain.Strand itself included in connected_oligos?
+    #        # - No. Then add 1 to lenght. (If complex consists of two strands,
+    #        #   then len(connected_oligos()) will be 1, but the complex size should be 2.
+    #        dom1_cc_size = len(dom1_cc_oligos) + 1  # cc = connected component
+    #        dom0_cc_size = len(dom0_cc_oligos) + 1
+    #        if domain.Strand.Complex:
+    #            if not len(domain.Strand.Complex.Strands) == dom1_cc_size + dom0_cc_size:
+    #                print("WEIRD: Complex %s.Strands" % domain.Strand.Complex,
+    #                      "lenght does not equal the size of the two separate connected components:")
+    #                print(" - %s.Strands (%s): %s" % (domain.Strand.Complex, len(domain.Strand.Complex.Strands),
+    #                                                  domain.Strand.Complex.Strands))
+    #                print(" - dom1_cc_size + dom0_cc_size: %s + %s = %s" % \
+    #                      (dom1_cc_size, dom0_cc_size, dom1_cc_size+dom0_cc_size))
+    #        if dom0_cc_size > 1 or dom1_cc_size > 1:
+    #            # Case (a) Two smaller complexes or case (b) one complex and one unhybridized strand
+    #            if dom1_cc_size > dom0_cc_size:
+    #                # We should revert our thinking, and remove from_domain from this complex:
+    #                from_domain, domain = domain, from_domain
+    #                new_complex_oligos = dom0_cc_oligos + [domain.Strand]
+    #            else:
+    #                # Remember to add the departing domain.Strand to the new_complex_oligos list:
+    #                new_complex_oligos = dom1_cc_oligos + [domain.Strand]
+    #            # from_domain is now guaranteed to be on the "bigger" complex, which should continue to be this one;
+    #            # Remove domain.Strand (which is on the new, smaller complex)
+    #            # domain.Strand.Complex = None    # is also done by self.remove_strand()
+    #            if dom0_cc_size > 1 and dom1_cc_size > 1:
+    #                #print("detach: case (a)")
+    #                # Remove all strands in the new complex from the old:
+    #                # OMG, forgetting to do this took me 4+ hours to debug!
+    #                # (I was just doing self.remove_strand(domain.Strand) -- grr)
+    #                for oligo in new_complex_oligos:
+    #                    self.remove_strand(oligo, origin="-detach case (a)")
+    #                try:
+    #                    assert domain.Strand in new_complex_oligos
+    #                    assert domain.Strand not in self.Strands
+    #                    assert from_domain.Strand in self.Strands
+    #                    assert from_domain.Strand not in new_complex_oligos
+    #                except AssertionError as e:
+    #                    print("---")
+    #                    print("domain.Strand:", domain.Strand)
+    #                    print("new_complex_oligos:", new_complex_oligos)
+    #                    print("self.Strands:", self.Strands)
+    #                    print("from_domain.Strand", from_domain.Strand)
+    #                    print("---")
+    #                # Case (a) Two smaller complexes - must create a new complex for detached domain:
+    #                # Connections division needs to be calculated...
+    #                # Make a set of domains for the new complex:
+    #                new_complex_domains = {odomain for oligo in new_complex_oligos for odomain in oligo.Domains}
+    #                new_complex_connections = {edge for edge in self.Connections
+    #                                           if any(dom in new_complex_domains for dom in edge)}
+    #                # | is the "union" operator for sets, & is intersection, ^ is symdiff, - is difference.
+    #                self.Connections -= new_complex_connections
+    #                new_complex = Complex(strands=set(new_complex_oligos),
+    #                                      origin="-new via detach case (a)")
+    #                new_complex.Connections = new_complex_connections
+    #                new_complexes = [new_complex]
+    #            else:
+    #                # case (b) one complex and one unhybridized strand - no need to do anything further
+    #                #print("detach: case (b)")
+    #                #pass
+    #                self.remove_strand(domain.Strand, origin="-detach case (b)")
+    #        else:
+    #            # Case (c) Two unhybridized strands
+    #            #print("detach: case (c)")
+    #            if domain.Strand.Complex:
+    #                # domain.Strand.Complex == other_domain.Strand.Complex
+    #                obsolete_complexes = [domain.Strand.Complex] # Make sure to save before you set to None.
+    #            domain.Strand.Complex = None
+    #            from_domain.Strand.Complex = None
+    #            #print("domain.Complex:", domain.Complex,
+    #            #      "domain.Strand.Complex:", domain.Strand.Complex)
+    #            #print("from_domain.Complex:", from_domain.Complex,
+    #            #      "from_domain.Strand.Complex:", from_domain.Strand.Complex)
+    #            assert domain.Complex == from_domain.Complex == domain.Strand.Complex \
+    #                == from_domain.Strand.Complex == None
+    #            self.remove_strand(domain.Strand, origin="-detach case (c1)")   # will also set strand.Complex = None
+    #            self.remove_strand(from_domain.Strand, origin="-detach case (c2)")
+    #
+    #            #print("detach: case (c): Complex disintegrated - two unhybridized strands.")
+    #    #else:
+    #    #    print("Domains are still in the same complex.")
+    #    return dist, new_complexes, obsolete_complexes
+    #
+    #
+    #def merge(self, other_complex, new_connections=None):
+    #    """
+    #    Merge this complex with another.
+    #    You should compare sizes before determining which complex is the "surviving" one.
+    #    """
+    #    assert other_complex != self
+    #    #if other_complex == self:
+    #    #    return
+    #    for strand in other_complex.Strands:
+    #        strand.Complex = self
+    #    #self.Strands += other_complex.Strands
+    #    self.Strands |= other_complex.Strands
+    #    self.N_strand_changes += other_complex.N_strand_changes
+    #    #self.Strands_changes.append(("merge", str(other_complex.Strands_changes), len(self.Strands)))
+    #    #self.Strands_history.append(str(sorted([str(s) for s in self.Strands])))
+    #    self.Connections |= other_complex.Connections
+    #    # | is the "union" operator for sets, & is intersection and ^ is symdiff
+    #    if new_connections:
+    #        for domain1, domain2 in new_connections:
+    #            self.add_connection(domain1, domain2)
+    #    # del other_complex   # Deleting in this namespace will have no effect.
+    #    return self
 
 
     def FQDN(self):
@@ -424,14 +427,14 @@ class Strand():
             return None
 
 
-
     def FQDN(self):
+        """ Return Complex:Strand[Domain] """
         return "%s:%s[%s]" % (str(self.Complex), self.Name, self.ruid % 1000)
-
 
     def __repr__(self):
         # return "%s[%s]" % (self.Name, self.ruid % 100)
-        return "%s:%s[%s] at %s" % (self.Complex, self.Name, self.ruid % 1000, hex(id(self)))
+        #return "%s:%s[%s] at %s" % (self.Complex, self.Name, self.ruid % 1000, hex(id(self)))
+        return self.FQDN()
 
     def __str__(self):
         #return "%s[..%s]" % (self.Name, self.ruid % 100)
@@ -452,111 +455,108 @@ class Domain():
         self.Partner = partner
         self.ruid = random.randint(0, 2147483647)
 
-    @property
-    def Complex(self):
-        return self.Strand.Complex
 
-    def hybridize(self, domain):
-        """
-        Hybridize domain to this domain.
-        Arguments:
-            domain  the domain to hybridize to
-        Returns:
-            a list of new complexes or None if no new complexes were created.
-            a list of obsolete complexes to be deleted.
-        """
-        assert self.Partner is None
-        assert domain.Partner is None
-
-        self.Partner = domain
-        domain.Partner = self
-
-        if self.Strand == domain.Strand:
-            # If forming an intra-strand connection, no need to make or merge any Complexes
-            # Although this will screw up the complex.Connections.
-            if self.Strand.Complex:
-                self.Strand.Complex.add_connection(self, domain)
-            return 0, None, None
-
-        new_complexes, obsolete_complexes = None, None
-        # Update Complex:
-        if self.Strand.Complex and domain.Strand.Complex:
-            # Both domains are in a pre-existing complex; merge the two complexes
-            if self.Strand.Complex == domain.Strand.Complex:
-                #print("Intra-complex hybridization!")
-                assert domain.Strand in self.Strand.Complex.Strands
-                self.Strand.Complex.add_connection(self, domain)
-            else:
-                self.Strand.Complex.merge(domain.Strand.Complex, new_connections=[(self, domain)])
-                # We dont expect a merge to produce any new complexes, but the complex that is "merged in" is obsolete.
-                # Oh -- we dont know which Complex is made obsolete by the merge!
-                # Actually, merge always makes "other_complex" obsolete.
-                obsolete_complexes = [domain.Strand.Complex]
-            assert self.Strand.Complex == domain.Strand.Complex
-        elif self.Strand.Complex:
-            # self.Strand is in an existing complex; domain.Strand is not.
-            self.Strand.Complex.attach_domain(domain, self, origin="+d.hyb att (a)")
-        elif domain.Strand.Complex:
-            # Other domain strand is in a complex; self.Strand is not.
-            domain.Strand.Complex.attach_domain(self, domain, origin="+d.hyb att (b)")
-        else:
-            # Neither strands are in existing complex; create new complex
-            new_complex = Complex(strands={self.Strand},
-                                  origin="New complex from hybridizing two individual strands")
-            new_complex.attach_domain(domain, self, origin="+d.hyb att (c)")     # attach domain to self within the complex
-            new_complexes = [new_complex]
-            assert self.Strand.Complex == domain.Strand.Complex != None
-            assert self.distance(domain) != None
-            assert self.Strand.Complex.Strands == {self.Strand, domain.Strand}
-            assert self.Strand.connected_oligos() == [domain.Strand]
-            assert domain.Strand.connected_oligos() == [self.Strand]
-
-        return 0, new_complexes, obsolete_complexes
-
-
-    def dehybridize(self, domain=None):
-        """
-        De-hybridize domain from this domain.
-        Passing domain is only used to issue a warning if self.Partner != domain
-        """
-        if domain:
-            if self.Partner != domain:
-                print("WARNING: Trying to de-hybridize self (%s) from domain %s, but domain != self.Partner (%s) " \
-                      % (self, domain, self.Partner))
-                raise ValueError("self.Partner != domain -- %s, %s" % (self.Partner, domain))
-        else:
-            domain = self.Partner
-
-        assert domain is not None
-        assert self.Partner == domain
-        assert domain.Partner == self
-        assert self.Strand.Complex == domain.Strand.Complex     # Can be None if hair-pin
-
-        if self.Strand == domain.Strand:
-            # If breaking an intra-strand connection, no need to make or merge any Complexes
-            return 0, None, None
-
-        assert self.Strand.Complex      # At this point it cannot be None.
-
-        dist, new_complex, obsolete_complexes = self.Strand.Complex.detach_domain(domain, self, origin="-d.dehyb det (a)")
-
-        ## Update Complex:
-        #if self.Strand.Complex:
-        #    # Detach domain from this complex:
-        #elif domain.Strand.Complex:
-        #    raise Exception("ERROR - BUG: Domain.dehybridize(): self (%s) Strand.Complex is None, but %s Strand.Complex isn't?" % (self, domain))
-        #    #assert not "This should never happen. \
-        #    #Two hybridized domains must be in the same Complex, possibly None if hair-pin."
-        #    dist, new_complex, obsolete_complexes = domain.Strand.Complex.detach_domain(self, domain, origin="-d.dehyb det (b)")
-        #else:
-        #    # Neither strands are in existing complex; that shouldn't happen either
-        #    # It could happen, if we have a single strand with complementary domains.
-        #    print("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
-        #    raise Exception("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
-
-        assert self.Partner is None
-        assert domain.Partner is None
-        return dist, new_complex, obsolete_complexes
+    #def hybridize(self, domain):
+    #    """
+    #    Hybridize domain to this domain.
+    #    Arguments:
+    #        domain  the domain to hybridize to
+    #    Returns:
+    #        a list of new complexes or None if no new complexes were created.
+    #        a list of obsolete complexes to be deleted.
+    #    """
+    #    assert self.Partner is None
+    #    assert domain.Partner is None
+    #
+    #    self.Partner = domain
+    #    domain.Partner = self
+    #
+    #    if self.Strand == domain.Strand:
+    #        # If forming an intra-strand connection, no need to make or merge any Complexes
+    #        # Although this will screw up the complex.Connections.
+    #        if self.Strand.Complex:
+    #            self.Strand.Complex.add_connection(self, domain)
+    #        return 0, None, None
+    #
+    #    new_complexes, obsolete_complexes = None, None
+    #    # Update Complex:
+    #    if self.Strand.Complex and domain.Strand.Complex:
+    #        # Both domains are in a pre-existing complex; merge the two complexes
+    #        if self.Strand.Complex == domain.Strand.Complex:
+    #            #print("Intra-complex hybridization!")
+    #            assert domain.Strand in self.Strand.Complex.Strands
+    #            self.Strand.Complex.add_connection(self, domain)
+    #        else:
+    #            self.Strand.Complex.merge(domain.Strand.Complex, new_connections=[(self, domain)])
+    #            # We dont expect a merge to produce any new complexes, but the complex that is "merged in" is obsolete.
+    #            # Oh -- we dont know which Complex is made obsolete by the merge!
+    #            # Actually, merge always makes "other_complex" obsolete.
+    #            obsolete_complexes = [domain.Strand.Complex]
+    #        assert self.Strand.Complex == domain.Strand.Complex
+    #    elif self.Strand.Complex:
+    #        # self.Strand is in an existing complex; domain.Strand is not.
+    #        self.Strand.Complex.attach_domain(domain, self, origin="+d.hyb att (a)")
+    #    elif domain.Strand.Complex:
+    #        # Other domain strand is in a complex; self.Strand is not.
+    #        domain.Strand.Complex.attach_domain(self, domain, origin="+d.hyb att (b)")
+    #    else:
+    #        # Neither strands are in existing complex; create new complex
+    #        new_complex = Complex(strands={self.Strand},
+    #                              origin="New complex from hybridizing two individual strands")
+    #        new_complex.attach_domain(domain, self, origin="+d.hyb att (c)")     # attach domain to self within the complex
+    #        new_complexes = [new_complex]
+    #        assert self.Strand.Complex == domain.Strand.Complex != None
+    #        #assert self.distance(domain) != None
+    #        assert self.Strand.Complex.Strands == {self.Strand, domain.Strand}
+    #        assert self.Strand.connected_oligos() == [domain.Strand]
+    #        assert domain.Strand.connected_oligos() == [self.Strand]
+    #
+    #    return 0, new_complexes, obsolete_complexes
+    #
+    #
+    #def dehybridize(self, domain=None):
+    #    """
+    #    De-hybridize domain from this domain.
+    #    Passing domain is only used to issue a warning if self.Partner != domain
+    #    """
+    #    if domain:
+    #        if self.Partner != domain:
+    #            print("WARNING: Trying to de-hybridize self (%s) from domain %s, but domain != self.Partner (%s) " \
+    #                  % (self, domain, self.Partner))
+    #            raise ValueError("self.Partner != domain -- %s, %s" % (self.Partner, domain))
+    #    else:
+    #        domain = self.Partner
+    #
+    #    assert domain is not None
+    #    assert self.Partner == domain
+    #    assert domain.Partner == self
+    #    assert self.Strand.Complex == domain.Strand.Complex     # Can be None if hair-pin
+    #
+    #    if self.Strand == domain.Strand:
+    #        # If breaking an intra-strand connection, no need to make or merge any Complexes
+    #        return 0, None, None
+    #
+    #    assert self.Strand.Complex      # At this point it cannot be None.
+    #
+    #    dist, new_complex, obsolete_complexes = self.Strand.Complex.detach_domain(domain, self, origin="-d.dehyb det (a)")
+    #
+    #    ## Update Complex:
+    #    #if self.Strand.Complex:
+    #    #    # Detach domain from this complex:
+    #    #elif domain.Strand.Complex:
+    #    #    raise Exception("ERROR - BUG: Domain.dehybridize(): self (%s) Strand.Complex is None, but %s Strand.Complex isn't?" % (self, domain))
+    #    #    #assert not "This should never happen. \
+    #    #    #Two hybridized domains must be in the same Complex, possibly None if hair-pin."
+    #    #    dist, new_complex, obsolete_complexes = domain.Strand.Complex.detach_domain(self, domain, origin="-d.dehyb det (b)")
+    #    #else:
+    #    #    # Neither strands are in existing complex; that shouldn't happen either
+    #    #    # It could happen, if we have a single strand with complementary domains.
+    #    #    print("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
+    #    #    raise Exception("WARNING: Cannot dehybridize %s from %s: Neither domains are in a complex." % (self, domain))
+    #
+    #    assert self.Partner is None
+    #    assert domain.Partner is None
+    #    return dist, new_complex, obsolete_complexes
 
 
     def effective_activity(self, other_domain, volume, oversampling=1):
@@ -568,10 +568,11 @@ class Domain():
             # They are in the same complex
             # Currently we just use the domain-graph node distance as a measure of how close they are.
             try:
-                dist = self.distance(other_domain)
+                #dist = self.distance(other_domain)
+                dist = distance_cached(self, other_domain)
                 return math.sqrt(dist)
             except TypeError as e:
-                print("WARNING: TypeError %s when calculating effective_activity based on distance." % e)
+                print("WARNING: TypeError %s when calculating distance for effective_activity (shouldn't happen)." % e)
                 print("- self = %s, other_domain = %s" % (self, other_domain))
                 print("- self.Partner: %s, other_domain.Partner: %s" % (self.Partner, other_domain.Partner))
                 print("- self.Strand.Complex: %s, other_domain.Strand.Complex: %s" \
@@ -582,24 +583,48 @@ class Domain():
                 print("self.Strand.connected_oligos():", self.Strand.connected_oligos())
                 print("other_domain.Strand.connected_oligos():", other_domain.Strand.connected_oligos())
                 print("self.Complex.Strands - set(self.Strand.connected_oligos()",
-                      self.Complex.Strands - set(self.Strand.connected_oligos()))
+                      self.Strand.Complex.Strands - set(self.Strand.connected_oligos()))
                 print("other_domain.Complex.Strands - set(other_domain.Strand.connected_oligos()",
-                      other_domain.Complex.Strands - set(other_domain.Strand.connected_oligos()))
-                if self.Complex == other_domain.Complex:
+                      other_domain.Strand.Complex.Strands - set(other_domain.Strand.connected_oligos()))
+                if self.Strand.Complex == other_domain.Strand.Complex:
                     print("self.Complex strands:")
-                    print("\n".join("--- %s: %s" % (strand, strand.Domains) for strand in self.Complex.Strands))
+                    print("\n".join("--- %s: %s" % (strand, strand.Domains) for strand in self.Strand.Complex.Strands))
                     print("other_domain.Complex strands:")
-                    print("\n".join("--- %s: %s" % (strand, strand.Domains) for strand in other_domain.Complex.Strands))
-                    print("self.connected_domains:")
+                    print("\n".join("--- %s: %s" % (strand, strand.Domains) for strand in other_domain.Strand.Complex.Strands))
+                    print("\nself.connected_domains:")
                     domains, parents, distances = self.connected_domains()
                     print("--- domains:", domains)
                     print("--- parents:", parents)
                     print("--- distances:", distances)
-                    print("other_domain.connected_domains:")
+                    print("\nprint_connection(parents, other_domain=%s)" % other_domain)
+                    print_connection(parents, other_domain)
+
+                    print("\nother_domain.connected_domains:")
                     domains, parents, distances = other_domain.connected_domains()
                     print("--- domains:", domains)
                     print("--- parents:", parents)
                     print("--- distances:", distances)
+                    print("\nprint_connection(parents, self=%s)" % self)
+                    print_connection(parents, self)
+
+                print("\nResetting dist cache and trying again...")
+                self.Strand.Complex.Domain_distances = {}
+                dist, parents = distance_cached(self, other_domain, return_parents=True)
+                print(" - dist: %s" % dist)
+                print(" - self.distance(d): %s" % self.distance(other_domain))
+                is_cyclic = check_acyclic_graph(parents, other_domain)
+                if not is_cyclic:
+                    print("\nprint_connection(parents, other_domain=%s)" % other_domain)
+                    print_connection(parents, other_domain)
+                self.Strand.Complex.Domain_distances = {}
+                dist, parents = distance_cached(other_domain, self, return_parents=True)
+                is_cyclic = check_acyclic_graph(parents, other_domain)
+                if not is_cyclic:
+                    print("\nprint_connection(parents, self=%s)" % self)
+                    print_connection(parents, self)
+                # from importlib import reload
+                import pdb
+                pdb.set_trace()
                 raise e
         # If the two strands are not part of the same complex, return oversampling * concentration
         return oversampling/N_AVOGADRO/volume
@@ -794,7 +819,9 @@ class Domain():
         return "%s:%s[%s]" % (self.Strand.FQDN(), self.Name, self.ruid % 1000)
 
     def __repr__(self):
-        return "%s:%s[%s] at %s" % (self.Strand.FQDN(), self.Name, self.ruid % 1000, hex(id(self)))
+        #return "%s:%s[%s] at %s" % (self.Strand.FQDN(), self.Name, self.ruid % 1000, hex(id(self)))
+        #return "%s:%s[%s]" % (self.Strand.FQDN(), self.Name, self.ruid % 1000))
+        return self.FQDN()
 
     def __str__(self):
         #return "%s:%s[..%s]" % (self.Strand.FQDN(), self.Name, self.ruid % 100)

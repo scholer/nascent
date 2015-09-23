@@ -118,6 +118,14 @@ Some calculations:
     N_Avogagro = 6.02e23 /mol
 
 
+NOMENCLATURE:
+* Molecular specie: Represents all identical molecules, e.g. all instances of "strandA".
+* Molecule (instance): Represents a single, concret molecule, which can (in theory) be specified
+    with defined position, orientation, velocity, etc.
+* Complex (instance): Represents a single, concrete complex, composed of two or more molecules.
+    Like molecules, complexes can in theory be specified with position, orientation, etc.
+* Complex specie: Represents all identical complexes of a particular conformation.
+
 
 TODOS:
 * TODO: Implement complex manager to keep track of complexes.
@@ -209,6 +217,28 @@ TODOS:
 * TODO: Implement complex manager/tracker.
 
 * TODO: Add complex size histogram data to output stats.
+
+
+* TODO: Move "selection" to Gillespie direct or next-step, where a reaction
+always happens in each step. Which reaction happens is random but weighted
+by the propensity of the reaction. You can have 1, 2 or 3 selection steps:
+either all possible reaction combinations together, the total propensity for
+a single domain, or the propensity of all identical domains (species).
+    * This solves the sampling problem with "high propencity intra-complex"
+        reactions vs low propencity, concentration dependent reactions,
+        where I had to pick the "oversampling factor" just right according
+        to the initial concentrations, e.g. high oversampling for low
+        concentrations. High oversampling would then lead to reduced
+        propencities of intra-complex reactions relative to inter-complex
+        reactions. (Since we would normalize weights if the sum is > 1.)
+    * This also solves the issue where I had to have sufficiently low
+        oversampling that the chance of two reactions happening in a single
+        step was sufficiently low, especially the chance that a domain would
+        hybridize and then rapidly dehybridize within a single step.
+    * This does make it harder to analyze time samlings, as I cannot simply
+        use a state histogram, but have to multiply with the times spent in
+        that state. This shouldn't be much of an issue, though.
+
 
 
 * Done: Calculate the thermodynamicly correct melting curve for reference.
@@ -310,6 +340,7 @@ except ImportError:
 import glob
 
 from .dom_anneal_models import Tube #, Strand, Domain, Complex
+from .moves import hybridize, dehybridize
 from .energymodels.biopython import (binary_state_probability_cal_per_mol,
                                      hybridization_dH_dS, Tm_NN, DNA_NN3, DNA_NN4)
 
@@ -378,6 +409,7 @@ class Simulator():
         self.Params = params
         self.Tube = Tube(volume, strands)
         self.Volume = volume
+        self.SSA_method = "Gillespie_DM" # Gillespie_DM, Gillespie_FRM, Gillespie_NRM, 
         self.Complexes = []
         self.Removed_complexes = []
         self.Strands = strands
@@ -774,7 +806,7 @@ class Simulator():
             #  - strand hybridization will reduce the conformational freedom of the complex.
             # This is a dynamic function of the current complex structure and cannot be stored for later use.
             # Obviously, this is only applicable if the two domains are already in the same complex.
-            if domain1.Complex and domain1.Complex == domain2.Complex:
+            if domain1.Strand.Complex and domain1.Strand.Complex == domain2.Strand.Complex:
                 # TODO: Calculate a better entropy correction for intra-complex hybridizations
                 #pass
                 deltaS_corr += 2 # exp(4/R) = 7.4 !
@@ -858,7 +890,7 @@ class Simulator():
             # Here we are looking at melting probability/rate.
             #if random.random() < math.exp(dG_std/(R*T))*r_hyb*0.5*self.Oversampling:
             if random.random() >= p_hyb_old:
-                new_dist, new_complexes, obsolete_complexes = domain1.dehybridize(domain2)
+                new_complexes, obsolete_complexes, new_dist = dehybridize(domain1, domain2)
                 state_change = True
         else:
             #
@@ -871,7 +903,7 @@ class Simulator():
             # This would make K larger for negative dG and smaller for positive dG.
             #if random.random() > math.exp(dG_std/(R*T))*r_hyb*self.Oversampling: # sim #41
             if random.random() < p_hyb_old:
-                new_dist, new_complexes, obsolete_complexes = domain1.hybridize(domain2)
+                new_complexes, obsolete_complexes = hybridize(domain1, domain2)
                 state_change = True
 
         if state_change:

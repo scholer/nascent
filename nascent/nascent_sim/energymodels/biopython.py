@@ -18,6 +18,7 @@ import math
 
 
 WC = dict(zip("ATGC", "TACG"))
+R = 1.987 # cal/mol/K
 
 def compl(seq):
     return "".join(WC[b] for b in seq)
@@ -140,6 +141,19 @@ DNA_DE1 = {
 #  scipy.stats.linregres(dHs, [325*dS/1000 for dS in dSs]) - slope = 1.0016, intersect = 0.277.
 
 
+
+energy_tables_in_units_of_R = {}
+for tbl_name in "DNA_NN3, DNA_NN4, DNA_IMM1, DNA_TMM1, DNA_DE1".split(", "):
+    tbl = globals()[tbl_name]
+    energy_tables_in_units_of_R[tbl_name] = {
+        # R is in cal/mol/K
+        k: (H*1000/R, S/R) for k, (H, S) in tbl.items()
+    }
+
+# To use energies in unit of R:
+# K = exp(-dG/T) = exp(dS-dH/T)  # Very simple to interpret and use, right?
+
+
 def canonical_partitions(energies, T, unit='cal/mol'):
     """
     Return list [exp(-E_s / kT) for s in energies microstates]
@@ -233,7 +247,8 @@ def binary_state_probability_cal_per_mol(deltaE, T, Q=1):
 
 def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
                         tmm_table=DNA_TMM1, imm_table=DNA_IMM1, de_table=DNA_DE1,
-                        selfcomp=False, Na=50, K=0, Tris=0, Mg=0, dNTPs=0, saltcorr=5):
+                        selfcomp=False, Na=50, K=0, Tris=0, Mg=0, dNTPs=0, saltcorr=5,
+                        verbose=False):
     """
     Calculate standard enthalpy and entropy of hybridization, i.e. the reaction
 
@@ -244,6 +259,23 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
     (this might be very important!)
 
     Return values are in units of kcal/mol for dH and cal/mol/K for dS.
+
+    Arguments:
+     - seq: The primer/probe sequence as string or Biopython sequence object. For
+       RNA/DNA hybridizations seq must be the RNA sequence.
+     - c_seq: Complementary sequence. The sequence of the template/target in
+       3'->5' direction. c_seq is necessary for mismatch correction and
+       dangling-ends correction. Both corrections will automatically be
+       applied if mismatches or dangling ends are present. Default=None.
+     - shift: Shift of the primer/probe sequence on the template/target sequence,
+       e.g.::
+                           shift=0       shift=1        shift= -1
+        Primer (seq):      5' ATGC...    5'  ATGC...    5' ATGC...
+        Template (c_seq):  3' TACG...    3' CTACG...    3'  ACG...
+
+       The shift parameter is necessary to align seq and c_seq if they have
+       different lengths or if they should have dangling ends. Default=0
+
 
     Note: The energies calculated are indeed for *hybridization*:
         We get a negative enthalpy and a negative entropy (for complementary strands).
@@ -327,11 +359,12 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
     # Neither GA/TA nor AT/AG is present?
 
     seq = str(seq)
+    if c_seq is None:
+        # Wait... are we taking the rcompl or compl? - compl. c_seq is 3'-to-5'.
+        c_seq = compl(seq)
     if check:
         baseset = ('A', 'C', 'G', 'T', 'I')
         seq = ''.join([base for base in seq if base in baseset])
-    # Wait... are we taking the rcompl or compl? - compl. c_seq is 3'-to-5'.
-    c_seq = compl(seq)
     tmpseq = seq
     tmp_cseq = c_seq
     deltaH = 0
@@ -350,6 +383,8 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
             tmpseq += (len(tmp_cseq) - len(tmpseq)) * '.'
         if len(tmp_cseq) < len(tmpseq):
             tmp_cseq += (len(tmpseq) - len(tmp_cseq)) * '.'
+        if verbose:
+            print("Aligned sequences:\n  %s\n  %s" % (tmpseq, tmp_cseq))
         # Remove 'over-dangling' ends
         while tmpseq.startswith('..') or tmp_cseq.startswith('..'):
             tmpseq = tmpseq[1:]
@@ -362,12 +397,18 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
             left_de = tmpseq[:2] + '/' + tmp_cseq[:2]
             deltaH += de_table[left_de][dH]
             deltaS += de_table[left_de][dS]
+            if verbose:
+                print("Adding left dangling end contribution for %s: dH+=%s, dS+=%s" %
+                      (left_de, de_table[left_de][dH], de_table[left_de][dS]))
             tmpseq = tmpseq[1:]
             tmp_cseq = tmp_cseq[1:]
         if tmpseq.endswith('.') or tmp_cseq.endswith('.'):
             right_de = tmp_cseq[-2:][::-1] + '/' + tmpseq[-2:][::-1]
             deltaH += de_table[right_de][dH]
             deltaS += de_table[right_de][dS]
+            if verbose:
+                print("Adding right dangling end contribution for %s: dH+=%s, dS+=%s" %
+                      (right_de, de_table[right_de][dH], de_table[right_de][dS]))
             tmpseq = tmpseq[:-1]
             tmp_cseq = tmp_cseq[:-1]
 
@@ -378,12 +419,18 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
         deltaS += tmm_table[left_tmm][dS]
         tmpseq = tmpseq[1:]
         tmp_cseq = tmp_cseq[1:]
+        if verbose:
+            print("Adding left terminal mismatch contribution for %s: dH+=%s, dS+=%s" %
+                  (left_tmm, tmm_table[left_tmm][dH], tmm_table[left_tmm][dS]))
     right_tmm = tmpseq[-2:] + '/' + tmp_cseq[-2:]
     if right_tmm in tmm_table:
         deltaH += tmm_table[right_tmm][dH]
         deltaS += tmm_table[right_tmm][dS]
         tmpseq = tmpseq[:-1]
         tmp_cseq = tmp_cseq[:-1]
+        if verbose:
+            print("Adding right terminal mismatch contribution for %s: dH+=%s, dS+=%s" %
+                  (right_tmm, tmm_table[right_tmm][dH], tmm_table[right_tmm][dS]))
 
     # Now everything 'unusual' at the ends is handled and removed and we can
     # look at the initiation.
@@ -449,6 +496,7 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
         deltaH += nn_table['sym'][dH]
         deltaS += nn_table['sym'][dS]
     if saltcorr and saltcorr == 5:
+        # Only salt correction method #5 considers energy, the others applies to Tm.
         corr = salt_correction(Na=Na, K=K, Tris=Tris, Mg=Mg, dNTPs=dNTPs,
                                method=saltcorr, seq=seq)
         deltaS += corr
@@ -472,7 +520,6 @@ def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
        applied if mismatches or dangling ends are present. Default=None.
      - shift: Shift of the primer/probe sequence on the template/target sequence,
        e.g.::
-
                            shift=0       shift=1        shift= -1
         Primer (seq):      5' ATGC...    5'  ATGC...    5' ATGC...
         Template (c_seq):  3' TACG...    3' CTACG...    3'  ACG...

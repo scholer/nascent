@@ -30,9 +30,13 @@ import yaml
 import glob
 from datetime import datetime
 from code import interact
-import rlcompleter
-import readline
+import traceback
 
+try:
+    import rlcompleter
+    import readline
+except ImportError:
+    pass
 
 LIBPATH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, LIBPATH)
@@ -116,6 +120,7 @@ def main():
     #strand_defs_file = os.path.join(os.path.dirname(__file__), "testfiles", "strand_defs01.txt")
     # LIBPATH,
     do_testing = False
+    #do_testing = True
     strand_defs_folder = os.path.join(os.path.dirname(nascent.nascent_sim.__file__), "testfiles")
     #structure = "duplex1"
     #structure = "duplex1_2"
@@ -124,14 +129,16 @@ def main():
     #structure = "lin3s1"
     #structure = "polymer1h2s1"
     # TODO: The above structure should polymerize, but does not because the model lacks awareness of structural rigidity.
-    #structure = "catenane"
-    structure = "DistTest1"
-    do_testing = True
+    structure = "catenane"
 
     #n_strand_copies_default = 400
     #n_strand_copies_default = 100
     #n_strand_copies_default = 40
-    n_strand_copies_default = 1
+    n_strand_copies_default = 10
+
+    if do_testing:
+        structure = "DistTest1"
+        n_strand_copies_default = 1
 
     # Load strand def and check the strands:
     strand_defs_file = os.path.join(strand_defs_folder, "strand_defs_{}.txt".format(structure))
@@ -193,10 +200,10 @@ def main():
         oversampling_factor, n_steps_per_T = int(oversampling_max), int(n_steps_min)
     else:
         #n_steps_per_T = 20000
-        #n_steps_per_T = 100000
+        n_steps_per_T = 100000
         #n_steps_per_T = 200000
         #n_steps_per_T = 400000
-        n_steps_per_T = 1000000
+        #n_steps_per_T = 1000000
         #n_steps_per_T = 2000000
         #n_steps_per_T = 500000
         # oversampling_factor = 100*n_strand_copies_default
@@ -232,7 +239,8 @@ def main():
         offset = 0 #0.3
         start = 40  # deg C
         #start = 60  # deg C
-        stop = 80   # deg C
+        #stop = 80   # deg C
+        stop = 70   # deg C
         start, stop = stop, start   # invert => start hot
         step = -1 if start > stop else +1   # deg C
         T_start, T_finish = [273+val+offset for val in (start, stop)]
@@ -268,12 +276,14 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\nABORT: KeyboardInterrupt.\n\n")
+        print(traceback.format_exc()) # or print(sys.exc_info()[0])
         answer = input("Do you want to save the simulation data for this aborted run? [yes]/no  ")
         if answer and answer[0].lower() == 'n':
             cleanup(outputstatsfile)
             return
     except Exception as e:
         print("\n\nException during siumlation:", e)
+        print(traceback.format_exc()) # or print(sys.exc_info()[0])
         answer = input("\nDo you want to enter interactive mode?  ")
         if answer and answer[0].lower() == 'y':
             interact(local=locals())
