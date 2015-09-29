@@ -55,23 +55,13 @@ class CytoscapeStreamer(LiveVisualizerBase):
 
     def __init__(self, config):
         super().__init__(config)
-        #self.config = config
-        #self.graph_type = config.get('visualization_graph_type', '5p3p')
-        #self.directed_graph = config.get('visualization_graph_directed', self.graph_type in ('5p3p',))
-        # Note: For purely visualization, it doesn't matter if the graph is directed or not;
-        # we are not using the visualized graph for any analysis or calculation.
         host = config.get('visualization_host', '127.0.0.1')
         port = config.get('visualization_port', 1234)
         self.client = cyrest_client.CyRestClient(ip=host, port=port)
-        self.network = None
+        self.network = None     # CyNetwork object for interacting with the Cytoscape graph (network)
         #self.name_to_suid = {} # edit: for now, we store nodes and edges separately. They could probably be joined.
-        self.node_name_to_suid = {}
-        self.node_suid_to_name = {}
-        self.edge_names_to_suid = {} # frozenset(source, target) for undirected graphs, (source, target) for directed.
-        self.edge_suid_to_names = {}
         # While we are debugging, keep track of deletions:
-        self.deleted_name_to_suid = []
-        self.deleted_suid_to_name = []
+        self.id_key = 'SUID'
 
 
     def initialize_graph(self, graph, reset=True):
@@ -80,96 +70,168 @@ class CytoscapeStreamer(LiveVisualizerBase):
             self.client.session.delete()
         name = self.config.get('vizualisation_network_name')
         coll = self.config.get('vizualisation_network_collection')
-        self.network = self.client.network.create(name=name, collection=coll) # also suid, data
-        node_tbl = self.network.get_node_table(format='cytoscapejs') # format='dataframe' is default
-        #self.node_suid_to_name = dict(zip(node_tbl.index, node_tbl['name']))
-        self.node_suid_to_name = {r['SUID']: r['name'] for r in node_tbl} # 'cytoscapejs' yields node_tbl['rows']
-        self.node_name_to_suid = {v: k for k, v in self.node_suid_to_name.items()}
-        edge_tbl = self.network.get_edge_table(format='cytoscapejs')
-        if self.directed_graph:
-            self.edge_suid_to_names = {r['SUID']: frozenset((r['source'], r['target'])) for r in node_tbl}
-        self.edge_suid_to_names = edge_suid_to_names_mapper(edge_tbl, directed=self.directed_graph)
-        self.edge_names_to_suid = {v: k for k, v in self.edge_names_to_suid.items()}
-        # We need both maps - SUID->name and name->SUID.
-
-    def add_directed_edge(self, source, target, interaction):
-        """ Add a single directed edge from source to target with <interaction>. """
-        # py2cytoscape.data.cynetwork is a little odd:
-        # .add_edge() returns a 1-element list of [{'SUID': 5455, 'source': 4875, 'target': 4876}]
-        # .add_edges() returns a pandas dataframe.
-        new_edge_id = self.network.add_edge(source=self.node_name_to_suid[source],
-                                            target=self.node_name_to_suid[target],
-                                            interaction=interaction, directed=True)
-
-    def add_directed_edge_both_ways(self, source, target, interaction):
-        """ Add a single directed edge from source to target with <interaction>. """
-        new_edges = [(self.node_name_to_suid[source], self.node_name_to_suid[target], interaction),
-                     (self.node_name_to_suid[target], self.node_name_to_suid[source], interaction)]
-        new_edge_id = self.network.add_edges(source=self.node_name_to_suid[source],
-                                            target=self.node_name_to_suid[target],
-                                            interaction=interaction, directed=True)
-
-    def register_new_edges(self, new_edge_ids, directed=None):
-        """
-        Register new edges.
-        Format can be either a list of dicts or a pandas dataframe.
-        """
-        if directed is None:
-            directed = self.directed_graph
-        if isinstance(new_edge_ids, DataFrame):
-            edge_suid_to_names = edge_suid_to_names_mapper(new_edge_ids)
+        if graph is None:
+            # create args:
+            # suid: network id, name: graph name, collection: (?)
+            # data (a dict with form {'data': {...}, 'elements': {'nodes': [...], 'edges': [...]}} )
+            self.network = self.client.network.create(name=name, collection=coll)
         else:
-            edge_suid_to_names = {d['SUID']: (d['source'], d['target']) if directed
-                                             else frozenset((d['source'], d['target']))
-                                  for d in new_edge_ids}
-        edge_names_to_suid = {v: k for k, v in edge_suid_to_names.items()}
-        self.edge_suid_to_names.update(edge_suid_to_names)
-        self.edge_names_to_suid.update(edge_names_to_suid)
+            # Create create from networkx graph
+            self.network = self.client.network.create_from_networkx(graph, collection='Generated by NetworkX')
 
-    def propagate_change(self, change):
-        """
-        Propagate a single state change.
-        - change_type: 0 = Add/remove node, 1=Add/remove edge.
-        - forming: 1=forming, 0=removing
-        """
-        #nodes = change['nodes']
-        #dt = change['timedelta']
-        if change['change_type'] == 1: # 1 = Add/delete edge
-            source = change['nodes'][0]
-            target = change['nodes'][1]
-            if change['forming'] == 1:
-                # Add edge
-                interaction = change['interaction'] # backbone, hybridization or stacking
-                directed = True if interaction == 'stacking' else False
-                new_edge_id = self.network.add_edge(source=self.node_name_to_suid[source],
-                                                    target=self.node_name_to_suid[target],
-                                                    interaction=interaction,
-                                                    directed=directed)
-                # is a list of [{'SUID': 5455, 'source': 4875, 'target': 4876}]
-                #self.edge_names_to_suid = edge_names_to_suid(new_edge_id)
+        # Register the current nodes:
+        self.register_new_nodes(self.network.get_node_table(format='cytoscapejs')) # default format is'dataframe'
+        self.register_new_edges(self.network.get_edge_table(format='cytoscapejs'))
+
+    #
+    #def add_directed_edge(self, source, target, interaction):
+    #    """ Add a single directed edge from source to target with <interaction>. """
+    #    # py2cytoscape.data.cynetwork is a little odd:
+    #    # .add_edge() returns a 1-element list of [{'SUID': 5455, 'source': 4875, 'target': 4876}]
+    #    # .add_edges() returns a pandas dataframe.
+    #    new_edge_ids = self.network.add_edge(source=self.node_name_to_suid[source],
+    #                                         target=self.node_name_to_suid[target],
+    #                                         interaction=interaction, directed=True)
+    #    self.register_new_edges(new_edge_ids, directed=True)
+    #
+    #def add_directed_edge_both_ways(self, source, target, interaction):
+    #    """ Add a single directed edge from source to target with <interaction>. """
+    #    new_edges = [(self.node_name_to_suid[source], self.node_name_to_suid[target], interaction),
+    #                 (self.node_name_to_suid[target], self.node_name_to_suid[source], interaction)]
+    #    new_edge_ids = self.network.add_edges(new_edges, dataframe=False) # arg 'dataframe' might change to 'format'
+    #    self.register_new_edges(new_edge_ids, directed=True)
 
 
-            elif change['forming'] == 0:
-                # Remoe edge:
-                for node in change['nodes']:
-                    self.network.delete_edge(node)
-        elif change['change_type'] == 0: # 0 = Add/delete node(s)
-            if change['forming'] == 1:
-                # Add nodes
-                new_node_name_to_suids = self.network.add_nodes(change['nodes'])
-                self.node_name_to_suid.update(new_node_name_to_suids)
-            else:
-                # Delete nodes
-                for node in change['nodes']:
-                    suid = self.node_name_to_suid[node]
-                    self.network.delete_node(suid)
+    def add_node(self, node_name, attributes=None):
+        """ Add a single node. """
+        new_node_ids = self.network.add_nodes([node_name], dataframe=False)
+        self.register_new_nodes(new_node_ids)
+        return new_node_ids
+
+
+    def add_nodes(self, node_name_list, attributes=None):
+        """ Add multiple nodes. """
+        new_node_ids = self.network.add_node(node_name_list, dataframe=False)
+        self.register_new_nodes(new_node_ids)
+        return new_node_ids
+
+
+    def delete_node(self, node_name):
+        """ Delete a single node from the graph. """
+        node_id = self.node_name_to_suid.pop(node_name)
+        try:
+            self.network.delete_node(node_id)
+        except Exception as e:
+            print("Error deleting node %s: %s" % (node_id, e))
+            # Re-insert node_name => node_id entry
+            self.node_name_to_suid[node_name] = node_id
         else:
-            raise ValueError("change type value %s not recognized" % repr(change['change_type']))
+            test_name = self.node_suid_to_name.pop(node_id)
+            if test_name != node_name:
+                print("WARNING: Mapping issue: node_suid_to_name[node_id] != node_name")
+
+
+    def delete_nodes(self, node_names_list):
+        for node_name in node_names_list:
+            self.delete_node(node_name)
+
+
+    def add_edge(self, source, target, interaction, directed, bidirectional, attributes=None):
+        """
+        :param source:
+        :param target:
+        :param interaction:
+        :param directed:
+        :param bidirectional: If True, and directed is also True, add two directed edges,
+                              one from source to target and another from target to source.
+        """
+        # For Cytoscape, we need to convert
+        edges = [{'source': self.node_name_to_suid[source],
+                  'target': self.node_name_to_suid[target],
+                  'interaction': interaction,
+                  'directed': directed}]
+        if directed and bidirectional:
+            edges += [{'source': self.node_name_to_suid[target],
+                       'target': self.node_name_to_suid[source],
+                       'interaction': interaction,
+                       'directed': directed}]
+        new_edge_ids = self.network.add_edges(edges, dataframe=False)
+        self.register_new_edges(new_edge_ids, directed=directed)
+        return new_edge_ids
+
+
+    def add_edges(self, edges, attributes=None):
+        """
+        Perform some translation from nascent directive to py2cytoscape directive.
+        edges must be a list of dicts as:
+            [{'source': <name>, 'target': <name>, 'interaction': <str>, 'directed': <bool>}, ...]
+        This method will take care of mapping names->SUIDs before submitting it
+        (this happens in-place, so you may want to make a copy of edges if you need it for anything important)
+        """
+        for edge in edges:
+            edge['source'] = self.node_name_to_suid[edge['source']]
+            edge['target'] = self.node_name_to_suid[edge['target']]
+        new_edge_ids = self.network.add_edges(edges, dataframe=False)
+        directed = [edge.get('directed') for edge in edges]
+        directed_set = set(directed)
+        if len(directed_set) < 2:
+            # If all edges have the same 'directed' value, we can optimize by only providing one value:
+            directed = directed[0]
+        self.register_new_edges(new_edge_ids, directed=directed)  # Consider being able to add directed here!
+        return new_edge_ids
+
+
+    def delete_edge(self, source, target, directed=True):
+        """
+        Delete a single edge from the graph.
+        :param source:, :param target: the source and target which edge is connecting.
+        """
+        if directed:
+            key, fallback = ((source, target), frozenset((source, target)))
+        else:
+            fallback, key = ((source, target), frozenset((source, target)))
+        try:
+            edge_id = self.edge_names_to_suid.pop(key)
+        except KeyError:
+            print("Unable to find expected edge key %s in node_name_to_suid map." % key)
+            try:
+                edge_id = self.edge_names_to_suid.pop(fallback)
+                key = fallback
+            except KeyError:
+                print("- Also unable to find fallback key %s in node_name_to_suid map." % fallback)
+                return
+        try:
+            self.network.delete_edge(edge_id)
+        except Exception as e:
+            print("Error deleting node %s: %s" % (edge_id, e))
+            # Re-insert node_name => node_id entry
+            self.edge_names_to_suid[key] = edge_id
+            return False
+        else:
+            test_name = self.edge_suid_to_names.pop(edge_id)
+            self.deleted_name_to_suid.append({key: edge_id})
+            self.deleted_suid_to_name.append({edge_id: key})
+            if test_name != key:
+                print("WARNING: Mapping issue: node_suid_to_name[node_id] != node_name")
+            return True
+
+
+    def delete_edges(self, edges):
+        """ Delete all edges in :param edges:. """
+        all_ok = 1
+        for edge in edges:
+            try:
+                source, target = edge['source'], edge['target']
+            except KeyError:
+                source, target = edge['nodes']
+            directed = edge['directed']
+            all_ok *= self.delete_edge(source, target, directed)
+        return bool(all_ok)
 
 
 
-    def propagate_changes(self, changes):
-        """ Propagate a list of state changes. """
-        pass
-
-
+    #def edge_names_key(self, source, target, directed=True):
+    #    if directed:
+    #        return (source, target)
+    #    else:
+    #        return frozenset((source, target))

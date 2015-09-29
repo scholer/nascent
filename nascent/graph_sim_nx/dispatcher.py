@@ -14,260 +14,398 @@
 ##    You should have received a copy of the GNU General Public License
 ##    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+"""
+
+Main dispatcher module.
+
+
+The dispatcher is resposible for:
+ (1) Receiving state changes.
+ (2) Writing state changes to file.
+ (3) Propagating the state change to the live graph, by:
+    (a) Translating the state change directive to a graph event,
+        according to the live graph view.
+    (b) Invoking the correct graph-updating methods for the events.
+
+Regarding (3): The graph_visualization objects are agnostic to "domains", "strands", etc.
+They only know about how to create graphs and add/remove nodes and edges on their respective
+output tool. It is the dispatchers job to re-format graph initiation and state change directives
+according to the current graph representation and style.
+What this means is that:
+ 1. The dispatcher receive a state change directive, e.g.
+        "domain_A:3 hybridized to domain_a:5", or
+        "domain_A:4 stacked with domain_B:2" (the 3p end of A to 5p end of B)
+ 2. The dispatcher rewrites the directive, e.g. if the current graph repr is '5p3p',
+    and edge_styles are: {'backbone': {'directed': True},
+                          'stacking': {'directed': True},
+                          'hybridization': {'directed': False}}
+    then these directives must be translated to:
+        add_undirected_edge
+
 
 """
 
-Dispatcher script. Responsible for:
- 1) Saving state change events to file:
- 2) Forwarding the state change to real-time graph visualizer,
-    taking care of proper graph style hints in the process.
+from itertools import chain
+import logging
+logger = logging.getLogger(__name__)
+
+# Nascent imports:
+from nascent.graph_sim_nx.domain import Domain
+
+try:
+    from ..graph_visualization.cytoscape import CytoscapeStreamer
+except ImportError as e:
+    print(e, "(Streaming to Cytoscape will not be available)")
+    CytoscapeStreamer = None
+try:
+    from ..graph_visualization.gephi import GephiGraphStreamer
+except ImportError as e:
+    print(e, "(Streaming to Gephi (graph-streaming plugin) will not be available)")
+    GephiGraphStreamer = None
 
 
-"""
-
-import sys
-import os
-import argparse
-import yaml
-import re
-import time
-import subprocess
+STREAMERS = {'cytoscape': CytoscapeStreamer,
+             'gephi': GephiGraphStreamer}
 
 
-class Dispatcher():
+class StateChangeDispatcher():
+    """
+    State change dispatcher class.
+    """
 
     def __init__(self, config):
+        self.config = config
+        self.outputfn = self.config.get('state_changes_fn')
+        self.keep_file_open = self.config.get('dispatcher_keep_file_open')
+        if self.keep_file_open:
+            self.outputfd = open(self.outputfn, 'w') if self.outputfn else None
+            self.state_changes_cache_size = None
+            self.state_changes_cache = None
+        else:
+            self.outputfd = None
+            self.state_changes_cache_size = self.config.get('dispatcher_cache_size')
+            self.state_changes_cache = []
+        self.live_graph_repr = self.config.get('vizualisation_graph_representation', '5p3p')
+        self.live_streamer = None
+        streamer = self.config.get('dispatcher_live_streamer')
+        if streamer:
+            try:
+                streamer_cls = STREAMERS[streamer]
+                if streamer_cls is None:
+                    print("Sorry, the requested '%s' streamer is not available (error during module import)"
+                          % streamer)
+                else:
+                    self.live_streamer = streamer_cls(config)
+            except KeyError:
+                print("'%s' streamer not recognized" % self.live_streamer)
+
+        self.graph_event_methods = [self.add_node, self.delete_node, self.add_edge, self.delete_edge]
+        self.graph_event_group_methods = [self.add_nodes, self.delete_nodes, self.add_edges, self.delete_edges]
+        self.graph_translation = "domain-to-5p3p"
+        # If just specifying the output fields, they will be written as
+        #   ",".join(str(state_change[field]) for field in self.state_change_line_fields)
+        self.state_change_line_fields = self.config.get('state_changes_line_fields',
+                                                        ['T', 'time', 'tau', 'change_type', 'forming', 'interaction'])
+        # If state_change_line_unpack_nodes is True, add all nodes at the end of the line appended to the fields above.
+        self.state_change_line_unpack_nodes = self.config.get('state_changes_unpack_nodes', True)
+        self.state_change_line_fmt = self.config.get('state_changes_line_fmt')
+
+
+    def init_graph(self, graph, reset=True):
+        """
+        Initialize the graph visualization and prepare it for streaming.
+        TODO: Implement this!
+        """
+        if self.live_graph_repr == 'strand':
+            translated_graph = graph
+        elif self.live_graph_repr == 'domain':
+            translated_graph = graph
+        elif self.live_graph_repr == '5p3p':
+            translated_graph = graph
+        else:
+            raise ValueError("self.live_graph_repr = '%s' is not a recognized representation.")
+        self.live_streamer.initialize_graph(translated_graph, reset=reset)
+
+
+
+    def state_change_str(self, state_change, eol='\n'):
+        """
+        state_change is a tuple
+        """
+        if self.state_change_line_fmt:
+            return self.state_change_line_fmt.format(**state_change) + eol
+        else:
+            values = [str(state_change[field]) for field in self.state_change_line_fields]
+            if self.state_change_line_unpack_nodes:
+                values += [str(node) for node in state_change['nodes']]
+            return ",".join(values) + eol
+
+
+    def dispatch(self, state_change, multi_directive=False):
+        """
+        Forward the dispatch.
+        Propagate a single state change. A state change directive is a single dict with keys:
+        - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
+        - forming: 1=forming, 0=eliminating
+        - interaction: (only for edge types)
+            1=backbone, 2=hybridization, 3=stacking
+        - multi: It might be nice to have the option to propagate multiple events with
+            a shared set of T, time, dt, interaction, etc. I'm specifically thinking of
+            "stacking change cycles", where we re-calculate the stacking state of all possible stacking interactions.
+            Note: This is not the same as the 'multi' argument given to this method, which
+            is whether state_change is a single state-change dict or a list of state-change dicts.
+        - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
+        """
+        if multi_directive is None:
+            multi_directive = isinstance(state_change, (list, tuple))
+        state_changes = state_change if multi_directive else [state_change]
+        if self.outputfd:
+            # Write state changes continuously:
+            if multi_directive:
+                for directive in state_changes:
+                    self.outputfd.write(self.state_change_str(directive))
+            else:
+                self.outputfd.write(self.state_change_str(state_change))
+            #logger.debug("Writing state change to open file.")
+        else:
+            # Add state changes to cache and write when buffer is large:
+            if multi_directive:
+                self.state_changes_cache.extend(state_changes)
+            else:
+                self.state_changes_cache.append(state_change)
+            if len(self.state_changes_cache) >= self.state_changes_cache_size:
+                self.flush_state_changes_cache()
+        graph_events = self.state_changes_to_graph_events(state_changes)
+        if self.live_streamer:
+            if len(graph_events) == 1:
+                self.propagate_graph_event(graph_events[0])  # or maybe 'stream_change' ?
+            else:
+                self.propagate_graph_events(graph_events)
+
+
+    def flush_state_changes_cache(self):
+        """
+        Write all state changes in state_changes_cache to file.
+        """
+        cache_size = len(self.state_changes_cache)
+        lines = (self.state_change_str(state_change) for state_change in self.state_changes_cache)
+        with open(self.outputfn) as fp:
+            #fp.write("".join(lines))
+            fp.writelines(lines) # writelines does not add newline characters
+        self.state_changes_cache = []
+        logger.info("Wrote %s state changes to file %s", cache_size, self.outputfn)
+
+
+    def propagate_graph_event(self, event):
+        """
+        Propagate a single state change. A state change directive is a single dict with keys:
+        - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
+        - forming: 1=forming, 0=eliminating
+        - interaction: (only for edge types)
+            1=backbone, 2=hybridization, 3=stacking
+        - multi: It might be nice to have the option to propagate multiple events with a single set of T, time, dt, etc.
+        - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
+
+        """
+        #nodes = change['nodes']
+        #dt = change['timedelta']
+        method_idx = event['change_type']*2 + event['forming']
+        try:
+            method = self.graph_event_methods[method_idx]
+        except KeyError:
+            raise ValueError("change type value %s, forming=%s not recognized (idx=%s)" %
+                             (repr(event['change_type']), event['forming'], method_idx))
+        return method(event)
+
+
+    def propagate_graph_events(self, events, group=True):
+        """
+        Propagate a list of state changes.
+        :param group: If True, the changes will be grouped before dispatch.
+                      If False, the changes will be invoked one by one.
+                      If None, the changes will be invoked as a group if event 'change_type' and 'forming' is the same
+                      for all events.
+        """
+        # Grouped approach:
+        # 1. Group by method_idx = change['change_type']*2 + change['forming']
+        # 2. Translate each group appropriately.
+        # 3. For each method and changes in method_idx group, invoke the "group" variant,
+        #    E.g for all method_idx=3 (change_type 'edge', forming), invoke
+        #    self.live_streamer.add_edges(edges)
+        if group:
+            event_groups = [[] for _ in range(4)]
+            for event in events:
+                method_idx = event['change_type']*2 + event['forming']
+                event_groups[method_idx].append(event)
+            for method, event_list in zip(self.graph_event_group_methods, event_groups):
+                # partner methods with the corresponding group and invoke:
+                if event_list:
+                    method(event_list)
+        else:
+            if group is None and len(set(event['change_type']*2 + event['forming'] for event in events)) == 1:
+                method_idx = events[0]['change_type']*2 + events[0]['forming']
+                method = self.graph_event_group_methods[method_idx]
+                method(events)
+            else:
+                for event in events:
+                    method_idx = event['change_type']*2 + event['forming']
+                    method = self.graph_event_methods[method_idx]
+                    method(event)
+                    # or just use:
+                    # self.propagate_event(event)
+
+    def unpack_multi_directive(self, changes):
+        """
+        If you are using state change directives that pack 
+        """
+        ## TODO: Implement multi-node/edge state change directives.
+        return changes
+
+    def state_changes_to_graph_events(self, changes):
+        """
+        Will translate domain nodes state changes to 5p3p graph representation.
+        Note that the lenght of the translated changes list might be different
+        from the input. For instance, translating a domain hybridization to 5p3p
+        format produces two "add edge" graph events,
+            dom1:5p--dom2.3p and dom1:3p--dom2.5p
+
+        # YOU PROBABLY ALSO WANT TO APPLY SOME STYLES AROUND HERE
+        """
+        if self.multi_directive_support:
+            changes = self.unpack_multi_directive(changes)
+        if self.graph_translation == "domain-to-5p3p":
+            events = chain(self.translate_domain_change_to_5p3p_graph_events(change)
+                           for change in changes)
+        elif self.graph_translation == "domain-to-strand":
+            # Requires multi-graph support, in case two strands hybridize with more than one domain,
+            # or we have intra-strand hybridization, stacking, etc.
+            events = [self.translate_domain_change_to_strand_graph_event(change) for change in changes]
+        else:
+            events = changes
+        return events
+
+
+    def translate_domain_change_to_5p3p_graph_events(self, change):
+        """ Translate a single state change to 5p3p graph format. """
+        event = change
+        # The 'multi' key can be used to create several nodes/edges with a single "change",
+        # sharing values for time, tau, T, etc. (Compressed to a line line).
+        # This is NOT the same as using dispatch([list of state_change directives], multi=True)
+        # which would write multiple lines to the file.
+        # multi = change['multi'] # uncomment to enable support for multi-node/edge directives.
+        if change['change_type'] in (0, 'node event'):
+            # Make a single "add_nodes/delete_nodes" event?
+            # Or expand to many add_node/delete_nodes events, one for each node?
+            event['nodes'] = [nname for nname in
+                              [(str(domain)+":5p", str(domain)+":3p")
+                               for domain in change['nodes']]]
+            return [event]
+            # Add style to event?
+        elif change['change_type'] in (1, 'edge event'):
+            dom1, dom2 = change['nodes']
+            if change['interaction'] in (1, 'backbone', 3, 'stacking'):
+                # The 3p of the first (5p-most) domain connects to the 5p end of the second (3p-most) domain
+                event['nodes'] = [str(dom1)+":3p", str(dom2)+":5p"]
+                return [event]
+            else:
+                print("Unrecognized interaction for change %s" % change)
+            if change['interaction'] in (2, 'hybridization'):
+                # The 3p of the first domain connects to the 5p end of the second (3p-most) domain,
+                # AND connect the 5p end of the first to the 3p of the second.
+                # We have already done the former above, only do the latter:
+                event2 = change.copy()
+                event['nodes'] = [str(dom1)+":3p", str(dom2)+":5p"]
+                event2['nodes'] = [str(dom1)+":5p", str(dom2)+":3p"]
+                return [event, event2]
+
+
+    def translate_domain_change_to_strand_graph_event(self, change):
+        """
+        Assume the default naming format of
+            sname#suid:domain#duid:5p/3p
+        """
+        if isinstance(change['nodes'], Domain):
+            change['nodes'] = [domain.strand.instance_name for domain in change['nodes']]
+        else:
+            # Assume it is a string that we must re-write:
+            change['nodes'] = [node.split(":")[0] for node in change['nodes']]
+        return change
+
+
+    #######################################
+    ### Live streamer event propagation ###
+    #######################################
+
+    # Q: What argument should the 'singular' methods receive?
+    #    A single graph 'event' dict?
+    #    An unpacked graph event?
+    #    - No: Unpacking graph events from the dispatcher is the reason we have the live streamer adaptors,
+    #        i.e. cytoscape.CytoscapeStreamer and gephi.GephiGraphStreamer.
+    #        These objects receive a graph event and is responsible for propagating it.
+    #
+    #    - Yes: Another way to look at it is that the adaptors are responsible for the *connection*
+    #    to the graph visualizer, but not for parsing graph events dicts?
+    #    This really depends on whether all live_streamer classes can share a single, 'unpacked' graph event API,
+    #    i.e. if all streamers are OK receiving
+    #        .add_node(node_name, attributes)
+    #        .add_nodes(node_names_list, attributes)
+    #
+    #        .delete_node(node_name)
+    #        .delete_nodes(node_names_list)
+    #
+    #        .add_edge(source, target, directed, interaction, bidirectional, attributes)
+    #        .add_edges([{source, target, directed, interaction, attributes}, ...] list of dicts)
+    #
+    #        .delete_edge(source, target, directed)
+    #        .delete_edges([{source, target, directed}, ...] list of dicts)
+    #
+    # Q: What argument should the 'multiple' methods receive?
+    #    - event_groups?
+    #    - A list of the exact same arguments that the singular form receives?
+    #
+    # Q: Should the singular/multiple methods add/update the graph event, for any method-specific
+    #    stuff that the translator does not take care of?
+    #    - No: As much as possible should be done in the translator, and it already knows about add/delete node/edge.
+    #
+
+    def add_node(self, event):
+        """ Add a single node to the live streamer's graph. """
+        node_name = event['nodes']
+        if isinstance(node_name, (list, tuple)):
+            return self.live_streamer.add_edges(node_name, event.get('attributes'))
+        return self.live_streamer.add_edge(node_name, event.get('attributes'))
+
+    def add_nodes(self, events):
+        """ Add multiple nodes to the live streamer's graph. """
+        node_names = [event['nodes']]
+        self.live_streamer.add_nodes(events, event.get('attributes'))
+
+    def delete_node(self, event):
+        """ Delete a single node from the live streamer's graph. """
+        node = event['nodes']
+        self.live_streamer.delete_edge(node)
+
+    def delete_nodes(self, events):
+        """ Delete multiple nodes from the live streamer's graph. """
+        for node in event['nodes']:
+            self.live_streamer.delete_node(node)
+
+    def add_edge(self, event):
+        """ Add a single edge to the live streamer's graph. """
+        interaction = event['interaction'] # backbone, hybridization or stacking
+        directed = event.get('directed', True if interaction == 'stacking' else False)
+        source, target = event['nodes']
+        return self.live_streamer.add_edge(source=source, target=target,
+                                           interaction=interaction, directed=directed)
+
+    def add_edges(self, events):
+        """ Add multiple edges to the live streamer's graph. """
         pass
 
+    def delete_edge(self, event):
+        """ Delete a single node from the live streamer's graph. """
+        pass
 
-
-
-def parse_args(argv=None):
-    """
-    Parse args from the command line.
-    """
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument('-o', '--outputfn')
-    parser.add_argument('-y', '--overwrite', action="store_true")
-    parser.add_argument('-c', '--cfgfile')
-    parser.add_argument('-a', '--appendfile', action="store_true")
-    parser.add_argument('--testing', action="store_true")
-    parser.add_argument('--print-input', action="store_true")
-    parser.add_argument('--sep-by-eof', action="store_true", default=None)
-    parser.add_argument('--binary-input', action="store_true", default=None)
-    parser.add_argument('--output-encoding', action="store_true", default=None)
-    parser.add_argument('--output-buffer', type=int, default=-1)
-
-    argns = parser.parse_args(argv)
-    return argns
-
-
-def process_args(args):
-    """
-    Process command line args, load config from file if requested and make a ready-to-use args dict.
-    """
-
-    default_args = {'outputfn': 'defaultoutputfn.gsc'} # .gsc = graph-state-change
-    if args.get('cfgfile'):
-        with open(args['cfgfile']) as fp:
-            fileconf = yaml.load(fp)
-        default_args.update(fileconf)
-
-    for k, v in default_args.items():
-        if args.get(k) is None:
-            args[k] = v
-
-    # If overwriting or appending to file, don't generate unique outputfn.
-    if not (args.get('overwrite') or args.get('appendfile')):
-        args['outputfn'] = find_unique_fn(args['outputfn'])
-
-    return args
-
-
-def touch(filepath):
-    with open(filepath, 'a'):
-        os.utime(filepath)
-
-
-def find_unique_fn(filename):
-    if not os.path.exists(filename):
-        return filename
-    regex_prog = re.compile(r"(.+?)(\d*)")
-    fnroot, ext = os.path.splitext(filename)
-    match = regex_prog.fullmatch(fnroot) # python 3.4+ only. Appends ^ before and $ after the regex.
-    fnbase, num = match.groups()
-    num = int(num) if num else 0
-    fnfmt = "%s_%s%s"
-    while os.path.exists(os.path.join(filename)):
-        num += 1
-        filename = fnfmt % (fnbase, num, ext)
-    return filename
-
-
-
-
-def dispatch_loop(outputfn, appendfile=False, print_input=False, sep_by_eof=True,
-                  binary_input=None, output_encoding=None, output_buffer=-1, **kwargs):
-    """
-    Aka read_stdin_save_to_disk_and_forward_to_graph_visualizer.
-
-    Note: If this process is sharing a terminal with a parent process,
-    any input that this program outputs will be displayed in the terminal,
-    even if the parent process is closed.
-
-    Refs on how to get this to work:
-    http://blog.codedstructure.net/2011/02/concurrent-queueget-with-timeouts-eats.html (Threading)
-
-
-    Options for reading on sys.stdin:
-    for loop: - while True: sys.stdin.readline()
-        Infinite loop, very CPU intensive. Does not explicitly wait for new input, just
-        repeatedly reads from stdin even when no new input is available.
-    for line in sys.stdin:
-        Reads *a single line* on stdin, then waits for new input.
-        This is very cheap and cpu efficient.
-    for msg in sys.stdin.readlines()
-        This waits, not until a new line is received, but until EOF is received.
-        Essentially, this is like any other file's readlines, which is not an iterable, but first invokes
-        file.read(), which reads the whole file into memory, and then splits the text by newlines.
-        Note: you can send EOF without closing stdin. This is actually quite good for sending
-        full messages that may include new lines.
-
-    Issues:
-    * If parent process fails, or sys.stdin is otherwise "closed by EOF but not sys.stdin.closed=True",
-        then we have a fast-cycling, cpu intensive infinite loop. Bad.
-
-    """
-    # reads and writes to stdin/stdout (i.e. msg) is bytes, not string, so open in binary mode:
-    mode = ('a' if appendfile else 'w') + 'b'
-    fout_buf = 0 # 0=unbuffered, 1=line-buffered, negative=system-default, >1=n-bytes-buffered.
-    # un-buffered only works for bytes, not text. Use type/cat to check the content of file; don't rely on subl.
-    if binary_input is None:
-        # auto-detect:
-        binary_input = 'b' in sys.stdin.mode
-    if not binary_input and output_encoding is None:
-        output_encoding = sys.stdin.encoding
-    with open(outputfn, mode, fout_buf) as fp:
-        try:
-            print("sep_by_eof:", sep_by_eof)
-            #while True:
-                # msg = sys.stdin.readline()  # repeated calls to stdin.read in infinite loop - very cpu intensive.
-            done = False
-            # I don't think sys.stdin.closed will ever be True, if spawned as PIPE with subprocess.Popen.
-            # unless maybe if parent process is terminated.
-            while not sys.stdin.closed and not done:
-                # There is an issue if using subprocess PIPEs (io.BufferedReader on this side)
-                # It is never really closed.
-                for msg in (sys.stdin.readlines() if sep_by_eof else sys.stdin): # pylint: disable=C0325
-                    # stdin.readlines() will read from stdin, halting here until it is closed or we receive an EOF byte.
-                    # Only after EOF has been read will the input be split by lines and execution resumed.
-                    # EOF can be given using ctrl+D on unix and ctrl+Z on windows terminal.
-                    # you could use this by encapsulating readlines() having an infinite loop outside
-                    # if using "for msg in stdin", then stdin.read() is called until reading a newline char.
-                    # This is implemented to be very easy on the cpu, waiting until there is actually input.
-                    # messages are separated by newline chars:
-                    print("msg:", msg.strip())
-                    if not msg:
-                        print("Received empty msg:", msg)
-                        continue
-                    if not binary_input: # msg is not binary, convert
-                        msg = bytes(msg, output_encoding)
-                    fp.write(msg)
-                if not sep_by_eof:
-                    # If we are reading "for msg in sys.stdin" separated by new line, then do not loop.
-                    done = True
-                print('done with "for msg in (sys.stdin.readlines() if %s else sys.stdin)"' %  sep_by_eof)
-                print("sys.stdin.closed:", sys.stdin.closed)
-                time.sleep(0.2)
-        except KeyboardInterrupt:
-            print("Process interrupted by KeybordInterrupt.")
-
-
-def test_self(subargv, args):
-    """
-    This is just as much to give a use example for this script:
-
-    Note: Be careful with pipes:
-    * http://blogs.msdn.com/b/oldnewthing/archive/2011/07/07/10183884.aspx
-    """
-    exe = 'python' # or sys.executable
-    if exe not in subargv[0]:
-        subargv = [exe] + subargv
-    print("Spawning subprocess with:", subargv)
-    proc = subprocess.Popen(subargv,
-                            shell=True,
-                            universal_newlines=True, # False: open stdin/out/err as binary streams (default)
-                            bufsize=0, # 0=unbuffered, 1=line-buffered, -1=system default
-                            stdin=subprocess.PIPE)
-    sleep = 0.5
-    try:
-        for i in range(int(3/sleep)):
-            print("cycle:", i)
-            # write binary data if universal_newlines=False, else write strs
-            # Probably wrap in try... except to catch IO errors if subprocess is closed.
-            # e.g. if e.errno == errno.EPIPE or e.errno == errno.EINVAL
-            proc.stdin.write("hej der\n\n")
-            proc.stdin.write("this line doesn't end here: -->.")
-            #proc.stdin.write("This is a long repeated line. "*10)
-            if args['sep_by_eof']:
-                print("Sending EOF...")
-                # Send EOF by closing the pipe?
-                # proc.stdin.close()
-                # That will send an EOF, but it also
-                # closes the pipe completely from this side, meaning I cannot write to it again.
-                # (The pipe remains open on the subprocess' side.)
-                # Actually, that is exactly what ctrl+D does (ctrl+Z on Windows), it signals to the pty to close the stream.
-                # However, you might be able to emulate that by sending an EOF charater:
-                if 'win' in sys.platform:
-                    EOF = "\x1a"
-                else:
-                    EOF = "\x04"
-                # Edit: this is probably doomed, since proc.stdin.isatty() returns False for io.BufferedWriter objects.
-                proc.stdin.write(EOF)
-            #else:
-                # flush the pipe:
-            proc.stdin.flush()
-            time.sleep(sleep)
-            # if using while loop, you should have a p.wait()
-    except KeyboardInterrupt:
-        print("test_self: KeyboardInterrupt requested")
-    print("Closing proc.stdin...")
-    #proc.stdin.close()
-    # this doesn't work. At least, proc.stdin.closed is still False.
-    # This is probably because:
-    # (1) proc.stdin is just a io.BufferedWriter(io.FileIO()) (on this side)
-    # (2) proc.stdin is just a io.BufferedReader o the subprocess' side.
-    # closing proc.stdin from here only affect io.BufferedWriter.
-    print("proc.stdin.closed:", proc.stdin.closed)
-    # proc.stdin.close() will make sure that the EOF is read when invoking stdin.read()
-    print("Manually setting proc.stdin.closed=True")
-    # proc.stdin.closed = True  # AttributeError: attribute 'closed' of '_io.TextIOWrapper' objects is not writable
-    print("proc.stdin.closed:", proc.stdin.closed)
-    # proc.wait() # wait here until the proc subprocess has terminated.
-    # proc.poll() # check to see if the proc subprocess has terminated.
-    # proc.communicate() # send optional input to proc, read from stdout/stderr and wait for proc to terminate.
-    time.sleep(10)
-    # proc.terminate()  # Not very effective if we have encountered the infinite loop. Sends SIGTERM.
-    proc.kill()  # on Windows, this is just an alias for terminate()
-    print("proc.poll():", proc.poll())   # None
-    import signal
-    proc.send_signal(signal.CTRL_BREAK_EVENT)
-    time.sleep(10)
-    print("proc.poll():", proc.poll())   # 1 = completed, with errors.
-
-
-
-def main(argv=None):
-    argns = parse_args(argv)
-    args = process_args(argns.__dict__)
-
-    if args.get('testing'):
-        subargv = [arg for arg in (argv or sys.argv) if 'testing' not in arg]
-        test_self(subargv, args)
-    else:
-        dispatch_loop(**args)
-
-
-if __name__ == '__main__':
-    main()
+    def delete_edges(self, events):
+        """ Delete multiple edges from the live streamer's graph. """
+        pass

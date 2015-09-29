@@ -1,0 +1,792 @@
+
+
+
+========== Symbols and nomenclature =====
+
+    T       Temperature
+    E       Energy
+    S       Entropy
+    H       Enthalpy
+    G       Gibb's Free energy
+
+    Z, z    Partition function (zustands-summe)
+    Q       Reaction quotient (not partition function in this document)
+    K       Equilibrium constant
+
+    P, p    Probability
+    k       Rate constant
+    v       Reaction rate
+
+    X or ξ  Extend of reaction
+    Y       Yield of reaction (not always X, if there is by-products)
+
+
+Constants:
+
+    NA      Avogadro's constant = 6.022e23 / mol
+    R, k    Gas constant and Boltzman's constant
+
+
+=========== Generally ============
+
+## Reaction: ##
+
+                        v_hyb
+    strandA + strandB   ------>  duplex
+                       <------
+                        v_melt
+
+## Reaction quotient: ##
+
+    Q_r = [duplex] / ([strandA] [strandB])
+
+
+## Energy: ##
+
+    ΔG = ΔH - TΔS           at standard conditions: ΔG° = ΔH° - T*ΔS°
+
+    ΔG = ΔG° + RT ln(Q)     at standard conditions: ΔG = ΔG°, because Q = 1
+
+
+## Partition functions: ##
+
+    z_s = exp(-E_s/RT)                  # General partition function for state s
+    => z_melted = exp(-E_melted/RT)     # Partition for the melted state
+    => z_duplex = exp(-E_duplex/RT)     # Partition for the duplex state
+
+    Z = sum(P_s for all states s)        # Partition function of the system
+
+    When comparing just the two states, melted and hybridized duplex, we usually set
+    E_melted = 0, giving us E_duplex = ΔE_hyb, where ΔE_hyb is the change from melted to duplex state.
+    Since we have constant pressure and temperature, we can use Gibbs free energy as E: ΔE_hyb = ΔG_hyb
+        z_melted = exp(-0/RT) = 1
+        z_duplex = exp(-ΔG_hyb/RT)
+
+
+## State probabilities: ##
+
+    p_s = exp(-E_s/RT) / Z              # The general form:
+     => p_melted = 1 / Z                # We have defined E_melted = 0
+     => p_duplex = exp(-ΔG_hyb/RT) / Z  # Considering two isolated strands, probability of the two strands being hybridized.
+     => p_duplex = exp(-ΔG_hyb/RT) / (1 + exp(-ΔG_hyb/RT))
+                = 1/(1+exp(ΔG_hyb/RT))  # The minus in front of ΔG_hyb is lost during conversion.
+    Since sum(p_s for all states s) = 1:
+        p_melted = 1 - p_duplex
+
+    In terms of ΔG° and reaction quotient Q:
+        p_duplex = 1 / (1 + exp(ΔG°/RT)*Q)      # Because exp(ΔG/RT)*Q = exp((ΔG°+RT ln(Q))/RT) = exp(ΔG°/RT)*exp(ln(Q))
+
+
+Kinetics
+
+    v_hyb = k_hyb [strandA] [strandB]
+    v_mel = k_mel [duplex]
+
+
+
+======= At equilibrium: ==============
+
+
+Equilibrium:
+
+    K = Q   (definition of equilibrium constant K)
+
+    K = [duplex] / ([strandA] [strandB])
+
+
+If K = exp(-ΔG°/RT) is given:
+    [strandA] = [strandA]_init - [duplex], [strandB] = [strandB]_init - [duplex]
+
+    K   = [duplex]/([strandA]_init - [duplex])*([strandB]_init - [duplex])
+        = D / (Ai - D)*(Bi - D) = D / (Ai*Bi - Bi*D - Ai*D + D^2)
+    D/K = D^2 + (-Bi-Ai)*D + Ai*Bi
+     0  = D^2 + (-Bi-Ai-1/K)*D + Ai*Bi
+
+    Second-degree equation:
+        0 = ax^2 + bx + c,      x=D, a=1, b = (-Bi-Ai-1/K), c = Ai*Bi
+        det = sqrt(b^2-4ac)
+        x = (-b ± sqrt(det) / 2a
+
+    Insert known values for Ai, Bi and K, then:
+        [duplex] = x
+        [strandA] = [strandA]_init - [duplex]
+        [strandB] = [strandB]_init - [duplex]
+
+
+
+Thermodynamics
+
+    ΔG = 0
+    => ΔG° = -RT ln(Q),     , and Q = K at T=Tm
+    => K = exp(-ΔG°/RT)
+
+    Relationship between temperature, enthalpy and entropy:
+    ΔG° = ΔH° - T*ΔS°
+        = -RT ln(K)         # Because
+
+Kinetics and equilibrium:
+
+
+    v_hyb = v_mel            # The amount formed equals the amount lost per time
+
+    =>  k_hyb [strandA] [strandB] = k_mel [duplex]          (only true at equilibrium)
+
+        k_hyb / k_mel = [duplex] / ([strandA] [strandB])
+        k_hyb / k_mel = K
+
+
+
+
+======= At T = Tm ==================
+
+At T=Tm for strandA:
+
+    [strandA] = [duplex] = [strandA]_init/2
+    [strandB] = [strandB]_init - [duplex] = [strandB]_init - [strandA]_init/2
+
+    Q   = [duplex] / ([strandA] [strandB])
+        = [strandA]_init/2 / ([strandA]_init/2 * ([strandB]_init - [strandA]_init/2))
+    1/Q = ([strandA]_init/2 * ([strandB]_init - [strandA]_init/2)) / [strandA]_init/2
+        = [strandB]_init - [strandA]_init/2             # dnac2 = [strandA]_init/2, dnac1 = [strandB]_init
+    Q   = 1 / ([strandB]_init - [strandA]_init/2)
+
+
+
+
+======= Approximations for countable to uncountable (thermodynamic limit) =====
+
+
+Stirling's approxmation:
+     lnN! ≈ NlnN – N    (Actually lnN! = N ln(N) - N + ln(N)/2 + 1/ln(3) is essentially precise.)
+
+
+
+======= Challenges =================
+
+
+## Determine the relationship between k_hyb and k_mel ##
+
+    At equilibrium, when v_hyb = v_melt:
+        k_hyb = K * k_mel
+
+    As always, at equilibrium, ΔG = 0 => Q = K = exp(-ΔG°/RT).
+    So, k_hyb = exp(-ΔG°/RT) * k_mel...
+    Or, k_mel = exp(+ΔG°/RT) * k_hyb
+
+    Rates:
+        v_hyb = k_hyb * [domain] * [compl]_total
+        v_mel = k_mel * [duplex]
+              = k_mel/2 * [duplexed domain or complement]           # since for every duplex we have two domains.
+              = k_mel * [duplexed domain or complement] * p(0.5)    # Or flip a coin if you select a duplexed domain.
+
+    Currently, all "concentrations" are considered during domain selection.
+    After selection, we have
+        p_hyb = self.hybridization_probability(domain1, domain2, T)
+    which is calculated using binary_state_probability_cal_per_mol(deltaG, T, Q=1)
+        p_hyb = p_i = 1 / (1 + math.exp(+ΔG°/(R*T))*Q)      # exp(-ΔE/kT) / (exp(-ΔE/kT) + 1) = 1/(1+exp(ΔE/kT))
+
+    I am using p_melt = 1-p_hyb.
+
+    We basically need to guarantee that, when a domain and it's partner has been selected, then:
+        p_hyb = exp(-ΔG°/RT) * p_mel
+    or
+        p_mel = exp(+ΔG°/RT) * p_hyb
+
+    Right now,
+        p_hyb = exp(-ΔG°/RT)/(exp(-ΔG°/RT) + 1) = 1/(1 + exp(+ΔG°/(R*T)))
+    and
+        p_mel = 1 - p_hyb
+              = 1 - exp(-ΔG°/RT)/(exp(-ΔG°/RT) + 1) = (exp(-ΔG°/RT) + 1 - exp(-ΔG°/RT))/(exp(-ΔG°/RT) + 1)
+              = 1 / (exp(-ΔG°/RT) + 1)
+
+    Is p_mel == exp(+ΔG°/RT) * p_hyb ?
+        p_mel = exp(+ΔG°/RT) * p_hyb ,  insert p_hyb = exp(-ΔG°/RT)/(exp(-ΔG°/RT) + 1)
+              = exp(+ΔG°/RT) * exp(-ΔG°/RT)/(exp(-ΔG°/RT) + 1)
+              = 1 / (exp(-ΔG°/RT) + 1)
+              = p_mel above
+    ...it would seem so!
+    However, it also seem that it is easier to simply define:
+        p_hyb = 0.001   # Arbitrarily defined factor
+        p_mel = exp(+ΔG°/RT) * p_hyb
+
+    ...but then, it really isn't a probability, it is a rate factor:
+        r_hyb = 0.1                         # Rate, given that a duplex and its partner has been selected.
+        r_mel = exp(+ΔG°/RT) * 0.1          # Although ΔG° is usually very negative, so exp(+ΔG°/RT) is close to 0.
+
+    Or, we could do the opposite:
+        r_mel = 0.001                       # Then k_mel is independent on ΔG° (and T) -- seems wrong.
+        r_hyb = exp(-ΔG°/RT) * 0.001        # But negative ΔG° means exp(-ΔG°/RT) can be very large (>> 1). Bad.
+
+    But then again, now we suddenly have to ask:
+    How do we decide whether to hybridize or de-hybridize based on r_mel?
+    -- It only works if ΔG° < 0.
+
+    UPDATE: Yes, using
+        k_hyb = <a constant value, e.g. 1e5>, and
+        k_mel = exp(+ΔG°/RT) * k_hyb
+    is indeed the right approach.
+    Strictly speaking, k_hyb varies with ionic strength and temperature, but that
+    doesn't seem to be very significant.
+    You can make it better if you account for whether there are any strong early
+    interactions, e.g. GC pairs vs no Gc pairs, but that is not a major factor.
+
+
+    ### OLD ###
+
+    Currently, when using "domain selection":
+
+        p_hyb   = p_selection * (p_hyb|selected)
+                = [domainA_j]  * p_duplex(Q=1)
+
+        For [domainA_j] = 1 uM,
+            p_hyb = 1e-6 * 1 / (1 + exp(ΔG°/RT)*Q)
+
+    No, wait. I have two rounds of selection, one for [domain]_i and the other for [compl]_total:
+        v_hyb = k_hyb * [domain] * [compl]_total
+
+        p_hyb = ? * p(select domain i) * p(finding a complementary domain)
+        selecting _a_ domain has p=1, but we are looking at a specific domain. Whethe we consider one domain
+        specie or all copies, we should still get the same.
+
+
+
+## More kinetic considerations: ##
+
+Relationship between rate constants:
+
+        K = k_hyb / k_mel  <=> k_hyb = K * k_mel  <=> k_mel = (1/K) * k_hyb
+
+    With K = exp(-ΔG°/RT):
+
+        k_hyb = exp(-ΔG°/RT) * k_mel   <=>   k_mel = exp(+ΔG°/RT) * k_hyb
+
+ᵗ‡
+
+## Arrhenius equation, transition energy: ##
+
+For negative ΔG° (hybridization), i.e. G°(hyb) < G°(melted)
+
+    Transition state for hybridization:
+        E‡(m->h) = E(melted) + ΔE‡ = E(hybridized) + ΔE(h->m) + ΔE‡
+    I believe ΔE‡ is the same as the "initiation energy".
+    ΔE‡ is positive, E(melted) = 0, and ΔE(h->m) = -ΔE(hyb)
+    For melting:
+        ΔE‡(melt) = ΔE‡ -ΔE(hyb)    # ΔE(hyb) < 0
+
+
+What effect does this have on kinetic rate constants?
+
+    Rate of hybridization (from melted to hybridized state):
+        k(hyb) = A(hyb) * exp(-ΔE‡/RT)
+    Rate of melting (from hybridized to melted state):
+        k(mel) = A(mel) * exp((ΔE(hyb)-ΔE‡)/RT)
+               = A(mel) * exp(-ΔE‡/RT) * exp(ΔE(hyb)/RT)
+
+    Which is consistent with k_mel = k_hyb * exp(+ΔG°/RT),
+    if and only if A(hyb) = A(mel) = A(T)   # A(T), since A is probably temperature dependent.
+
+    We can just combine A and exp(-ΔE‡/RT) to a single factor:
+        B(T) = A(T) * exp(-ΔE‡/RT)
+    I belive this is just the same as k(hyb, T).
+
+
+So, two duplexes with same ΔG° / Tm but different sequences will have the same K,
+but different k_hyb and k_melt.
+
+
+Temperature dependence:
+
+    Ouldridge, Louis (oxDNA, NAR 2013):
+""" Bimolecular association rate constants of 10^6 - 10^7 1/M/s have been
+    measured at approximately room temperature and at high salt concentrations
+    ([Na+] of 1 M or [Mg2+] 0.01 M) for DNA (7–9) and RNA (10–13).
+    There is agreement that dissociation rates increase exponentially
+    with temperature (8,10–12,14), but authors have reported association
+    rates that increase (8,12), decrease (10,11) and behave non-monotonically
+    (14) with temperature."""
+
+
+Note: Wang and Moerner (Nat. Methods, 2014) has a nice table with litterature values
+for hybridization and melting (k_on/k_off).
+    It seems k_on is generally around 1e5 and 1e6 /s.
+    k_on is strongly dependent on ionic strength and whether the sequence has any G-C basepairs to form a strong initial interaction.
+    k_off depends on temperature and hybridization strength (ΔG°).
+
+Thus, it is probably reasonable to set k_on to a fixed value, e.g.
+    k_on = 1e5 # unit of /M/s
+and let
+    k_off = k_on/K = k_on*exp(+ΔG°/RT)          [k_on/k_off = K = exp(-ΔG°/RT)]
+          = 1e5 * exp(+ΔG°/RT)  # unit of /s
+
+
+Uh, note that http://www4.ncsu.edu/~franzen/public_html/CH433/lecture/Kinetics_Second_Order.pdf
+states something quite different from this:
+    "For strand lengths of 50 to 5000 nucleotides, the rate is
+    directly proportional to the square root of the length of the
+    shorter of the two strands For DNA/DNA association the shorter of the two strands. For DNA/DNA association, the
+    maximum rate occurs 25 ° C below the Tm with only minimal
+    variation in rate from 15 to 35 ° C below the Tm.
+    The rate of association approaches zero near the Tm." <---- That last part, is that really right?
+    -- No, can't be. If k_on is 0, then  (for say [s1]=[s2]=[duplex] = 1 uM)
+        v_on  = k_on  [s1] [s2]  = 0 * 1e-6 * 1e-6 = 0
+        v_off = k_off [duplex]   = 0.1 * 1e-6 = 1e-7        # 0.1 just used as example.
+       but at T=Tm, v_on must equal v_off.
+    Also, Tm is concentration dependent.
+    It doesn't make sense that k_on would be concentration dependent.
+    The hybridization rate (v_on), yes, but not the rate constant it self.  # v_on  = k_on  [s1] [s2]
+
+    Although at very high temperatures, it might seem reasonable that k_on it self goes down:
+    As we discussed with Arrhenius kinetics, ΔG° can impact the rate constants:
+    At the usual regime where ΔG° < 0:
+
+        k_on  = A exp(-ΔE‡/RT)
+        k_off = A exp((+ΔG°-ΔE‡)/RT) = A exp(-ΔE‡/RT) exp(+ΔG°/RT)      # Remember, ΔG° < 0
+              = k_on * exp(+ΔG°/RT)
+
+    However, when T > Tm at molar conc, ΔG° > 0,
+    then ΔG° is favoring the melted state, and hybridization is "up hill":
+
+        k_on  = A' exp(-ΔE‡'/RT) exp(-ΔG°/RT)                           # Remember, ΔG° is now positive
+        k_off = A' exp(-ΔE‡'/RT)
+
+    Note that I put a prime on A' and ΔE‡' since they may not be the same as for ΔG°.
+    (Both A and ΔE‡ are very likely dependent on temperature, salt, etc, so they are not exactly constant for ΔG° < 0)
+
+    So yes, it is true: when we are above Tm *for molar concentrations* (which is *a lot*
+    above Tm for typical uM concentrations) and ΔG° turns positive, then
+    we will certainly start to k_on approaching zero exponentially.
+    But I don't see that it should do that for T=Tm at typical working uM concentrations.
+
+
+
+If we wanted k_on to have dependence on K or ΔG° at molar concentrations,
+we could re-use my initial partition-function probability formulation:
+
+    k_off = k_on/K, K = exp(-ΔG°/RT)
+
+    k_on  = k_0 / (1 + 1/K)     # For K above 1, this is about k0, but for K < 1, this decreases fast.
+
+    k_off = k_0 / (1 + K)
+
+    At negative ΔG°, k0 is sort of a place-holder for A exp(-ΔE‡/RT).
+    At ΔG°=0, K=1, so k_on = k0/(1+1/K) = k0/2.
+    This is a bit different from my expectation that k_on = A exp(-ΔE‡/RT) would still hold.
+    Not sure if the rate should be lower at ΔG°=0 (meaning the ΔE‡ is higher) ?
+    But since it would certainly destabilise important intermediates, it makes sense.
+    Actually, remembering the Ouldridge oxDNA paper, the intermediates is indeed important.
+    Destabilizing these would act to reduce k_on at T < Tm for molar concentrations.
+    Note again that both A and ΔE‡ depends on temperature, salt, etc.
+    Also remember that the Arrhenius kinetic reaction rate and energy model is mostly suited for
+    fast reactions with a single transition intermediate.
+    For DNA hybridization, meta-stable intermediates are important enough that Arrhenius kinetics
+    doesn't always fit.
+
+
+As we approach T=Tm from below, we would expect k_off to increase.
+We could have something like I previously had where
+        p_on  = 1 / (1 + exp(ΔG°/RT))      # Satisfies p_on = p_off * exp(-ΔG°/RT) --reeely?
+        p_off = 1 - p_on
+Except there is no reason that k_on + k_off should equal some constant.
+
+But, you could have:
+    k_on  = k_0 / (1 + 1/K)
+    k_off = k_on / K
+          = k_0 / (1 + 1/K) / K = k_0 / ((1 + 1/K)*K) = k_0 / (K + 1)
+
+    k_on/k_off  = k_0 / (1 + 1/K) / (k_0 / (K + 1))
+                = 1 / ((1 + 1/K) / (K + 1)) = 1 / (((K+1)/(K+1) + (1/K)(K+1)/(K+1))/(K+1))
+                = 1 / ( 1/(K+1) + (1/K)/(K+1) )
+                = 1 / ( (1 + (1/K)) / (K+1) )   # Multiply both with K
+                = 1 / ( (K + 1) / ((K+1)*K))    # Re-arrange
+                = 1 / ( ((K + 1) / (K+1)) / K)    # Re-arrange
+                = 1 / ( 1 / K )    # Re-arrange
+                = K
+
+Often at uM conc, at T=Tm, K will be around 1e6 /M and Kd will be 1 uM.
+    [duplex] / ([s1] [s2]) = 1 uM / (1 uM * 1 uM) = 1 / 1 uM = 1e6 /M
+As T goes up above Tm, K will decrease, going to 1 /M for Kd = 1 M, the temperature where T=Tm at 1 M concentrations.
+
+For
+    K = 1e6: 1/(1+1/K) =~ 1e6
+    K = 1e6: 1/(1+1/K) =~ 1e6
+
+
+
+## Kinetics data from litterature: ##
+
+Gao Y, Wolf LK, Georgiadis RM, NAR 2006:
+     Association DNA hybridization rate constants at
+     20 degC in 0.5 M NaCl/TE, (1 uM of each strand):
+     For unstructured strands (CTCTGAACGGTAGCATCTTGACAAC):
+        1.0 M NaCl  0.5 M NaCl  0.1 M NaCl      Unit of
+        16e5 /M/s   12e5 /M/s   4e5 /M/s
+     Strands with some intrinsic secondary structure: (AGATCAGTGCGTCTGTACTAGCAGT)
+        8e5 /M/s    7e5 /M/s    1e5 /M/s
+     Strands with high intrinsic secondary structure: (AGATCAGTGCGTCTGTACTAGCACA)
+        4e5 /M/s    2e5 /M/s    0.8e5 /M/s  (Nucleation, fast regime)
+         - However, multiply by 4 if we assume nucleation of 6 bp instead of all 24.
+        2e5 /M/s    0.5e5 /M/s  0.08e5 /M/s (Zippering, slow regime)
+    Association rates for surfaces are 10-40 times slower.
+
+
+Hybridization rate between two domains, both present at 0.1 uM:
+
+    hybridization_rate = r_hyb = 4e5 /M/s * [domain1] * [domain2] =
+        = 4e5 /M/s * 0.1e-6 M * 0.1e-6 M = 4e9 M/s   [duplex formation rate]
+
+You can also say that you are just looking at a single, selected domain,
+and you are considering the hybridization rate
+against a single other domain, present in 0.1 uM:
+
+    r_hyb = 4e5 /M/s * [domain2] =
+        = 4e5 /M/s * 0.1e-6 M = 0.04 /s   [duplex formation rate for a fixed domain]
+
+    This is a half-life of ln(2)/(0.04 /s) = 17 s.
+    So, on average you have to wait 17 seconds before domain2 hybridizes.
+
+Compare this to the (straightforward) melting rate: (depends heavily on dG_hyb!)
+
+For a 10-mer, typically:
+
+    r_mel = 3 /s
+
+    This is a half-life of ln(2)/(3 /s) = 0.23 s.
+    So, on average, domain2 stays attached for 0.23 s.
+
+
+How to interpret: See next section.
+
+
+
+## Kinetics and half-life ##
+
+For first order reaction: duplex -> s1 + s2, half-life = ln(2)/k.
+For second order formation: s1 + s2 -> duplex, with [s1] = [s2],
+half-life of s1, s2 is 1/k/[s1 at t=0].
+So, states that have first-order k = 10^4/s have half-life = 0.69/1e4 = 0.69e-4.
+For k=1e6-1e7, half-life is 0.7e-6 - 0.7e-7.
+
+
+## DNA hybridization energy calculation: ##
+
+
+Algorithms:
+    Nearest-neighbor - e.g. the DNA_NN4 table in biopython.
+    NuPack
+    UNAfold - http://unafold.rna.albany.edu
+        DINAMelt http://unafold.rna.albany.edu/?q=DINAMelt/Hybrid2
+
+
+
+
+## Converting to direct-time simulations (discrete SSA) ##
+
+
+Gillespie:
+
+Notes:
+ * N chemical species S_1, …, S_N,
+ * which interact through M chemical reactions R_1, …,R_M
+ * Constant volume Ω, thermal equilibrium, well stirred, etc
+ * X_i(t) denote the number of molecules of species S_i in the system at time t.
+ * State-change vector ν_j = (ν_1j, ..., ν_Nj), ν_ij is the change in the S_i molecular population caused by one Rj reaction
+     (If the system is in state x and one R_j reaction occurs, the system immediately jumps to state x + ν_j)
+ * propensity function a_j for reaction R_j defined as:
+    a_j(x)dx = probability that one R_j reaction will occur
+    in the next infinitesimal time interval [t, t+dt] inside the volume Ω.
+    Typically propensity function for R_j being the unimolecular reaction of species S_1 -> products:
+        a_j(x) = c_j*x_1
+    For bi-molecular reaction R_j between species S_1 + S2 -> products:
+        a_j(x) = c_j*x_1*x_2
+    For homo-reaction R_j: S_1 + S_1 -> products:
+        a_j(x) = c_j*x_1*(x_1 - 1)/2
+    Where x_1 is the number of specie S_1 molecules and x_2 is number of S_2 molecules.
+    c_j is similar to k_on/k_off, except that for bi-molecular reactions it is
+    inversely proportional to the volume Ω:
+        c_j = k_j rate constant for uni-molecular reaction S1 -> (products)
+        c_j = k_j/Ω for bi-molecular reactions S1+S2, except:
+        c_j = 2*k_j/Ω for homo bi-molecular reactions with the same specie S1+S1.
+
+Other hints:
+ * Subscript "0" is used to indicate "all" or "total", i.e.
+        a0(x) = sum(a_j for all j in 1..J))
+    but it can also mean "at time t=0", e.g. ^x_0
+ * Propensity function: the function whose product with dt gives the probability that a particular reaction will occur in the next infinitesimal time dt
+
+Direct method algorithm:
+
+    0. Initialize the time t = t₀ and the system's state x̄ = x̄₀.
+
+    1. With the system in state x̄ at time t, evaluate all the aj(x̄) and their sum a0(x̄).
+
+    2. Generate values for τ and j using Equations 10a,b (or their equivalent).
+        a. Draw two random numbers, r1 and r2, in the interval ]0;1]
+        b. Let τ = 1/a₀(x̄) ln(1/r1) = ln(1/r1)/a₀(x̄)
+        c. Let J = the smallest integer satisfying sum(aj(x̄) for j in 1..J) > r2*a₀(x̄)
+
+    3. Effect the next reaction by replacing t ← t + τ and x̄ ← x̄ + νj.
+
+    4. Record (x̄, t) as desired. Return to Step 1, or else end the simulation.
+
+
+
+
+## Example: ##
+
+System with complementary strands: 1 s1 and 1 s2 in volume Ω = 1e-18 L (c = N / Ω / N_A = 1/1e-18/6.022e23 = 1.66 uM)
+    Possible species are:
+        i=1 S₁ = strand1 = st1
+        i=2 S₂ = strand2 = st2
+        i=3 S₃ = duplex12= d12
+    - Initially unhybridized.
+    Reactions and state-change vectors ν_j
+        j=1   st1 + st2 -> d12,    ν = (-1, -1, +1)
+        j=2   d12 -> st1 + st2,    ν = (+1, +1, -1)
+    Reaction rate constants:
+    - k_1 = k_on = 1e5 /M/s,
+       c₁ = k_1/Ω = 1e5 /M/s /1e-18 = 1e23 /M/s = 0.16 L/s      # since 1 M = mol/L = 6.022e23/L
+    - k_2 = k_off = 0.01 /s,
+       c₂ = k_2 = 0.01 /s
+    -  K  = k_on/k_off = 1e7 /M
+    -  Kd = 1/K = k_off/k_on = 0.1 uM.  # We are above K_d, so should be mostly hybridized.
+    Propencity functions:
+        a₁(x̄) = c₁*x₁*x₂
+        a₂(x̄) = c₂*x₃
+ * Possible products are: s1, s2 and d12,
+    Initial state vector: x̄₀ = (1, 1, 0)
+
+ 1. Evaluate all the aj (x) and their sum a0 (x).
+    Propensity functions:
+        a₁(x̄) = c₁*x₁*x₂ = 0.16*1*1 = 0.16     [for reaction j=1]  # unit of L/s
+        a₂(x̄) = c₂*x₃ = 0.01*0 = 0             [for reaction j=2]  # unit of /s
+    Sum: a₀(x̄) = 0.16 + 0 = 0.16.
+
+ 2. Generate values for τ and j:
+    Draw two random numbers in the interval ]0;1]: r1 = 0.3, r2 = 0.7
+        τ = 1/a0(x) ln(1/r1) = 1/0.16 ln(1/0.3) = 7.52  # seconds
+    Let J = the smallest integer satisfying
+        sum(aj(x̄) for j in 1..J) > r2*a0(x̄) = 0.7 * 0.16 = 0.112
+    For J = 1, we have
+        ∑ aj(x̄) = a₁(x̄) = 0.16, which is larger than r2*a0(x̄) = 0.112.
+
+ 3. Effect the next reaction by replacing t ← t + τ and x̄ ← x̄ + νj:
+        t = t + τ = 0 + 7.52 = 7.52
+        x = x̄ + νj = (1, 1, 0) + (-1, -1, +1) = (0, 0, 1)
+
+Loop to 1:
+ 1. Evaluate all the aj(x̄) and their sum a₀(x̄).
+    Propensity functions:
+        a₁(x̄) = c₁*x₁*x₂ = 0.16*0*0 = 0    [for reaction j=1]  # unit of L/s
+        a₂(x̄) = c₂*x₃ = 0.01*1 = 0.01      [for reaction j=2]  # unit of /s
+    Sum:
+        a₀(x̄) = 0.01
+
+ 2. Generate values for τ and j:
+    Draw two random numbers in the interval ]0;1]:
+        r1 = 0.91, r2 = 0.43                [high r1 -> reaction within a short time]
+        τ = ln(1/r1)/a₀(x̄) = ln(1/0.91) / 0.01 = 9.43 s
+    Let J = the smallest integer satisfying
+        sum(aj(x̄) for j in 1..J) > r2*a0(x̄) = 0.43 * 0.01 = 0.0043
+    For J = 2, we have
+        ∑ aj(x̄) = a₁(x̄) + a₂(x̄) = 0 + 0.01, which is larger than r2*a0(x̄) = 0.0043
+
+ 3. Effect the next reaction by replacing t ← t + τ and x̄ ← x̄ + νj:
+        t = t + τ = 7.52 + 9.43 = 16.95 s
+        x = x̄ + νj = (1, 1, 0) + (+1, +1, -1) = (1, 1, 0)
+
+
+
+
+₀₁₂₃
+
+
+Implementation questions:
+    I am going to have a lot of different uniquely different molecular species S,
+    each with its own set of reactions. In fact, I cannot enumerate them from the onset,
+    but will have to generate them dynamically during the simulation.
+    This is all the different domains and their complex state.
+
+    For each domain1 and its complement domain2, I have at least 5 different reaction conditions:
+        domain1 is free, domain2 is free
+        domain1 is free, domain2 in a complex (with state L2)
+        domain1 in a complex (with state L1), domain 2 is free
+        domain1 in a complex (with state L1), domain2 in a complex (state L2)
+        domain1 in a complex (with state L1), domain2 IN THE SAME complex (also in state L1)
+
+    So really we just have to make a list for each domain with the states:
+    The rate constants are then combinations of these domain states:
+                 -- domain1 --
+                 1   2   3   4
+         do  1  1.0 1.0 1.0 1.0
+         ma  2  1.0 1.0 1.0 0.8
+         in  3  0.8 0.7 0.5 0.3
+         2   4  0.2 0.1 0.0 0.0
+
+    In most cases, the reactivity will be the same as for the free domain.
+
+    However, I'm not going to have all conditions at every step.
+    I can still just go over my domains, classify them by "domain state specie" (domain in different conformation),
+    but I only have to include the sub-species that I actually have. I.e.
+    I don't have to include historical sub-species.
+    Instead, I will keep an updated list of actual sub-species:
+        Whenever a
+    I keep a cache of historical sub-species and their reactions and rate constants, indexed as:
+        [T][{(domain1-specie, complex-state), (domain2-specie, complex-state)}]
+    e.g.
+        [330][{()}]
+    It is important that when I specify "domain1" + "complex state" that I can determine it uniquely.
+    For instance, we might have a complex with multiple "domain1", each with different reactivities.
+    I might have to include an identifier (domain1, complex-state, complex-domain-id) ?
+
+    Anyway, at the start of each cycle, I expect that I have an up to date list of
+        * domain sub-species, listed as
+            (domain1, complex-state, count x)  -- for free domains, complex-state = 0.
+          or maybe just a dict mapping 'domain_subspecies':
+            (domain1, cstate) => list of domain1 molecules with this conformation.
+        * Possible reactions R_j's, propencity constants c_j's and state change vectors, v_j's:
+            ({(domain1, cstate), (domain2, cstate)}, c_j, HYB_TUPLE)
+            # or it could be a dict keyed by:
+                {(domain1, cstate), (domain2, cstate)} => c_j, is_hybridizing
+            # Instead of a full state change vector, I use a dynamically interpreted bit noting whether
+            # we hybridize or melt:
+            # HYB_TUPLE = (-1, -1, +1) if hybridizing, MEL_TUPLE = (+1, +1, -1) if melting. Or just True vs False bit.
+
+    1. Evaluate all propencity functions aj(x̄) and their sum a₀(x̄):
+
+    # Edit: Do this AT THE END, UPDATE propencity functions aj(x̄) in-place after updating x̄.
+    # Don't actually go over all domain_subspecies. Unless maybe to check that everything is OK.
+
+        a = [c_j * prod(len(domain_subspecies(ds)) for ds in doms_spec)
+             for doms_spec, c_j, is_hybridizing in possible_reactions_lst]  # doms_spec is the (domain-specie, cstate) above.
+
+        a_sum = sum(a)
+
+    2. Generate values for τ and j:  - easy.
+        a. Draw two random numbers, r1 and r2, in the interval ]0;1]
+        b. Let τ = 1/a₀(x̄) ln(1/r1) = ln(1/r1)/a₀(x̄)
+            tau = ln(1/r1)/a_sum
+        c. Let J = the smallest integer satisfying sum(aj(x̄) for j in 1..J) > r2*a₀(x̄)
+            breaking_point = r2*a_sum
+            j = 1
+            sum_j = 0
+            while sum_j < breaking_point:
+                j += 1
+                sum_j += a[j-1]   # python 0-based index: a[0] = j_1
+            # We now have the j the smallest integer satisfying sum(aj(x̄) for j in 1..J) > r2*a₀(x̄)
+
+    3. Effect the next reaction by replacing t ← t + τ and x̄ ← x̄ + νj.
+
+        t = t + tau
+        dom_spec, c_j, is_hybridizing = possible_reactions_lst[j]
+
+        # Need to select an actual domain1+domain2 that will hybridize:
+        dom1, dom2 = get_domains_by_domspec(dom_spec)
+        if is_hybridizing:
+            hybridize(dom1, dom2)
+        else:
+            dehybridize(dom1, dom2)
+
+    3b. Update domain_subspecies dict, possible_reactions_lst and perhaps reaction_propencity_lst:
+
+        domain_subspecies[dom_spec]
+
+
+    4. Record (x̄, t) as desired. Return to Step 1, or else end the simulation.
+
+
+
+    To bin or not to bin...
+    Should I try to organize domains into sub-species according to their conformation?
+    Yes. I need that anyways in order to efficiently store propencity constants for later re-use.
+
+
+## Relationship between an ensemble of strands and one or two isolated (selected) strands ##
+
+
+    1. Partition function
+
+
+    2. Hybridization probability
+
+
+    3. Reaction rate:
+
+        Rate = k * prod(Ci^yi for i = 1..N)            # 5_60_lecture30.pdf
+                k = rate constant, Ci = Concentration of reactant "i", yi = order of reaction with respect to reactant "i".
+
+
+
+
+
+## What is the problem with the oversampling factor?  ("fudge factor")
+
+    Consider the edge case where you only have two strands, each at 1 mM concentration
+    and an oversampling factor of 1000.
+    We are at T slightly above Tm, but below Tm for "standard conditions".
+    1. Starting at the de-hybridized state,
+    the probability of picking either of the two domains is 1 (duh),
+    and the probability of then picking the other domain is c/M * of = 1.
+    So, we have our (domain1, domain2) pair selected.
+    The p_hyb is ~1, so we will usually switch to hybridized state.
+    2. Next round, we calculate the probability of being in hybridized state.
+    This probability will be high, so the probability of de-hybridizing will be low.
+    But, when we multiply by the oversampling factor, the de-hybridization probability will
+    be sufficiently high that we may switch state.
+    This process continues for all steps in the simulation. Every time we record the state,
+    there is approx 50 percent chance of being in either state.
+
+
+
+
+
+======= References and litterature ==============
+
+
+http://ocw.mit.edu/courses/chemistry/5-60-thermodynamics-kinetics-spring-2008/lecture-notes/
+
+
+
+
+======= Other sotware packages =================
+
+
+Thermodynamics
+* NuPack
+
+
+Kinetics, nucleic acid specific
+* Multistrand
+
+General-purpose thermodynamics and kinetics packages:
+* MLAB - http://www.civilized.com/ (Good paper on the kinetics of "F + G -> B" system here: http://www.civilized.com/files/sobnew.pdf)
+* Cantera - https://github.com/Cantera/cantera   [C++, Python, Matlab]
+* ChemicalKinetics.jl - https://github.com/scidom/ChemicalKinetics.jl  [Julia]
+
+
+
+## Symbols: ##
+
+    x̄  (x bar)
+    p̂  (p hat)
+    Σ,∑  (sigma)
+    Π, ∏
+    μ,µ, σ, σ  (mu, sigma, chi)
+
+    ΔG°
+    ‡
+
+    ±¹²³´µ·» ¼ ½ ¾ ° ­
+    ⁰ⁱ⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿ
+    ₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₒₓₔ
+    ° ‡
+    ∂∆∏∑−∕∙√ ∞ ∟ ≈∫≠≡≤≥⌠⌡
+    Ω℮†‡…‰′″‹›‼‾⁃⁄⁞
+    ×÷ ∝
+
+To create diacritics (bar, hat, etc), use Word
+    Enter base character, e.g. x, and a space: "x "
+    Move cursor back right after the x
+    Insert diacritic, e.g. with charmap or ALT+number combination, e.g. ALT+0772 for bar:
+    Unfortunately, this doesn't work with Windows 7 and new version of word.
+    (Although numlock sometimes helps...)
+    Easiest is to just copy/paste from above.

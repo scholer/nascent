@@ -409,7 +409,7 @@ class Simulator():
         self.Params = params
         self.Tube = Tube(volume, strands)
         self.Volume = volume
-        self.SSA_method = "Gillespie_DM" # Gillespie_DM, Gillespie_FRM, Gillespie_NRM, 
+        self.SSA_method = "Gillespie_DM" # Gillespie_DM, Gillespie_FRM, Gillespie_NRM,
         self.Complexes = []
         self.Removed_complexes = []
         self.Strands = strands
@@ -1119,7 +1119,6 @@ class Simulator():
                 deltaH, deltaS = self.Domain_dHdS[dname]
                 # deltaH in kcal/mol, deltaS in cal/mol/K:
                 deltaG = deltaH*1000 - T*deltaS
-                R = 1.987  # universal gas constant in cal/mol/K
                 try:
                     # If deltaG is really large, we might get overflow error
                     K = math.exp(-deltaG/(R*T))
