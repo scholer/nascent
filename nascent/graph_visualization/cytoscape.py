@@ -160,7 +160,7 @@ class CytoscapeStreamer(LiveVisualizerBase):
         return new_edge_ids
 
 
-    def add_edges(self, edges, attributes=None):
+    def add_edges(self, edges, directed, attributes=None):
         """
         Perform some translation from nascent directive to py2cytoscape directive.
         edges must be a list of dicts as:
@@ -172,11 +172,6 @@ class CytoscapeStreamer(LiveVisualizerBase):
             edge['source'] = self.node_name_to_suid[edge['source']]
             edge['target'] = self.node_name_to_suid[edge['target']]
         new_edge_ids = self.network.add_edges(edges, dataframe=False)
-        directed = [edge.get('directed') for edge in edges]
-        directed_set = set(directed)
-        if len(directed_set) < 2:
-            # If all edges have the same 'directed' value, we can optimize by only providing one value:
-            directed = directed[0]
         self.register_new_edges(new_edge_ids, directed=directed)  # Consider being able to add directed here!
         return new_edge_ids
 

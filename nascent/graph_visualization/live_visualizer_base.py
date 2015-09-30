@@ -104,7 +104,7 @@ class LiveVisualizerBase():
         else:
             # directed might be a list of different directed values, one for each node
             edge_suid_to_names = {d[self.id_key]: (d['source'], d['target']) if node_directed
-                                             else frozenset((d['source'], d['target']))
+                                                  else frozenset((d['source'], d['target']))
                                   for d, node_directed in zip(new_edge_ids, directed)}
         edge_names_to_suid = {v: k for k, v in edge_suid_to_names.items()}
         self.edge_suid_to_names.update(edge_suid_to_names)
@@ -139,4 +139,3 @@ class LiveVisualizerBase():
             self.deleted_suid_to_name.append({edge_id: key})
             if test_name != key:
                 print("WARNING: Mapping issue: node_suid_to_name[node_id] != node_name")
-

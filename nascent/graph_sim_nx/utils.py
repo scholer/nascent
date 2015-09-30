@@ -17,9 +17,6 @@
 
 
 
-sequential_uuid_gen = sequential_number_generator()
-
-
 # Connection types constants:
 PHOSPHATE_BACKBONE = 1
 DUPLEX_HYBRIDIZATION = 2
@@ -33,6 +30,8 @@ def sequential_number_generator(start=0, exclude=None):
             # if we have a set of excluded ids and uid is in that set, do not return uid, continue to next number
             yield uid
         uid += 1
+
+sequential_uuid_gen = sequential_number_generator()
 
 
 def touch(filepath):

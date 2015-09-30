@@ -126,6 +126,7 @@ class GephiGraphStreamer(LiveVisualizerBase):
             self.client.clean()
         self.init_from_networkx(graph)
 
+
     def init_from_networkx(self, graph):
         """
         Build Gephi graph from networkx graph.
@@ -140,16 +141,30 @@ class GephiGraphStreamer(LiveVisualizerBase):
         self.client.flush()
         self.client.autoflush = autoflush
 
-    def add_node(self, node_name, **attributes):
-        self.client.add_node(node_name, **self.edge_attributes)
 
-    def add_nodes(self, node_names_list):
+    def add_node(self, node_name, attributes=None):
+        if attributes:
+            # A hack would be attrs = dict(self.edge_attributes, **attributes), but Guido doesn't like that
+            attrs = self.edge_attributes.copy()
+            attrs.update(attributes)
+        else:
+            attrs = self.edge_attributes
+        self.client.add_node(node_name, **attrs)
+
+
+    def add_nodes(self, node_names_list, attributes=None):
+        if attributes:
+            attrs = self.edge_attributes.copy()
+            attrs.update(attributes)
+        else:
+            attrs = self.edge_attributes
         autoflush = self.client.autoflush
         self.client.autoflush = False # disable auto-flush while we build the graph
-        for node in node_names_list:
-            self.add_node(node)
+        for node_name in node_names_list:
+            self.add_node(node_name, **attrs)
         self.client.flush()
         self.client.autoflush = autoflush
+
 
     def delete_node(self, node_name):
         """ Delete a single node from the graph. """
@@ -160,28 +175,40 @@ class GephiGraphStreamer(LiveVisualizerBase):
             print("Error deleting node %s: %s" % (node_id, e))
 
 
-    def add_edge(self, source, target, directed=True, **kwargs):
+    def add_edge(self, source, target, directed=True, attributes=None):
         """ Add a single edge. Id is auto-generated as source-target"""
-        edge_id = "".join((source, "-->" if directed else "---", target))
-        if kwargs:
+        if attributes:
             attrs = self.edge_attributes.copy()
-            attrs.update(kwargs)
+            attrs.update(attributes)
         else:
-            attrs = kwargs
+            attrs = self.edge_attributes
+        edge_id = "".join((source, "-->" if directed else "---", target))
         self.client.add_edge(edge_id, source, target, directed, **attrs)
         self.register_new_edges([{'id': edge_id, 'source': source, 'target': target}], directed=directed)
         return edge_id
 
-    def add_edges(self, edges):
+
+    def add_edges(self, edges, directed, attributes=None):
         """
         Takes a list of edges in the form of
             [{'source': <name>, 'target': <name>, 'interaction': <str>, 'directed': <bool>}, ...]
 
         """
+        if attributes:
+            attrs = self.edge_attributes.copy()
+            attrs.update(attributes)
+        else:
+            attrs = self.edge_attributes
         autoflush = self.client.autoflush
+        new_edge_ids = []
         self.client.autoflush = False # disable auto-flush while we build the graph
+
         for edge in edges():
-            self.add_edge(**edge)
+            edge['id'] = edge['source'] + ("-->" if edge['directed'] else "---") + edge['target']
+            if 'attributes' in edge:
+                edge.update(edge.pop('attributes'))
+            self.add_edge(**edge) # add_edge(id, source, target, directed=True, **attributes)
+        self.register_new_edges(new_edge_ids)
         self.client.flush()
         self.client.autoflush = autoflush
 
