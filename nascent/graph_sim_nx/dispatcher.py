@@ -54,6 +54,10 @@ logger = logging.getLogger(__name__)
 # Nascent imports:
 from nascent.graph_sim_nx.domain import Domain
 from nascent.graph_visualization.graph_utils import directed_for_all_edges
+from .graph_translators import (translate_domain_graph_to_5p3p_graph,
+                                translate_domain_change_to_5p3p_graph_events,
+                                translate_domain_change_to_domain_graph_event,
+                                translate_domain_change_to_strand_graph_event)
 
 try:
     from ..graph_visualization.cytoscape import CytoscapeStreamer
@@ -112,6 +116,8 @@ class StateChangeDispatcher():
         self.multi_directive_support = config.get('dispatcher_multi_directive_support')
         self.graph_translation = config.get('dispatcher_graph_translation', "domain-to-5p3p")
         self.live_graph_repr = config.get('livestreamer_graph_representation', '5p3p')
+        self.auto_apply_layout = config.get('livestreamer_auto_apply_layout', 0)
+        self.live_graph_layout = config.get('livestreamer_graph_layout_method', 'force-directed')
         streamer = config.get('dispatcher_livestreamer', 'cytoscape')
 
         ## Init file output stream: ##
@@ -149,14 +155,21 @@ class StateChangeDispatcher():
         Initialize the graph visualization and prepare it for streaming.
         TODO: Implement this!
         """
-        if self.live_graph_repr == 'strand':
+        #if self.live_graph_repr == 'strand':
+        if self.graph_translation == 'domain-to-strand':
+            print("Initialization of Stand graphs not implemented.")
             translated_graph = graph
-        elif self.live_graph_repr == 'domain':
+        #elif self.live_graph_repr == 'domain':
+        elif self.graph_translation == None:
             translated_graph = graph
-        elif self.live_graph_repr == '5p3p':
-            translated_graph = graph
+        #elif self.live_graph_repr == '5p3p':
+        elif self.graph_translation == 'domain-to-5p3p':
+            translated_graph = translate_domain_graph_to_5p3p_graph(graph)
         else:
-            raise ValueError("self.live_graph_repr = '%s' is not a recognized representation.")
+            raise ValueError("self.graph_translation '%s' is not a recognized representation." %
+                             self.graph_translation)
+        print("Initializing streamer using graph with nodes:",
+              sorted(translated_graph.nodes()))
         self.live_streamer.initialize_graph(translated_graph, reset=reset)
 
 
@@ -226,11 +239,17 @@ class StateChangeDispatcher():
             if len(self.state_changes_cache) >= self.state_changes_cache_size:
                 self.flush_state_changes_cache()
         graph_events = self.state_changes_to_graph_events(state_changes)
+        if len(graph_events) == 0:
+            print("NO GRAPH EVENTS!")
+            return
+        print("len(graph_events):", len(graph_events))
         if self.live_streamer:
             if len(graph_events) == 1:
                 self.propagate_graph_event(graph_events[0])  # or maybe 'stream_change' ?
             else:
                 self.propagate_graph_events(graph_events)
+            if self.auto_apply_layout:
+                self.live_streamer.apply_layout(self.live_graph_layout)
 
 
     def propagate_graph_event(self, event):
@@ -253,6 +272,7 @@ class StateChangeDispatcher():
         except KeyError:
             raise ValueError("change type value %s, forming=%s not recognized (idx=%s)" %
                              (repr(event['change_type']), event['forming'], method_idx))
+        print("propagate: invoking %s(%s)" % (method, event))
         return method(event)
 
 
@@ -283,11 +303,13 @@ class StateChangeDispatcher():
             if group is None and len(set(event['change_type']*2 + event['forming'] for event in events)) == 1:
                 method_idx = events[0]['change_type']*2 + events[0]['forming']
                 method = self.graph_event_group_methods[method_idx]
+                print("propagate evts: invoking %s(%s)" % (method, events))
                 method(events)
             else:
                 for event in events:
                     method_idx = event['change_type']*2 + event['forming']
                     method = self.graph_event_methods[method_idx]
+                    print("propagate evt: invoking %s(%s)" % (method, event))
                     method(event)
                     # or just use:
                     # self.propagate_event(event)
@@ -328,65 +350,26 @@ class StateChangeDispatcher():
                                   else [state_change]
                                   for state_change in state_changes)
         if self.graph_translation == "domain-to-5p3p":
-            events = chain(self.translate_domain_change_to_5p3p_graph_events(change)
-                           for change in state_changes)
+            print("Translating domain change to 5p3p graph change...")
+            events = [trans_change for state_change in state_changes
+                      for trans_change in translate_domain_change_to_5p3p_graph_events(state_change)]
         elif self.graph_translation == "domain-to-strand":
             # Requires multi-graph support, in case two strands hybridize with more than one domain,
             # or we have intra-strand hybridization, stacking, etc.
-            events = [self.translate_domain_change_to_strand_graph_event(change) for change in state_changes]
+            print("Translating domain change to strand graph change...")
+            events = [translate_domain_change_to_strand_graph_event(state_change)
+                      for state_change in state_changes]
         else:
-            events = state_changes
+            print("Translating domain change to domain graph change...")
+            events = [translate_domain_change_to_domain_graph_event(state_change)
+                      for state_change in state_changes]
         return events
 
 
-    def translate_domain_change_to_5p3p_graph_events(self, change):
-        """ Translate a single state change to 5p3p graph format. """
-        event = change
-        # The 'multi' key can be used to create several nodes/edges with a single "change",
-        # sharing values for time, tau, T, etc. (Compressed to a line line).
-        # This is NOT the same as using dispatch([list of state_change directives], multi=True)
-        # which would write multiple lines to the file.
-        # multi = change['multi'] # uncomment to enable support for multi-node/edge directives.
-        if change['change_type'] in (0, 'node event'):
-            # Make a single "add_nodes/delete_nodes" event?
-            # Or expand to many add_node/delete_nodes events, one for each node?
-            event['nodes'] = [nname for nname in
-                              [(str(domain)+":5p", str(domain)+":3p")
-                               for domain in change['nodes']]]
-            return [event]
-            # Add style to event?
-        elif change['change_type'] in (1, 'edge event'):
-            dom1, dom2 = change['nodes']
-            if change['interaction'] in (1, 'backbone', 3, 'stacking'):
-                # The 3p of the first (5p-most) domain connects to the 5p end of the second (3p-most) domain
-                event['nodes'] = [str(dom1)+":3p", str(dom2)+":5p"]
-                return [event]
-            else:
-                print("Unrecognized interaction for change %s" % change)
-            if change['interaction'] in (2, 'hybridization'):
-                # The 3p of the first domain connects to the 5p end of the second (3p-most) domain,
-                # AND connect the 5p end of the first to the 3p of the second.
-                # We have already done the former above, only do the latter:
-                event2 = change.copy()
-                event['nodes'] = [str(dom1)+":3p", str(dom2)+":5p"]
-                event2['nodes'] = [str(dom1)+":5p", str(dom2)+":3p"]
-                return [event, event2]
-
-
-    def translate_domain_change_to_strand_graph_event(self, change):
-        """
-        Assume the default naming format of
-            sname#suid:domain#duid:5p/3p
-        """
-        if isinstance(change['nodes'], Domain):
-            change['nodes'] = [domain.strand.instance_name for domain in change['nodes']]
-        else:
-            # Assume it is a string that we must re-write:
-            change['nodes'] = [node.split(":")[0] for node in change['nodes']]
-        return change
-
-
     ## Live streamer event propagation methods: ##
+
+    # For all *node methods, event['nodes'] must be a single node, NOT a 1-element list.
+    # For all *edge methods, event['nodes'] must be a 2-element list.
 
     def add_node(self, event, attributes=None):
         """ Add a single node to the live streamer's graph. """
@@ -420,8 +403,8 @@ class StateChangeDispatcher():
         directed = event.get('directed', True if interaction == 'stacking' else False)
         source, target = event['nodes']
         return self.live_streamer.add_edge(source=source, target=target,
-                                           interaction=interaction,
                                            directed=directed,
+                                           interaction=interaction,
                                            attributes=attributes)
 
     def add_edges(self, events, attributes=None):
@@ -435,11 +418,16 @@ class StateChangeDispatcher():
 
     def delete_edge(self, event):
         """ Delete a single node from the live streamer's graph. """
-        pass
+        directed = event.get('directed', event['interaction'] == 'stacking')
+        source, target = event['nodes']
+        return self.live_streamer.delete_edge(source=source, target=target,
+                                              directed=directed)
 
     def delete_edges(self, events):
         """ Delete multiple edges from the live streamer's graph. """
-        pass
+        for event in events:
+            self.delete_edge(event)
+
 
 
 

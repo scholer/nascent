@@ -37,6 +37,7 @@ class LiveVisualizerBase():
         self.config = config
         self.graph_type = config.get('visualization_graph_type', '5p3p')
         self.directed_graph = config.get('visualization_graph_directed', self.graph_type in ('5p3p',))
+        self.default_layout = config.get('livestreamer_graph_layout_method', 'force-directed')
         # Note: For purely visualization, it doesn't matter if the graph is directed or not;
         # we are not using the visualized graph for any analysis or calculation.
 
@@ -58,6 +59,12 @@ class LiveVisualizerBase():
         If reset=True, the current graph visualization will be reset before adding graph.
         """
         raise NotImplementedError("Must be defined by subclass.")
+
+    def apply_layout(self, layout):
+        """ Change in subclass if it should automatically apply layout. """
+        pass
+
+
     #
     #def propagate_change(self, change):
     #    """
@@ -78,9 +85,15 @@ class LiveVisualizerBase():
         """
         Register new nodes.
         :param new_edge_ids: Should be a list of dicts, e.g. [{'SUID': 5455, 'name': 'a', ...],
+                             OR a dict with {'name': SUID, ...}
         """
-        node_suid_to_name = {row[self.id_key]: row['name'] for row in new_node_ids}
-        node_name_to_suid = {v: k for k, v in node_suid_to_name.items()}
+        if isinstance(new_node_ids, dict):
+            # Assume this is a SUID: name map.
+            node_suid_to_name = new_node_ids
+            node_name_to_suid = {v: k for k, v in node_suid_to_name.items()}
+        else:
+            node_suid_to_name = {row[self.id_key]: row['name'] for row in new_node_ids}
+            node_name_to_suid = {v: k for k, v in node_suid_to_name.items()}
         self.node_suid_to_name.update(node_suid_to_name)
         self.node_name_to_suid.update(node_name_to_suid)
 
@@ -128,6 +141,7 @@ class LiveVisualizerBase():
                 print("- Also unable to find fallback key %s in node_name_to_suid map." % fallback)
                 return
         try:
+            print("Deleting edge %s" % edge_id)
             self.network.delete_edge(edge_id)
         except Exception as e:
             print("Error deleting node %s: %s" % (edge_id, e))

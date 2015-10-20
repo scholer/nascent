@@ -23,12 +23,18 @@ Module for
 
 
 import itertools
+from collections import deque
 import networkx as nx
+from networkx.algorithms.shortest_paths import shortest_path
 import numpy as np
 
 # Relative imports
-from .utils import (sequential_number_generator, sequential_uuid_gen,
-                    PHOSPHATE_BACKBONE, DUPLEX_HYBRIDIZATION, STACKING_INTERACTION)
+from .utils import (sequential_number_generator, sequential_uuid_gen)
+from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)
+from .structural_elements import strand, helix, bundle
+from .structural_elements.strand import SingleStrand
+from .structural_elements.helix import DsHelix
+from .structural_elements.bundle import HelixBundle
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
@@ -59,15 +65,20 @@ class Complex(nx.Graph):
         super().__init__(sid=next(make_sequential_id),
                         )
         if strands is None:
-            strands = []
+            strands = {}
         for strand in strands:
             strand.graph['complex'] = self
-        self._strands = strands
-        self._domains = itertools.chain(s.domains for s in strands)
-        self.add_nodes_from(self._domains) # Add all domains as nodes
+        # Should strands be a set or list? Set is most natural, but a list might play better with a adjacency matrix.
+        # Then, you could just have a dict mapping strand -> index of the matrix
+        self.strands = set(strands)
+        self.domains = self.nodes
+        #self._domains = itertools.chain(s.domains for s in strands)
+        self.add_nodes_from(self.domains_gen()) # Add all domains as nodes
 
         # Distances between domains.
-        # If we have N domains, then we have sum(1..(N-1)) possible distances?
+        # If we have N domains, then we have sum(1..(N-1)) = N**2 - N possible distances?
+        # Alternatively, use a proper matrix. Yes, it will be degenerate and include zero-distance, but
+        # it might offer better performance and more natural calculations.
         self.domain_distances = {} # {frozenset(d1, d2): dist}
         # Distances between complementary domains (not neseccarily hybridized)
         # Is a subset of domain_distances: {d1d2: v for d1d2 in domain_distances if d1.Name}
@@ -93,6 +104,8 @@ class Complex(nx.Graph):
         self.strand_hybridization_graph = nx.Graph()
         self.stacking_graph = nx.Graph()      # Graph with only stacking connections.
         # (^^ Note: I'm not yet sure whether stacking interactions are part of the main complex graph...)
+        # Not sure if each complex should have a 5p3p graph. After all, we already have a system-level 5p3p graph in the simulator.
+        self.end5p3p_graph = nx.Graph()
         self.hybridized_domains = set() # set of frozenset({dom1, dom2}) sets, specifying which domains are hybridized.
         self.stacked_domains = set()    # set of tuples. (5p-domain, 3p-domain)
         # Note that stacking is directional.
@@ -148,6 +161,8 @@ class Complex(nx.Graph):
                 self.stacking_fingerprint()
                 ))
 
+    def domains_gen(self):
+        return (domain for strand in self.strands for domain in strand.domains)
 
     def strands_species_count(self):
         species_counts = {}
@@ -247,6 +262,228 @@ class Complex(nx.Graph):
                      #if cnxtype == STACKING_INTERACTION]
         # For now, I have to keep a dict with hybridization connections:
         return self.stacked_domains
+
+
+    def stacked_subgraph(self):
+        """
+        Return a graph only with stacked, double-helical domains.
+        This graph has the following edges (interactions):
+        * Stacking (up/downstream)
+        * Hybridization
+        As always, we have to determine whether to use the domain-level or 5p3p-level graph.
+        This function returns the domain-level subgraph.
+
+        Do we need to filter the domains? We could include the ss domains as non-connected nodes.
+        """
+        hybridized_domains = [domain for domain in self.domains if domain.partner is not None]
+        edges = [(s, t) for s, t, attrs in self.edges(data=True)
+                 if attrs['interaction'] in (HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)]
+        subg = self.subgraph(hybridized_domains)
+        subg.add_edges_from(edges)
+        return subg
+
+
+    def domain_path_elements(self, path):
+        """
+        Returns a list of structural elements based on a domain-level path (list of domains).
+        """
+        #path_set = set(path)
+        remaining_domains = path[:] # deque(path)
+        elements = [] # list of structural elements on path
+        while remaining_domains:
+            domain = remaining_domains.pop(0) # .popleft() # use popleft if using a deque
+            if not domain.partner:
+                elem = SingleStrand(domain)
+            else:
+                elem = DsHelix(domain)
+                # Determine if DsHelix is actually a helix bundle:
+                # Uhm...
+                # Would it be better to have a "complete" helix structure description of the complex
+                # at all time?
+                # Whatever... for now
+            elements.append(elem)
+            if not remaining_domains:
+                break
+            i = 0
+            # while i < len(remaining_domains) and remaining_domains[i] in elem.domains:
+            for i, domain in remaining_domains:
+                if domain not in elem.domains:
+                    break
+            else:
+                remaining_domains = []
+            if i > 0:
+                remaining_domains = remaining_domains[i:]
+
+    def end5p3p_path_partial_elements(self, path, length_only=False, summarize=False):
+        """
+        Returns a list of structural elements based on a 5p3p-level path (list of 5p3p ends).
+
+        For this, I will experiment with primitive list-based representations rather than making full
+        element objects.
+        path_edges = [(1, [(length, source, target), ...]),
+                      (3, [(length, source, target), ...]),
+                      (2, [(length, source, target)]
+        Where 1 indicates a list of single-stranded edges,
+        2 indicates a hybridization edge, and 3 indicates a list of stacked edges.
+        Since only the interaction type and lenghts are important, maybe just
+        path_edges = [(1, [length, length, ...]), (3, [length, length, ...], ...)]
+        Edit: Instead of 1/2/3, use the standard INTERACTION constants values.
+        """
+        path_edges = []
+        last_interaction = None
+        interaction_group = None
+        for i in range(len(path)-1):
+            source, target = path[i], path[i+1]
+            # Method 1: Use the networkx graph API and edge attributes:
+            edge = self.end5p3p_graph[source][target]
+            length = edge['length']
+            interaction = edge['interaction']
+            # Method 2: Manually determine what type of interaction we have based on source, target:
+            if target == source.stack_partner:
+                interaction = STACKING_INTERACTION
+                length = 1
+            elif target == source.hyb_partner:
+                interaction = HYBRIDIZATION_INTERACTION
+                length = 1
+            elif target in (source.bp_upstream, source.pb_downstream):
+                if source.hyb_partner and \
+                    ((source.end == "5p" and target == source.pb_downstream) or
+                     (source.end == "3p" and target == source.bp_upstream)):
+                    # Above could probably be done with an XOR:
+                    # (source.end == "5p") != (target == source.pb_downstream) # boolean xor
+                    # (source.end == "5p") ^ (target == source.pb_downstream)  # bitwise xor
+                    interaction = STACKING_INTERACTION
+                    length = 1
+                else:
+                    interaction = PHOSPHATEBACKBONE_INTERACTION
+                    length = source.domain.length   # length vs length_bp vs length_nm...
+            else:
+                raise ValueError("Could not determine interaction between %s and %s" % (source, target))
+
+            if interaction == HYBRIDIZATION_INTERACTION:
+                # We only distinguish between ds-helix vs single-strand; use STACKING_INTERACTION to indicate ds-helix:
+                interaction = STACKING_INTERACTION
+
+            if interaction != last_interaction:
+                path_edges.append((last_interaction, interaction_group))
+                interaction_group = []
+                last_interaction = interaction
+            if length_only:
+                interaction_group.append(length)
+            else:
+                interaction_group.append((length, source, target))
+        if summarize and length_only:
+            return [(interaction, sum(lengths)) for interaction, lengths in path_edges]
+        return path_edges
+
+
+
+    def domains_shortest_path(self, domain1, domain2):
+        """
+        TODO: This should certainly be cached.
+        """
+        return shortest_path(self, domain1, domain2)
+
+    def ends5p3p_shortest_path(self, domain1, domain2):
+        """
+        TODO: This should certainly be cached.
+        TODO: Verify shortest path for end3p as well?
+        """
+        return shortest_path(self.end5p3p_graph, domain1.end5p, domain2.end5p)
+
+
+    def intra_complex_hybridization(self, domain1, domain2):
+        """
+        Determine whether domain1 and domain2 can hybridize and what the energy penalty is,
+        i.e. loop energy, helix-bending energy, etc.
+
+        Flow-chart style:
+        1. Are the two domains connected by a single ds helix?
+        2. (...)
+
+        More direct approach:
+        1. Determine one (or multiple?) path(s) connecting domain 1 and 2.
+        2. Determine the structural elements that make up this path:
+            Flexible, single-stranded connections.
+            Semi-rigid double-stranded helices.
+            Rigid, multi-helix bundles.
+             * Question: How about stacked/rigid interface between a ds-helix and multi-helix bundle?
+                - Consider as a single, hard-to-calculate element?
+        4. Determine the length of longest rigid element (LRE),
+            and the length of all other elements plus half of the length of domain1/2.
+            (sum remaining elements, SRE)
+        5. If the SRE is as long or longer than the LRE, then the domains can immediately hybridize,
+            under loop energy EX
+        6. If the SRE is shorter than the LRE, but the LRE is a single ds helix, then the
+            domains can hybridize under helix bending energy EB.
+        7. Otherwise, if the LRE is longer than the SRE and the LRE is a rigid multi-bundle element,
+            then for now we assume that the domains cannot bind.
+
+        Regarding mixed-level optimization (APPROXIMATION!):
+        1. Get the path at the strand level
+        2. Get domain-level subgraph only for domains with strand in the strand-level path
+        3. Get domain-level shortest path using the subgraph from (2).
+        4. Get 5p3p-level subgraph with 5p3p ends whose domain is in the domain-level shortest path.
+        5. Get 5p3p-level shortest path using the subgraph from (4).
+        Critizism:
+        * May be far from the "proper" 5p3p shortest path.
+        * The strand-level graph has a hard time evaluating edge distances (weights).
+            For instance, all staples are connected to the scaffold. What is the distance between two staples?
+
+        Edit: I really feel the only way to properly represent the path is to use 5p3p representation.
+        Domain-level representation is simply not sufficient.
+        For instance, in the "bulge" structure below, domains C and c are certainly within reach:
+                                            _ _ _C_ _ _  3'
+        5'------------A---------------B----/
+        3'------------a----------
+                                 \ _ _ _c_ _ _ 5'
+        However, the domain level representation:
+            A -- B -- C
+            |
+            a
+              \- c
+        Is equivalent to the would-be circular structure:
+                3'_ _ _C_ _ _
+                             \----B----------------A----------5'
+                                       ------------a----------
+                                                              \ _ _ _c_ _ _ 3'
+        Where, depending in helix Aa, domains C and c may not be within reach.
+        The domain-level graph looses some detail.
+        This *can* be recovered via edge attributes, e.g. edge A-B can be directed or otherwise
+        inform that B is on the same side of A as c is. But that might be just as much work
+        as just using the 5p3p-ends graph.
+        """
+        #path = self.domains_shortest_path(domain1, domain2)
+        #path_elements = self.domain_path_elements(path)
+        # NOTE: The path does not have to span the full length of the element!
+        # The element could be really long, e.g. a long DsHelix or the full ss scaffold,
+        # with the path only transversing a fraction of the element.
+        # Also, for domain-level helices, it is hard to know if the path traverses
+        # the domain, or just uses it for the hybridization, traversed at one end only.
+        #      To here
+        #         |
+        # -------´ ---------
+        # ------------------ ------from here
+        #LRE_len, LRE = max((elem.length_nm, elem) for elem in path_elements if not isinstance(elem, SingleStrand))
+
+        ## 5p3p-level shortest path:
+        path = self.ends5p3p_shortest_path(domain1, domain2)
+        path_elements = self.end5p3p_path_partial_elements(path, length_only=True, summarize=True)
+        # list of [(interaction, total-length), ...]
+        _, LRE_len, LRE_idx = max((interaction, tot_length, i)
+                                  for i, (interaction, tot_length) in enumerate(path_elements)
+                                  if interaction in (STACKING_INTERACTION, HYBRIDIZATION_INTERACTION))
+        LRE = path_elements.pop(LRE_idx)
+        SRE_len = sum(tot_length for interaction, tot_length in path_elements)
+
+        if LRE_len > SRE_len:
+            # The domains cannot reach each other.
+            # Hybridization requires helical bending; TODO: Not implemented yet.
+            return None
+        return loop_energy(LRE_len+SRE_len)
+
+
+
 
 
 

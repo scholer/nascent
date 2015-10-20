@@ -27,8 +27,9 @@ import networkx as nx
 import numpy as np
 
 # Relative imports
-from .utils import (sequential_number_generator, sequential_uuid_gen,
-                    PHOSPHATE_BACKBONE, DUPLEX_HYBRIDIZATION, STACKING_INTERACTION)
+from .utils import (sequential_number_generator, sequential_uuid_gen)
+from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
+                        interactions)
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
@@ -70,6 +71,8 @@ class Strand(nx.Graph):
         for domain in domains:
             domain.Strand = self
 
+
+        ## Adjacency and distance matrices ##
         # could be {frozenset(d1, d2): dist} or a matrix.
         self.Strand_domain_distances = {
             frozenset(d1, d2): 1

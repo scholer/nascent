@@ -34,9 +34,10 @@ import networkx as nx
 import numpy as np
 
 # Relative imports
-from .utils import (sequential_number_generator, sequential_uuid_gen,
-                    PHOSPHATE_BACKBONE, DUPLEX_HYBRIDIZATION, STACKING_INTERACTION)
+from .utils import (sequential_number_generator, sequential_uuid_gen)
+from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)
 from .algorithms import connectivity_rings
+
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
@@ -63,7 +64,12 @@ class Domain():
         self.instance_name = "%s#%s" % (self.name, self.uuid)
         self.universal_name = "%s:%s" % (self.strand.instance_name, self.instance_name)
         self.sequence = seq
-        self.partner = partner
+        self.length = len(seq)
+        self.partner = partner  # duplex hybridization partner
+        self.end5p = Domain5pEnd(self)
+        self.end3p = Domain3pEnd(self)
+        #self.stacked_upstream = None  # Edit, is self.end5p.stack_partner.domain
+        #self.stacked_downstream = None
         # Domain unique id. Can be the same as a strand's id. But two domains will never have the same id.
         self.duid = next(make_sequential_id)
         self.uuid = next(sequential_uuid_gen)
@@ -122,6 +128,65 @@ class Domain():
 
     def __str__(self):
         return self.fqdn()
+
+    def __len__(self):
+        return len(self.sequence)
+
+
+class DomainEnd():
+    """
+    Attributes:
+    :domain: parent domain
+    :end: string indicating "5p" or "3p" end.
+    :hyb_partner: Another DomainEnd, hybridized to this end.
+        Typically:
+         * if isinstance(self, Domain5pEnd), then isinstance(self.hyb_partner, Domain3pEnd)
+         * self.domain.partner == self.hyb_partner.domain
+    :pb_upstream: The DomainEnd connected on the phosphate backbone, upstream (in the 5' direction) relative to this domain.
+        Typically:
+        * if isinstance(self, Domain3pEnd), then self.pb_upstream.domain == self.domain
+    :pb_downstream: The DomainEnd connected on the phosphate backbone, downstream
+        (in the 3' direction) relative to this domain. Typically:
+        * if isinstance(self, Domain5pEnd), then self.pb_downstream.domain == self.domain
+    :stack_partner: A 5p3p end that that this end is stacking with.
+        This is *not* the stacking between the 5p end and 3p end of a hybridized domain,
+        since we can easily determine this dynamically (based on self.end and self.hyb_partner).
+        Thus, stack_partner is always an end on a different domain, facing "away" from the center of this domain.
+        Note that stack_partner *can* equal pb_upstream (for a 5p end) or pb_downstream (for a 3p end),
+        but it doesn't have to. For instance, at a holliday junction, they will be different.
+    """
+    def __init__(self, domain, end):
+        self.domain = domain
+        self.end = end
+        self.hyb_partner = None
+        self.pb_upstream = None
+        self.pb_downstream = None
+        self.stack_partner = None
+
+class Domain5pEnd(DomainEnd):
+    def __init__(self, domain):
+        super().__init__(self, domain, end="5p")
+
+    def stacked_upstream(self, ):
+        return self.stack_partner
+
+    def stacked_downstream(self, ):
+        """ If a domain is hybridized, we assume it is the domain's ends are stacked. """
+        if self.hyb_partner is not None:
+            return self.pb_downstream
+
+
+class Domain3pEnd(DomainEnd):
+    def __init__(self, domain):
+        super().__init__(self, domain, end="3p")
+
+    def stacked_upstream(self, ):
+        """ If a domain is hybridized, we assume it is the domain's ends are stacked. """
+        if self.hyb_partner is not None:
+            return self.pb_upstream
+
+    def stacked_downstream(self, ):
+        return self.stack_partner
 
 
 

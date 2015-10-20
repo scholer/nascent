@@ -17,11 +17,6 @@
 
 
 
-# Connection types constants:
-PHOSPHATE_BACKBONE = 1
-DUPLEX_HYBRIDIZATION = 2
-STACKING_INTERACTION = 3
-
 
 def sequential_number_generator(start=0, exclude=None):
     uid = start

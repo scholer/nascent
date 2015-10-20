@@ -26,8 +26,11 @@ Gephi graph-streaming python libraries:
 ** Very ugly code, but uses requests. Also imports urllib but doesn't use it...
     - urllib.open(...) was replaced by requests.post(...))
 * https://github.com/jsundram/pygephi (Jython)
+** This is for making use of the gephi libraries from within Python using Jython
 
-About the graph-streaming protocol:
+
+About the HTTP requests communication with Gephi graph-streaming plugin:
+* Uses the JSONStream HTTP request interface.
 * See pygephi_graphstreaming/pygephi/client.py
 * Very similar to Cytoscape's REST interface:
 * Send GET (or maybe POST) requests to URI in the format of
@@ -83,13 +86,15 @@ General-purpose NetStream libs:
 import logging
 logger = logging.getLogger(__name__)
 
-import pygephi
+from pygephi import client
+from pygephi import websocket_client
 
 # Local/relative imports
 from .live_visualizer_base import LiveVisualizerBase
 
 DEFAULT_NODE_ATTR = {"size": 10, 'r': 1.0, 'g': 0.0, 'b': 0.0, 'x': 1, 'y': 0}
 DEFAULT_EDGE_ATTR = {}
+
 
 class GephiGraphStreamer(LiveVisualizerBase):
     """
@@ -99,24 +104,30 @@ class GephiGraphStreamer(LiveVisualizerBase):
     def __init__(self, config):
         super().__init__(config)
         # Client:
+        use_websocket = config.get('visualization_use_websocket', True)
         host = config.get('visualization_host', '127.0.0.1')
         port = config.get('visualization_port', 8080)
-        scheme = config.get('visualization_uri_scheme', 'http')
+        scheme = config.get('visualization_uri_scheme', 'ws' if use_websocket else 'http')
         workspace = config.get('visualization_workspace', 'workspace0')
         url = config.get('visualization_url', "%s://%s:%s/%s" % (scheme, host, port, workspace))
         # If client.autoflush is True, changes are submitted at once.
         # Otherwise they are aggregated in client.data and only submitted when .flush() is invoked.
         autoflush = config.get('visualization_autoflush', True)
-        self.client = pygephi.client.GephiClient(url, autoflush=autoflush)
+        if use_websocket:
+            # Websocket is good if you send a lot of small messages:
+            self.client = websocket_client.GephiWsClient(url, autoflush=autoflush)
+        else:
+            self.client = client.GephiClient(url, autoflush=autoflush)
         self.network = self.client # For gephi, the network and client is the same
         # Styles:
         self.node_attributes = DEFAULT_NODE_ATTR.copy()
-        self.node_attributes.update(config.get('visualization_node_attributes', {}))
+        self.node_attributes.update(config.get('visualization_node_attributes',
+                                               {'size': 10, 'r': 1.0}))
         self.edge_attributes = DEFAULT_EDGE_ATTR.copy()
         self.edge_attributes.update(config.get('visualization_edge_attributes', {}))
 
         # Graph network:
-        self.network = None
+        self.network = self.client # For pygephi, the client is a proxy for the network.
         self.id_key = 'id'   # is 'SUID' for Cytoscape, 'id' for graph-streaming
 
 
@@ -133,31 +144,38 @@ class GephiGraphStreamer(LiveVisualizerBase):
         """
         autoflush = self.client.autoflush
         self.client.autoflush = False # disable auto-flush while we build the graph
-        for node in graph.nodes():
-            self.add_node(node)
+        for node, data in graph.nodes(data=True):
+            self.add_node(node, attributes=data)
         directed = graph.is_directed()
-        for source, target in graph.edges():
-            self.client.add_edge(source, target, directed=directed, **self.edge_attributes)
+        for source, target, data in graph.edges(data=True):
+            data.setdefault('interaction', 'pb')
+            self.add_edge(source, target, directed=directed, attributes=data)
         self.client.flush()
         self.client.autoflush = autoflush
+        print("node_name_to_suid:", self.node_name_to_suid)
+        print("edge_suid_to_names:", self.edge_suid_to_names)
 
 
     def add_node(self, node_name, attributes=None):
+        """ Add a single node. """
         if attributes:
             # A hack would be attrs = dict(self.edge_attributes, **attributes), but Guido doesn't like that
-            attrs = self.edge_attributes.copy()
+            attrs = self.node_attributes.copy()
             attrs.update(attributes)
         else:
-            attrs = self.edge_attributes
+            attrs = self.node_attributes
         self.client.add_node(node_name, **attrs)
+        self.node_name_to_suid[node_name] = node_name
+        self.node_suid_to_name[node_name] = node_name
 
 
     def add_nodes(self, node_names_list, attributes=None):
+        """ Add all nodes in node_names_list. """
         if attributes:
-            attrs = self.edge_attributes.copy()
+            attrs = self.node_attributes.copy()
             attrs.update(attributes)
         else:
-            attrs = self.edge_attributes
+            attrs = self.node_attributes
         autoflush = self.client.autoflush
         self.client.autoflush = False # disable auto-flush while we build the graph
         for node_name in node_names_list:
@@ -169,21 +187,35 @@ class GephiGraphStreamer(LiveVisualizerBase):
     def delete_node(self, node_name):
         """ Delete a single node from the graph. """
         node_id = node_name
+        if node_name not in self.node_name_to_suid:
+            print("node name", node_name, "not in node_name_to_suid.")
         try:
             self.network.delete_node(node_id)
         except Exception as e:
             print("Error deleting node %s: %s" % (node_id, e))
+        self.node_name_to_suid.pop(node_name, None)
+        self.node_suid_to_name.pop(node_name, None)
 
 
-    def add_edge(self, source, target, directed=True, attributes=None):
+    def add_edge(self, source, target, directed=True, interaction=None, bidirectional=None, attributes=None):
         """ Add a single edge. Id is auto-generated as source-target"""
         if attributes:
             attrs = self.edge_attributes.copy()
             attrs.update(attributes)
         else:
             attrs = self.edge_attributes
-        edge_id = "".join((source, "-->" if directed else "---", target))
+        if interaction is None:
+            interaction = attrs.get('interaction', '-')
+        interact_str = "--" + str(interaction) + ("->" if directed else "--")
+        edge_id = "".join((source, interact_str, target))
         self.client.add_edge(edge_id, source, target, directed, **attrs)
+        # register_new_edges takes a list of dicts or a single dict with
+        if source not in self.node_name_to_suid or target not in self.node_name_to_suid:
+            print("Warning:",
+                  ("source '%s' not in node_name_to_suid" % source) if source not in self.node_name_to_suid else "",
+                  ("target '%s' not in node_name_to_suid" % target) if target not in self.node_name_to_suid else "")
+        if edge_id in self.edge_suid_to_names:
+            print("Note: edge id", edge_id, "already in edge_suid_to_names.")
         self.register_new_edges([{'id': edge_id, 'source': source, 'target': target}], directed=directed)
         return edge_id
 
@@ -199,14 +231,19 @@ class GephiGraphStreamer(LiveVisualizerBase):
             attrs.update(attributes)
         else:
             attrs = self.edge_attributes
+        print("Attributes:", attrs)
+        default_interaction = attrs.get('interaction', 'h')
         autoflush = self.client.autoflush
         new_edge_ids = []
         self.client.autoflush = False # disable auto-flush while we build the graph
 
-        for edge in edges():
-            edge['id'] = edge['source'] + ("-->" if edge['directed'] else "---") + edge['target']
-            if 'attributes' in edge:
-                edge.update(edge.pop('attributes'))
+        for edge in edges:
+            #interact_str = ("--%s->" if edge.get('directed', directed) else "--%s--") % \
+            #               edge.get('interaction', default_interaction)
+            #edge['id'] = edge['source'] + interact_str + edge['target']
+            #edge.update(attrs) # add default/global attributes
+            #if 'attributes' in edge:
+            #    edge.update(edge.pop('attributes')) # add edge-specific attributes
             self.add_edge(**edge) # add_edge(id, source, target, directed=True, **attributes)
         self.register_new_edges(new_edge_ids)
         self.client.flush()

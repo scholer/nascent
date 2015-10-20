@@ -124,9 +124,17 @@ class Simulator():
         #self.lower_case_domains = [d for d in self.domains if d == d.lower()]
 
 
+        ### System graphs ###
+        # Not sure whether we should have system-level graphs or a graph for each complex.
+
+
         ### Caches: ###
         # Standard enthalpy and entropy of hybridization,
         # indexed as [frosenset({d1.Name, d2.Name})][0 for enthalpy, 1 for entropy]
+        # - Note: index with frozenset((a,b)) or just cache[a, b] = cache[b, a] = value? # d[1,2] same as d[(1,2)]
+        # --> Creating a set() or frozenset() takes about 10x longer than to make tuple.
+        # --> dict assignment with frozenset is 0.4/0.5 us vs 0.17/0.05 for the "double tuple entry" (python/pypy),
+        #       so if you have the memory for it, go for the faster tuples which takes 2x memory.
         # Note: Whenever I use "name", I'm refering to the name of the specie - domain or strand specie.
         self.domain_dHdS = {}
 
