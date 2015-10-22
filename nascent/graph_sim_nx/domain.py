@@ -35,14 +35,15 @@ import numpy as np
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
-from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)
+from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
+                        N_AVOGADRO, ss_kuhn_length, ss_contour_length, ds_contour_length)
 from .algorithms import connectivity_rings
 
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
 
-N_AVOGADRO = 6.022e23
+#N_AVOGADRO = 6.022e23
 
 
 dont_follow_stacking_interactions = lambda eattrs: eattrs.get('type') != STACKING_INTERACTION
@@ -64,7 +65,13 @@ class Domain():
         self.instance_name = "%s#%s" % (self.name, self.uuid)
         self.universal_name = "%s:%s" % (self.strand.instance_name, self.instance_name)
         self.sequence = seq
-        self.length = len(seq)
+        self.length = self.n_nt = len(seq)
+        # E[r²] = ∑ Nᵢbᵢ² for i ≤ m = N (λˢˢ)², N = N_nt∙lˢˢ/λˢˢ
+        #       = N_nt * lˢˢ * λˢˢ
+        self.ss_length_sq = self.n_nt * ss_contour_length * ss_kuhn_length
+        self.ss_length_nm = math.sqrt(self.ss_length_sq)
+        self.ds_length_nm = self.n_nt * ds_contour_length
+        self.ds_length_sq = self.ds_length_nm**2
         self.partner = partner  # duplex hybridization partner
         self.end5p = Domain5pEnd(self)
         self.end3p = Domain3pEnd(self)

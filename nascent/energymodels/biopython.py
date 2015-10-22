@@ -19,6 +19,9 @@ import math
 
 WC = dict(zip("ATGC", "TACG"))
 R = 1.987 # cal/mol/K
+k_units_to_value = {'J/K': 1.380e-23, 'cal/K': 0.329e-23}  # Boltzman. For single particle states.
+R_units_to_value = {'J/mol/K': 8.314, 'cal/mol/K': 1.987}  # Gas constant. For molar quantities.
+
 
 def compl(seq):
     return "".join(WC[b] for b in seq)
@@ -141,10 +144,11 @@ DNA_DE1 = {
 #  scipy.stats.linregres(dHs, [325*dS/1000 for dS in dSs]) - slope = 1.0016, intersect = 0.277.
 
 
-
+energy_tables = {}
 energy_tables_in_units_of_R = {}
 for tbl_name in "DNA_NN3, DNA_NN4, DNA_IMM1, DNA_TMM1, DNA_DE1".split(", "):
     tbl = globals()[tbl_name]
+    energy_tables[tbl_name] = tbl  # Use energy_tables["DNA_NN4"] instead of globals()["DNA_NN4"] to get table.
     energy_tables_in_units_of_R[tbl_name] = {
         # R is in cal/mol/K
         k: (H*1000/R, S/R) for k, (H, S) in tbl.items()
@@ -158,12 +162,10 @@ def canonical_partitions(energies, T, unit='cal/mol'):
     """
     Return list [exp(-E_s / kT) for s in energies microstates]
     """
-    k = {'J/K': 1.380e-23, 'cal/K': 0.329e-23}
-    R = {'J/mol/K': 8.314, 'cal/mol/K': 1.987}
     if 'mol' in unit:
-        beta = 1/(R['cal/mol/K' if 'cal' in unit else 'J/mol/K']*T)
+        beta = 1/(R_units_to_value['cal/mol/K' if 'cal' in unit else 'J/mol/K']*T)
     else:
-        beta = 1/(k['cal/K' if 'cal' in unit else 'J/K']*T)
+        beta = 1/(k_units_to_value['cal/K' if 'cal' in unit else 'J/K']*T)
     if unit[0] == 'k':
         beta = beta / 1000
     try:
@@ -208,12 +210,10 @@ def binary_state_probability(energy, T, unit='cal/mol', Q=1):
     if Q is None:
         Q = 1
     # TODO: Optimize this to make it more efficient.
-    k = {'J/K': 1.380e-23, 'cal/K': 0.329e-23}  # Boltzman. For single particle states.
-    R = {'J/mol/K': 8.314, 'cal/mol/K': 1.987}  # Gas constant. For molar quantities.
     if 'mol' in unit:
-        beta = 1/(R['cal/mol/K' if 'cal' in unit else 'J/mol/K']*T)
+        beta = 1/(R_units_to_value['cal/mol/K' if 'cal' in unit else 'J/mol/K']*T)
     else:
-        beta = 1/(k['cal/K' if 'cal' in unit else 'J/K']*T)
+        beta = 1/(k_units_to_value['cal/K' if 'cal' in unit else 'J/K']*T)
     if unit[0] == 'k':
         beta = beta / 1000
     if Q is not None and Q != 1:
@@ -245,8 +245,8 @@ def binary_state_probability_cal_per_mol(deltaE, T, Q=1):
     return p_i
 
 
-def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
-                        tmm_table=DNA_TMM1, imm_table=DNA_IMM1, de_table=DNA_DE1,
+def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table="DNA_NN4",
+                        tmm_table="DNA_TMM1", imm_table="DNA_IMM1", de_table="DNA_DE1",
                         selfcomp=False, Na=50, K=0, Tris=0, Mg=0, dNTPs=0, saltcorr=5,
                         verbose=False):
     """
@@ -350,6 +350,14 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
 
         It might be nice to calculate a ΔG vs ln(Q) plot ()
     """
+    if isinstance(nn_table, str):
+        nn_table = energy_tables[nn_table]
+    if isinstance(tmm_table, str):
+        tmm_table = energy_tables[tmm_table]
+    if isinstance(imm_table, str):
+        imm_table = energy_tables[imm_table]
+    if isinstance(de_table, str):
+        de_table = energy_tables[de_table]
     comb_table = nn_table.copy()
     comb_table.update(tmm_table)
     comb_table.update(imm_table)
@@ -504,8 +512,8 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN4,
 
 
 
-def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
-          tmm_table=DNA_TMM1, imm_table=DNA_IMM1, de_table=DNA_DE1,
+def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table="DNA_NN4",
+          tmm_table="DNA_TMM1", imm_table="DNA_IMM1", de_table="DNA_DE1",
           dnac1=25, dnac2=25, selfcomp=False, Na=50, K=0, Tris=0, Mg=0,
           dNTPs=0, saltcorr=5, molar_unit='nM'):
     """
@@ -573,7 +581,6 @@ def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
      - saltcorr: See method 'Tm_GC'. Default=5. 0 means no salt correction.
 
     """
-
     deltaH, deltaS = hybridization_dH_dS(seq, check, c_seq, shift,
                                          nn_table, tmm_table, imm_table, de_table,
                                          selfcomp, Na, K, Tris, Mg, dNTPs, saltcorr)
@@ -606,7 +613,7 @@ def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table=DNA_NN3,
     # K = exp(-dG/RT) = 1
     #
     # See e.g. SantaLucia & Hicks (2004) eq (3).
-    R = 1.987  # universal gas constant in Cal/degrees C*Mol
+    # R = 1.987  # universal gas constant in Cal/degrees C*Mol
     # deltaH is in kcal/mol, deltaS is in cal/mol/K
     Tm = (1000 * deltaH) / (deltaS + (R * (math.log(k)))) - 273.15
     # ΔG° = ΔH° - T*ΔS°

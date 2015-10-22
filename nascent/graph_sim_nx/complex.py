@@ -14,6 +14,7 @@
 ##    You should have received a copy of the GNU General Public License
 ##    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+# pylint: disable=C0103
 
 """
 
@@ -181,6 +182,9 @@ class Complex(nx.Graph):
 
     def hybridization_fingerprint(self):
         """
+        Return a hash based on the current hybridizations in the complex.
+        (As opposed to other factors determining the complex structure such as domains,
+        backbone and stacking interactions).
         Challenge: How to
         (1) Ensure that domain connections are precisely specified. E.g. if we have two copies of strand sA and
             two copies of strand sB, and we have the connection: {sA.da, sB.dA}
@@ -320,9 +324,9 @@ class Complex(nx.Graph):
 
         For this, I will experiment with primitive list-based representations rather than making full
         element objects.
-        path_edges = [(1, [(length, source, target), ...]),
-                      (3, [(length, source, target), ...]),
-                      (2, [(length, source, target)]
+        path_edges = [(1, [(length, length_sq, source, target), ...]),
+                      (3, [(length, length_sq, source, target), ...]),
+                      (2, [(length, length_sq, source, target)]
         Where 1 indicates a list of single-stranded edges,
         2 indicates a hybridization edge, and 3 indicates a list of stacked edges.
         Since only the interaction type and lenghts are important, maybe just
@@ -342,9 +346,11 @@ class Complex(nx.Graph):
             if target == source.stack_partner:
                 interaction = STACKING_INTERACTION
                 length = 1
+                length_sq = 1
             elif target == source.hyb_partner:
                 interaction = HYBRIDIZATION_INTERACTION
-                length = 1
+                length = 1 # one nm from one helix to the next. We really don't know for sure because it turns.
+                length_sq = 1
             elif target in (source.bp_upstream, source.pb_downstream):
                 if source.hyb_partner and \
                     ((source.end == "5p" and target == source.pb_downstream) or
@@ -352,11 +358,15 @@ class Complex(nx.Graph):
                     # Above could probably be done with an XOR:
                     # (source.end == "5p") != (target == source.pb_downstream) # boolean xor
                     # (source.end == "5p") ^ (target == source.pb_downstream)  # bitwise xor
+                    # We have a stacked duplex:
                     interaction = STACKING_INTERACTION
-                    length = 1
+                    length = source.domain.ds_length_nm
+                    length_sq = source.domain.ds_length_sq
                 else:
+                    # We have a single-stranded domain:
                     interaction = PHOSPHATEBACKBONE_INTERACTION
-                    length = source.domain.length   # length vs length_bp vs length_nm...
+                    length = source.domain.ss_length_nm     # mean end-to-end length; not contour length
+                    length_sq = source.domain.ss_length_sq
             else:
                 raise ValueError("Could not determine interaction between %s and %s" % (source, target))
 
@@ -369,11 +379,21 @@ class Complex(nx.Graph):
                 interaction_group = []
                 last_interaction = interaction
             if length_only:
-                interaction_group.append(length)
+                if length_only == 'sq':
+                    interaction_group.append(length_sq)
+                elif length_only == 'both':
+                    interaction_group.append((length, length_sq))
+                else:
+                    interaction_group.append(length)
             else:
-                interaction_group.append((length, source, target))
+                interaction_group.append((length, length_sq, source, target))
         if summarize and length_only:
-            return [(interaction, sum(lengths)) for interaction, lengths in path_edges]
+            if length_only == 'both':
+                # Return a list of (interaction, (length, length_squared)) tuples:
+                return [(interaction, (sum(lengths) for lengths in zip(*lengths_tup))) # pylint: disable=W0142
+                        for interaction, lengths_tup in path_edges]
+            else:
+                return [(interaction, sum(lengths)) for interaction, lengths in path_edges]
         return path_edges
 
 
@@ -396,6 +416,10 @@ class Complex(nx.Graph):
         """
         Determine whether domain1 and domain2 can hybridize and what the energy penalty is,
         i.e. loop energy, helix-bending energy, etc.
+        Returns:
+            :activity:
+        so that
+            c_j = k_j * activity * N_A⁻¹
 
         Flow-chart style:
         1. Are the two domains connected by a single ds helix?
@@ -468,19 +492,42 @@ class Complex(nx.Graph):
 
         ## 5p3p-level shortest path:
         path = self.ends5p3p_shortest_path(domain1, domain2)
-        path_elements = self.end5p3p_path_partial_elements(path, length_only=True, summarize=True)
+        path_elements = self.end5p3p_path_partial_elements(path, length_only='both', summarize=True)
         # list of [(interaction, total-length), ...]
-        _, LRE_len, LRE_idx = max((interaction, tot_length, i)
-                                  for i, (interaction, tot_length) in enumerate(path_elements)
-                                  if interaction in (STACKING_INTERACTION, HYBRIDIZATION_INTERACTION))
-        LRE = path_elements.pop(LRE_idx)
-        SRE_len = sum(tot_length for interaction, tot_length in path_elements)
+        # For rigid, double-helical elements, element length, l, is N_bp * 0.34 nm.
+        # For single-stranded elements, we estimate the end-to-end distance by splitting the strand into
+        #   N = N_nt*0.6nm/1.8nm segments, each segment being the Kuhn length 1.8 nm of ssDNA,
+        # where 0.6 nm is the contour length of ssDNA and N_nt is the number of nucleotides in the strand.
+        #   E[r²] = ∑ Nᵢbᵢ² for i ≤ m = N (1.8 nm)²
+        #         = round(N_nt*0.6nm/1.8nm) (1.8 nm)² = N_nt * 0.6/1.8 * 1.8*1.8 nm² = N_nt 0.6*1.8 nm²
+        #         = N_nt * lˢˢ * λˢˢ = N_nt * 1.08 nm²
+        _, LRE_len, LRE_len_sq, LRE_idx = max((interaction, elem_length, elem_len_sq, i)
+                                              for i, (interaction, (elem_length, elem_len_sq))
+                                              in enumerate(path_elements)
+                                              if interaction in (STACKING_INTERACTION, HYBRIDIZATION_INTERACTION))
+        LRE = path_elements[LRE_idx] # .pop(LRE_idx)
+        # Exclude LRE when calculating SRE length:
+        SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+                      for interaction, elem_len_sq in sub_path)
 
-        if LRE_len > SRE_len:
+        # Comparing mean-end-to-end-squared values vs mean end-to-end lengths vs full contour length?
+        # There is a difference that sum of squares does not equal the square of sums, so
+        # even if LRE_len_sq is > SRE_len_sq, LRE_len could be less than SRE_len.
+        # Also, while ds duplexes has full contour length equal to mean end-to-end length,
+        # this is not true for ssDNA. Indeed if calculating whether two domains *can* reach,
+        # it is probably better to use domain.ds_length.
+
+
+        if LRE_len_sq > SRE_len_sq:
             # The domains cannot reach each other.
             # Hybridization requires helical bending; TODO: Not implemented yet.
-            return None
-        return loop_energy(LRE_len+SRE_len)
+            return 0
+        # TODO: Implement loop energy or activity calculation...
+        # Currently not accounting for bending or zipping energy.
+        # Mean end-to-end squared distance.
+        # We already have the squared length, Nᵢbᵢ², so we just need to sum:
+        E_r_sq = sum()
+
 
 
 
