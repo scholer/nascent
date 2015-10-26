@@ -70,6 +70,9 @@ class SystemMgr():
         self.params = params
         self.temperature = params.get('temperature', 300)
         self.volume = volume
+        # Base single-molecule activity of two free single reactants in volume.
+        self.specific_bimolecular_activity = 1/self.volume/N_AVOGADRO # × M
+        self.include_steric_repulsion = True
         self.complexes = []
         self.removed_complexes = []
         self.strands = strands
@@ -79,7 +82,7 @@ class SystemMgr():
         print("Strands in self.strands_by_name:")
         print("\n".join("- %10s: %s species" % (sname, len(strands))
                         for sname, strands in self.strands_by_name.items()))
-        self.domains_list = [domain for strand in strands for domain in strand.Domains]
+        self.domains_list = [domain for strand in strands for domain in strand.domains]
         self.domains = set(self.domains_list)
 
         # Stats - counts
@@ -121,8 +124,13 @@ class SystemMgr():
         ### System graphs ###
         # Not sure whether we should have system-level graphs or a graph for each complex.
 
+        ## Symbol nomenclature:
+        ## Sᵢ, S₁, S₂ - domain species (domain name). Domains with the same sequence are of the same specie.
+        ## Fᵢ, F₁, F₂ - domain state fingerprint - domains of the same specie and in the same strand/complex state.
+        ## Dᵢ, D₁, D₂ - domain instances, individual domain molecules.
 
         ### Caches: ###
+        self.cache = {} # defaultdict(dict)
         # Standard enthalpy and entropy of hybridization,
         # indexed as [frosenset({d1.Name, d2.Name})][0 for enthalpy, 1 for entropy]
         # - Note: index with frozenset((a,b)) or just cache[a, b] = cache[b, a] = value? # d[1,2] same as d[(1,2)]
@@ -130,8 +138,7 @@ class SystemMgr():
         # --> dict assignment with frozenset is 0.4/0.5 us vs 0.17/0.05 for the "double tuple entry" (python/pypy),
         #       so if you have the memory for it, go for the faster tuples which takes 2x memory.
         # Note: Whenever I use "name", I'm refering to the name of the specie - domain or strand specie.
-        self.domain_dHdS = {}
-
+        self.cache['domain_hybridization_energy'] = self.domain_dHdS = {} # indexed simply as Sᵢ or {S₁, S₂} ?
 
         ## Relative activity - used to moderate the activity of domains based on their accessibility in a complex.
         # Note: Not sure whether to use this or use a "loop energy" type of activation energy.
@@ -141,15 +148,33 @@ class SystemMgr():
         # relative activity is 1 for free strands
         # For inter-complex reactions (including free strands), the combined relative activity is simply the product:
         #   rel_activity = dom1_rel_activity * dom2_rel_activity
-        self.relative_activity_cache = defaultdict(dict)
+
+        self.cache['intracomplex_activity'] = {}    # indexed by {F₁, F₂}
+        self.cache['stochastic_rate_constant'] = {} # indexed by {F₁, F₂}
+        # For surface/steric/electrostatic reduction in k_on.
+        # TODO: Check surface-hybridization kinetics papers whether reduction in k_on yields same reduction in k_off.
+        #       I.e. if the surface reduces Tm, hybridization energy or equivalent.
+        #       For electrostatic and possibly steric, I would expect a reuction in Tm but not for surfaces,
+        #       so it is a question whether these can in fact be treated equally.
+        self.cache['domain_accessibility'] = {}     # indexed by F₁
+        # Note: F₁, F₂ is domain-state-fingerprints. It is supposed to be invariant for domain instances
+        # of the same domain specie in the same complex state. E.g. two free "domain A" should be in the same state.
+        # Alternative name: dom_specie_spec
+
+        #self.relative_activity_cache = defaultdict(dict)
+
+        ## State-dependent hybridization energy cache
+        # I think this was for hybridization that required e.g. bending or zippering...
+        self._statedependent_dH_dS = {}  # indexed as {Fᵢ}
 
 
         # mapping with the different domains in different states
-        # indexed as: (domain-strand-specie, complex-state-fingerprint) => list of domains in this conformation
-        # However, again we have to problem of fully specifying exactly WHAT strand-domain within the
-        # complex we are talking about, if the complex has multiple copies of that strand.
-        #
-        self.domain_state_subspecies = defaultdict(dict)
+        # indexed as: Fᵢ => list of domains in this conformation
+        # For simple complexes, Fᵢ is just (domain-strand-specie, complex-state-fingerprint)
+        # However, if the complex has multiple copies of that strand, the above is insufficient to specifying
+        # which strand-domain within the complex we are talking about.
+        # Using Fᵢ = domain.domain_state_fingerprint() will give us a proper hash.
+        self.domain_state_subspecies = {}
         for domain in self.domains_list:
             self.domain_state_subspecies[domain.domain_state_fingerprint()] = domain
 
@@ -161,10 +186,8 @@ class SystemMgr():
 
         # Propencity functions:  aj(x)
         # {(domain1, cstate), (domain2, cstate)} => a
-        self.propensity_functions = {}
+        self.propensity_functions = {} # Indexed by indexed by {F₁, F₂}
 
-        # Futher caches:
-        self._statedependent_dH_dS = {}
 
 
     def init_possible_reactions(self):
@@ -283,7 +306,7 @@ class SystemMgr():
         * "frequency" because of unit s⁻¹.
         ** Could also be "propensity", but could be confused with propensity *function*, a_j.
         * "stochastic rate constant"  ⁽¹,²⁾
-        * "specific probability rate constant"
+        * "specific probability rate constant" (³)
         Regarding "probability" vs "frequency":
         * c_j has units of s⁻¹, so probability (which is unitless) wouldn't be correct.
         * The product "c_j∙dt" gives the probability that a selected pair of instances
@@ -332,41 +355,53 @@ class SystemMgr():
         Refs:
             [1]: http://people.uleth.ca/~roussel/C4000biochemnet/slides/14CME.pdf
             [2]: http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1303974/ "stochastic rate constant cμ"
+            [3]: http://www.async.ece.utah.edu/BioBook/lec4.pdf
         """
         if is_hybridizing:
-            if d1.Complex == d2.Complex != None:
+            if d1.complex == d2.complex != None:
                 # Intra-complex reaction:
                 activity = self.intracomplex_activity(d1, d2)
             else:
                 # Inter-complex reaction:
-                rel_act = [1 if d.Complex is None else self.relative_activity(d)
-                           for d in (d1, d2)]
-                activity = rel_act/self.volume
+                activity = self.specific_bimolecular_activity
+            if self.include_steric_repulsion:
+                steric_activity_factor = np.prod([1 if d.complex is None else self.steric_activity_factor(d)
+                                                  for d in (d1, d2)])
+                activity *= steric_activity_factor
+
             k_on = self.hybridization_rate_constant(d1, d2)
             # hybridization rates of free strands can be approximated as being constant
             # (somewhere between 1e5 /M/s and 1e6 /M/s). This is because the activation energy is fairly negligible.
-            # Obviously, if
-            # hybridization rate constant is in unit of /M/s = L/mol/s.
-            # We need it in number of molecules, so divide by NA
-            c = k_on*activity/N_AVOGADRO # should be e.g. 0.1 /s
+            # Hybridization rate constant, k, is in unit of /M/s = L/mol/s.
+            # Activity is always in units of M - so resultant
+            c_j = k_on*activity # should be e.g. 0.1 /s
         else:
-            k_off = self.dehybridization_rate_constant(d1, d2)
             # k_off depends on ΔG°  (at least when we are at T < Tm at molar concentrations where ΔG° < 0)
-            c = k_off
-        return c, is_hybridizing
+            k_off = self.dehybridization_rate_constant(d1, d2)
+            # For uni-molecular reactions, c_j = k_j
+            c_j = k_off
+        return c_j, is_hybridizing
+
+    def steric_activity_factor(self, d):
+        """
+        """
+        # TODO: Implement steric_activity_factor
+        return 1
 
     def intracomplex_activity(self, d1, d2):
         """
         Return the activity for hybridization of two domains within a complex.
+        TODO: Add steric/electrostatic/surface repulsion (individual activity contribution for d1 and d2,
+              so that activity = intercomplex_activity*d1_activity*d2_activity)
         """
-        assert d1.Complex == d2.Complex != None
+        assert d1.complex == d2.complex != None
         cache_key = frozenset([d.domain_state_fingerprint() for d in (d1, d2)])
         cache = self.cache['intracomplex_activity']
         if cache_key in cache:
             return cache[cache_key]
-        cmplx = d1.complex
-
-
+        activity = d1.complex.intracomplex_activity(d1, d2)
+        cache[cache_key] = activity
+        return activity
 
 
     def hybridization_rate_constant(self, d1, d2):
@@ -432,11 +467,11 @@ class SystemMgr():
         #     d2_relative_activity = [(domain2-specie, domain2-complex-state)]
         #  - If the domain strand is not in a complex, relative activity is set to 1.
         #      [{domain1-specie, complex-statedomain2-specie}, complex-fingerprint, intra-complex-reactivity)]
-        if d1.Complex is None:
+        if d1.complex is None:
             d1_rel_act = 1
-        if d2.Complex is None:
+        if d2.complex is None:
             d2_rel_act = 1
-        if d1.Complex == d2.Complex != None:
+        if d1.complex == d2.complex != None:
             rel_act = 1
 
 

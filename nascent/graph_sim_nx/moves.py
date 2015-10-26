@@ -54,19 +54,19 @@ def hybridize(domain1, domain2):
     assert domain2.Partner is None
 
     dset = frozenset((domain1, domain2))
-    #sset = frozenset(domain1.Strand, domain2.Strand)
+    #sset = frozenset(domain1.strand, domain2.strand)
     domain1.Partner = domain2
     domain2.Partner = domain1
 
-    strand1 = domain1.Strand
-    strand2 = domain2.Strand
-    c1 = strand1.Complex
-    c2 = strand2.Complex
+    strand1 = domain1.strand
+    strand2 = domain2.strand
+    c1 = strand1.complex
+    c2 = strand2.complex
 
     if strand1 == strand2:
         # If forming an intra-strand connection, no need to make or merge any Complexes
-        if strand1.Complex:
-            strand1.Complex.Connections.add(dset)
+        if strand1.complex:
+            strand1.complex.Connections.add(dset)
         return None, None
 
     new_complexes, obsolete_complexes = None, None
@@ -75,20 +75,20 @@ def hybridize(domain1, domain2):
     if c1 and c2:
         if c1 == c2:
             # Intra-complex hybridization
-            assert strand1 in c2.Strands and strand2 in c1.Strands
+            assert strand1 in c2.strands and strand2 in c1.strands
             c1.Connections.add(dset)
             c_major = c1
         else:
             # Merge the two complexs:
             #obsolete_complexes = merge_complex()
-            c_major, c_minor = (c1, c2) if (len(c1.Strands) >= len(c2.Strands)) else (c2, c1)
-            for strand in c_minor.Strands:
-                strand.Complex = c_major
-            c_major.Strands |= c_minor.Strands
+            c_major, c_minor = (c1, c2) if (len(c1.strands) >= len(c2.strands)) else (c2, c1)
+            for strand in c_minor.strands:
+                strand.complex = c_major
+            c_major.strands |= c_minor.strands
             c_major.N_strand_changes += c_minor.N_strand_changes
             c_major.Connections |= c_minor.Connections
             c_major.Connections.add(dset)
-            c_minor.Strands = []
+            c_minor.strands = []
             c_minor.Connections = {}
             obsolete_complexes = [c_minor]
     elif c1:
@@ -102,14 +102,14 @@ def hybridize(domain1, domain2):
         # Neither strands are in existing complex; create new complex
         new_complex = Complex()
         new_complexes = [new_complex]
-        new_complex.Strands |= {strand1, strand2}
-        strand1.Complex = strand2.Complex = new_complex
+        new_complex.strands |= {strand1, strand2}
+        strand1.complex = strand2.complex = new_complex
         c_major = new_complex
 
-    c_major.Domain_distances = {} # Reset distances
+    c_major.domain_distances = {} # Reset distances
     c_major.Connections.add(dset)
 
-    assert strand1.Complex == strand2.Complex != None
+    assert strand1.complex == strand2.complex != None
 
     return new_complexes, obsolete_complexes
 
@@ -122,14 +122,14 @@ def dehybridize(domain1, domain2):
     assert domain1.Partner == domain2 != None
     assert domain2.Partner == domain1 != None
 
-    strand1 = domain1.Strand
-    strand2 = domain2.Strand
-    c = strand1.Complex
-    c.Domains_distances = {}    # Reset distances.
-    assert c == strand2.Complex
+    strand1 = domain1.strand
+    strand2 = domain2.strand
+    c = strand1.complex
+    c.domains_distances = {}    # Reset distances.
+    assert c == strand2.complex
 
     dset = frozenset((domain1, domain2))
-    #sset = frozenset(domain1.Strand, domain2.Strand)
+    #sset = frozenset(domain1.strand, domain2.strand)
     domain1.Partner = None
     domain2.Partner = None
 
@@ -145,7 +145,7 @@ def dehybridize(domain1, domain2):
 
     ## Break the complex:
     # Update distance:
-    c.Domain_distances = {}
+    c.domain_distances = {}
     dist = distance_cached(domain1, domain2) # We have just reset, so needs to be re-calculated
     if dist is None:
         dom1_cc_oligos = strand1.connected_oligos()
@@ -154,10 +154,10 @@ def dehybridize(domain1, domain2):
         assert strand1 not in dom2_cc_oligos
         dom1_cc_size = len(dom1_cc_oligos) + 1  # cc = connected component
         dom2_cc_size = len(dom2_cc_oligos) + 1
-        print("dom1_cc_size=%s, dom2_cc_size=%s, len(c.Strands)=%s" %
-              (dom1_cc_size, dom2_cc_size, len(c.Strands)))
+        print("dom1_cc_size=%s, dom2_cc_size=%s, len(c.strands)=%s" %
+              (dom1_cc_size, dom2_cc_size, len(c.strands)))
 
-        assert len(c.Strands) == dom1_cc_size + dom2_cc_size -1
+        assert len(c.strands) == dom1_cc_size + dom2_cc_size -1
 
         if dom2_cc_size > 1 or dom1_cc_size > 1:
             # Case (a) Two smaller complexes or case (b) one complex and one unhybridized strand
@@ -168,16 +168,16 @@ def dehybridize(domain1, domain2):
                 new_complex_oligos = set(dom2_cc_oligos + [strand2])
             else:
                 domain_major, domain_minor = domain2, domain2
-                # Remember to add the departing domain.Strand to the new_complex_oligos list:
+                # Remember to add the departing domain.strand to the new_complex_oligos list:
                 new_complex_oligos = set(dom1_cc_oligos + [strand1])
 
             if dom2_cc_size > 1 and dom1_cc_size > 1:
                 # Case (a) Two smaller complexes - must create a new complex for detached domain:
                 c_new = Complex()
-                c.Strands -= new_complex_oligos
-                c_new.Strands |= new_complex_oligos
+                c.strands -= new_complex_oligos
+                c_new.strands |= new_complex_oligos
                 new_complex_domains = {odomain for oligo in new_complex_oligos
-                                       for odomain in oligo.Domains}
+                                       for odomain in oligo.domains}
                 new_complex_connections = {edge for edge in c.Connections
                                            if any(dom in new_complex_domains for dom in edge)}
                 c.Connections -= new_complex_connections
@@ -185,13 +185,13 @@ def dehybridize(domain1, domain2):
                 new_complexes = [c_new]
             else:
                 # case (b) one complex and one unhybridized strand - no need to do anything further
-                c.Strands.remove(domain_minor.Strand)
+                c.strands.remove(domain_minor.strand)
         else:
             # Case (c) Two unhybridized strands
-            c.Strands -= {strand1, strand2}
-            assert c.Strands == set()
+            c.strands -= {strand1, strand2}
+            assert c.strands == set()
             obsolete_complexes = [c]
-            strand1.Complex, strand2.Complex = None, None
+            strand1.complex, strand2.complex = None, None
 
     assert domain1.Partner is None
     assert domain2.Partner is None
@@ -207,13 +207,13 @@ def dehybridize(domain1, domain2):
 #    assert c_major != c_minor
 #    #if other_complex == self:
 #    #    return
-#    for strand in c_minor.Strands:
-#        strand.Complex = c_major
-#    #self.Strands += other_complex.Strands
-#    c_major.Strands |= c_minor.Strands
+#    for strand in c_minor.strands:
+#        strand.complex = c_major
+#    #self.strands += other_complex.strands
+#    c_major.strands |= c_minor.strands
 #    c_major.N_strand_changes += c_minor.N_strand_changes
-#    #c_major.Strands_changes.append(("merge", str(other_complex.Strands_changes), len(c_major.Strands)))
-#    #c_major.Strands_history.append(str(sorted([str(s) for s in c_major.Strands])))
+#    #c_major.strands_changes.append(("merge", str(other_complex.strands_changes), len(c_major.strands)))
+#    #c_major.strands_history.append(str(sorted([str(s) for s in c_major.strands])))
 #    c_major.Connections |= c_minor.Connections
 #    # | is the "union" operator for sets, & is intersection and ^ is symdiff
 #    if new_connections:

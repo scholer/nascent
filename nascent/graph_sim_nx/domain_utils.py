@@ -37,14 +37,14 @@ N_AVOGADRO = 6.022e23
 def distance_cached(domain1, domain2, return_parents=False):
     """
     """
-    distances = domain1.Strand.Complex.Domain_distances
+    distances = domain1.strand.complex.domain_distances
     parents = {}
     ftset = frozenset((domain1, domain2)) # "from-to" set
     if ftset in distances:
         #return distances[ftset]
         return (distances[ftset], parents) if return_parents else distances[ftset]
 
-    # Complex.Domain_distances should incorporate Strand.Domain_distances
+    # Complex.domain_distances should incorporate Strand.domain_distances
     # when strand is added,
     if domain2 == domain1:
         print("domain2 == domain1 - shouldn't happen, but OK.")
@@ -52,7 +52,7 @@ def distance_cached(domain1, domain2, return_parents=False):
         return (0, parents) if return_parents else 0
 
     print("Determining distance from %s to %s in complex %s" %
-          (domain1.Name, domain2.Name, domain1.Strand.Complex))
+          (domain1.Name, domain2.Name, domain1.strand.complex))
     Q = deque()
     dset = frozenset((domain1, domain1)) # = {domain1}, can only have unique elements.
     #assert dset in distances and distances[dset] == 0

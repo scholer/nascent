@@ -52,7 +52,7 @@ def complex_sizes_hist(complexes):
     """
     hist = {}
     for c in complexes:
-        N = len(c.Strands)
+        N = len(c.strands)
         if N not in hist:
             hist[N] = 0
         hist[N] += 1
@@ -97,7 +97,7 @@ class Simulator():
         # Stats_cache: dict <stats type>: <stats>, where stats is a list of tuples:
         # [(Temperature, N_dom_hybridized, %_dom_hybridized, N_oligos_hybridized, %_oligos_hybridized), ...]
         self.Stats_cache = {k: [] for k in self.Default_statstypes}
-        self.Complex_size_stats = {k: [] for k in self.Default_statstypes}
+        self.complex_size_stats = {k: [] for k in self.Default_statstypes}
         self.print_setup()
         self.print_statsline_when_saving = params.get("print_statsline_when_saving", True)
 
@@ -151,7 +151,7 @@ class Simulator():
             print("c_each: {:0.04g} uM".format(c_each*1e6), file=fp)
             print("n_species (copies):", len(strands), file=fp)
             print("c_strand_total: {:0.04g} uM".format(c_strand_total*1e6), file=fp)
-            for domain in strands[0].Domains:
+            for domain in strands[0].domains:
                 print("Domain:", domain.Name, file=fp)
                 print(" - total copy count of this domain:", len(sysmgr.domains_by_name[domain.Name]), file=fp)
                 print("\n".join(" - %s: %s" % (att, getattr(domain, att))
@@ -258,19 +258,19 @@ class Simulator():
                 fp.write("\n".join(", ".join(str(i) for i in line) for line in self.Stats_cache[statstype])+"\n")
             self.Stats_cache[statstype] = []    # Reset the cache
             c_size_fn = os.path.splitext(outputfn)[0] + '.complex_sizes.txt'
-            if self.Complex_size_stats[statstype]:
+            if self.complex_size_stats[statstype]:
                 with open(c_size_fn, 'a') as fp:
                     # dumping a list of dicts should be append'able.
                     # yaml ends dump with \n
-                    #yaml.dump(self.Complex_size_stats[statstype], fp, default_flow_style=False)
+                    #yaml.dump(self.complex_size_stats[statstype], fp, default_flow_style=False)
                     # yaml is not reliable for large data files, plus it is SUPER SLOW.
                     # list of dicts:
                     # [{T: {N: count of complexes with size N}}]
                     # T: size,count  size,count  ...
                     fp.write("\n".join("%s: " % T + "\t".join("%s,%s" % tup for tup in hist.items())
-                                       for entry in self.Complex_size_stats[statstype]
+                                       for entry in self.complex_size_stats[statstype]
                                        for T, hist in entry.items()) + "\n")
-                self.Complex_size_stats[statstype] = [] # reset cache
+                self.complex_size_stats[statstype] = [] # reset cache
 
 
     def record_stats_snapshot(self, T, statstype="changesampling"):
@@ -283,7 +283,7 @@ class Simulator():
                                             sysmgr.N_strands_hybridized/sysmgr.N_strands
                                            ))
         # TODO: Consider option to also count all "non-complexed strands (as complexes of size 1)."
-        self.Complex_size_stats[statstype].append({T: complex_sizes_hist(sysmgr.complexes)})
+        self.complex_size_stats[statstype].append({T: complex_sizes_hist(sysmgr.complexes)})
 
 
     def thermodynamic_meltingcurve(self, T_start, T_finish, delta_T=None, volume=None):

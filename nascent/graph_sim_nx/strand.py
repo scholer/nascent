@@ -69,12 +69,12 @@ class Strand(nx.Graph):
         self.add_edges_from(edges)
         # Make sure all domains have this strand registered as their parent:
         for domain in domains:
-            domain.Strand = self
+            domain.strand = self
 
 
         ## Adjacency and distance matrices ##
         # could be {frozenset(d1, d2): dist} or a matrix.
-        self.Strand_domain_distances = {
+        self.strand_domain_distances = {
             frozenset(d1, d2): 1
             for d1, d2 in zip(iter(domains), iter(domains[1:]))}
         n = len(domains)

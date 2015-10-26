@@ -22,7 +22,7 @@ Module for
 
 """
 
-
+import math
 import itertools
 from collections import deque
 import networkx as nx
@@ -31,7 +31,10 @@ import numpy as np
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
-from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)
+from .constants import (PHOSPHATEBACKBONE_INTERACTION,
+                        HYBRIDIZATION_INTERACTION,
+                        STACKING_INTERACTION,
+                        N_AVOGADRO, AVOGADRO_VOLUME_NM3)
 from .structural_elements import strand, helix, bundle
 from .structural_elements.strand import SingleStrand
 from .structural_elements.helix import DsHelix
@@ -92,6 +95,15 @@ class Complex(nx.Graph):
                 self.strands_by_name[strand.name] = [strand]
             else:
                 self.strands_by_name[strand.name].append(strand)
+
+        # Domains, indexed by name:
+        self.domains_by_name = {}
+        for domain in domains:
+            if domain.name not in self.domains_by_name:
+                self.domains_by_name[domain.name] = [domain]
+            else:
+                self.domains_by_name[domain.name].append(domain)
+
 
         # State fingerprint is used for cache lookup
         # To reduce recalculation overhead, it is separated into three parts:
@@ -412,20 +424,60 @@ class Complex(nx.Graph):
         return shortest_path(self.end5p3p_graph, domain1.end5p, domain2.end5p)
 
 
-    def intra_complex_hybridization(self, domain1, domain2):
-        """
-        Determine whether domain1 and domain2 can hybridize and what the energy penalty is,
-        i.e. loop energy, helix-bending energy, etc.
-        Returns:
-            :activity:
-        so that
-            c_j = k_j * activity * N_A⁻¹
+    def intracomplex_activity(self, domain1, domain2):
+        r"""
+        Returns
+            :intracomplex_activity:
+        between domain1 and domain2, so that
+            c_j = k_j * intracomplex_activity
+        The intracomplex activity is basically just:
+            activity = 1 / (N_A * effective_volume) = N_A⁻¹ * Ω⁻¹    [unit: M = mol/L]
+        where NA is Avogadro's constant, 6.022e23/mol.
 
-        Flow-chart style:
+        The activity has the same value as the unitless (P_loop/P_v0) just multiplied with "× M" to get unit of M.
+        Thus, the activity returned by this function can be interpreted as a relative probability ratio
+        denoting the probability that two domains/reactants will be in sufficient proximity to react,
+        relative to the probability of two reactants confined within an Avogadro volume, v0 will react, with
+            v0 = 1/(NA M) = 1/(6.022e23 mol⁻¹ mol L⁻¹) = 1.6e-27 m³ = 1.6 nm³
+        Two molecules confined in v0 is equivalent to a solution of reactants with a concentration of 1 M
+        (i.e. standard conditions and a standard activity of 1). The reason we want to specify a relative collision
+        probability / activity (instead of an absolute) is that determining reaction probabilities from
+        first principles is very hard. Calculating a relative probability/activity allows us to use empirical data
+        such as k_on, and energies (ΔH, ΔS) at standard conditions.
+
+        For a walkthrough of this argument, see Dannenberger et al, 2015.
+
+        In addition to determining the stochastic rate constant, activity (or volume or inverse volume)
+        can also be used to calculate the loop energy:
+        dG  = R T ln(effective_volume/avogadro_volume)      # avogadro_volume = 1/(NA × M) = 1.6 nm³
+            = R T ln((NA × M)/molecular_activity)           # molecular_activity = 1/effective_volume
+            = - R T ln(loop_activity × M⁻¹)                 # activity = 1/(effective_volume × NA)
+
+        Initially, I considered returning inverse_volume (L-1) or mean-root-square-radius (m2), but I think
+        activity is the most straight-forward to use and it can always be converted to either of the other values.
+
+        Regarding names:
+        - "activity" -  should be have unit of M=mol/L...
+                        although at the single molecule level it could be argued to be just 1/L.
+        - volume    -   Unit of L, obviously. (Or maybe m³ or nm³.)
+        - probability   Should be unit-less. Although we can just say that we return a relative probability factor
+                        so that c_j = k_j × rel_prob_factor × M.
+
+        Alternative names:
+        - loop_activity
+        - intracomplex_activity             [could be return value as 1/L or mol/L=M]
+        - intracomplex_stochastic_activity
+        - molar_collision_probability  (except it is relative)
+        - spatial_overlap_factor
+        - localization_cost  (except we usually associate "cost" with energy)
+
+        ## IMPLEMENTATION: ##
+
+        a: Flow-chart style:
         1. Are the two domains connected by a single ds helix?
         2. (...)
 
-        More direct approach:
+        b: More direct approach:
         1. Determine one (or multiple?) path(s) connecting domain 1 and 2.
         2. Determine the structural elements that make up this path:
             Flexible, single-stranded connections.
@@ -476,6 +528,9 @@ class Complex(nx.Graph):
         This *can* be recovered via edge attributes, e.g. edge A-B can be directed or otherwise
         inform that B is on the same side of A as c is. But that might be just as much work
         as just using the 5p3p-ends graph.
+
+        Note: Previously I also intended this function to determine whether domain1 and domain2 can hybridize
+        and what the energy penalty is, i.e. loop energy, helix-bending energy, etc.
         """
         #path = self.domains_shortest_path(domain1, domain2)
         #path_elements = self.domain_path_elements(path)
@@ -505,10 +560,14 @@ class Complex(nx.Graph):
                                               for i, (interaction, (elem_length, elem_len_sq))
                                               in enumerate(path_elements)
                                               if interaction in (STACKING_INTERACTION, HYBRIDIZATION_INTERACTION))
-        LRE = path_elements[LRE_idx] # .pop(LRE_idx)
+        #LRE = path_elements[LRE_idx] # .pop(LRE_idx)
         # Exclude LRE when calculating SRE length:
-        SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
-                      for interaction, elem_len_sq in sub_path)
+        SRE_lengths, SRE_sq_lengths = zip(*[(elem_length, elem_len_sq)
+                                            for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+                                            for interaction, (elem_length, elem_len_sq) in sub_path])
+        # SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+        #               for interaction, (elem_length, elem_len_sq) in sub_path)
+        SRE_len, SRE_len_sq = sum(SRE_lengths), sum(SRE_sq_lengths)
 
         # Comparing mean-end-to-end-squared values vs mean end-to-end lengths vs full contour length?
         # There is a difference that sum of squares does not equal the square of sums, so
@@ -517,18 +576,86 @@ class Complex(nx.Graph):
         # this is not true for ssDNA. Indeed if calculating whether two domains *can* reach,
         # it is probably better to use domain.ds_length.
 
-
-        if LRE_len_sq > SRE_len_sq:
+        if LRE_len > SRE_len:
             # The domains cannot reach each other.
-            # Hybridization requires helical bending; TODO: Not implemented yet.
+            # Hybridization requires helical bending; TODO: Not implemented yet; just returning 0 meaning "impossible".
             return 0
-        # TODO: Implement loop energy or activity calculation...
-        # Currently not accounting for bending or zipping energy.
+        ## There is probably some profound relation between the elements and the gamma factor.
+        ## E.g. if the contour length is long enough for the domains to reach, but the
+        ## SRE mean squared end-to-end distance is less than the LRE, then the SRE will rarely
+        ## be sufficiently extended for the domains to hybridize. This decrease in spatial pdf
+        ## can be considered equivalent to an increase in effective volume.
+        ## Another, more complex case, is when the SRE has only (a) one, or (b) a few links,
+        ## in which case the mean squared end-to-end distance is not a good measure of spatial pdf.
+        ## In the case where SRE is a rigid 1-element chain of same length as the LRE, the pdf
+        ## is essentially a sphere centered at the joint between LRE and SRE. (Similar case when
+        ## the LRE is flanked by two rigid elements.)
+
+        # Example 1: SRE_len = 10 * 4 nm = 40 nm; SRE_len_sq = 10 * (4 nm)**2 = 160 nm2.
+        #            LRE_len = 20 nm,             LRE_len_sq = (20 nm)**2 = 400 nm2.
+        #            LRE_len < SRE_len, but LRE_len_sq > SRE_len_sq
+        #            SRE_len/LRE_len = 2 -- higher => lower gamma_corr.
+        #            LRE_len_sq/SRE_len_sq = 2.5 -- higher => higher gamma_corr.
+        # We could, for instance, say: gamma_corr = 1 + ln(LRE_len_sq/SRE_len_sq)
+        # Hmm... probably need to do some further analysis of different examples and try to figure out
+        # a proper relationship between link-elements and gamma_corr... And it might not be as simple
+        # as a simple exponential correction to (P_loop/P_v0).
+
+        gamma_corr = 1
+        if LRE_len_sq > SRE_len_sq:
+            # Domains can reach, but requires the SRE to extend beyond the mean squared end-to-end distance.
+            # Should probably be approximated with some continuous function.
+            # gamma = (3/2)*gamma_corr;
+            gamma_corr += 0.5
+        # Mean end-to-end squared distance between the two domains, aka E_r_sq:
         # Mean end-to-end squared distance.
         # We already have the squared length, Nᵢbᵢ², so we just need to sum:
-        E_r_sq = sum()
 
+        mean_sq_ee_dist = LRE_len_sq + SRE_len_sq       # unit of nm
 
+        ## Regarding "effective volume" vs P_loop/P_v0: ##
+        # Using "effective volume" is more intuitive than P^rc_loop/P^rc_v0.
+        # However, stricly speaking we ARE considering reactant proximity/localization/collision probability
+        # relative to standard conditions (1 M) using probability distribution function of the loop-connected reactants.
+        # This happens to reduce to something that looks like P_loop/P_v0 = v_0/v_eff,
+        # where we can use the mean squared end-to-end distance (mean_sq_ee_dist aka E[r²]) to calculate v_eff.
+        # However, this is just an approximation valid only for E[r²] >> rc (rc = critical interaction distance),
+        # which happens to reduce to a simple expression for P_loop and an expression for P_loop/P_v0 that does not
+        # depend on rc. In general, especially if rc is significant, P_loop/P_v0 could very well depend on rc!
+        # There is also no general guarantee that the expression for P_rel = P_loop/P_v0 will reduce to something with
+        # an easily-identifiable v_eff subexpression. In that case we can simply define v_eff as
+        #   v_eff = v_0 * P_v0(rc) / P_loop(rc) = v_0 / P_rel(rc)       # P_rel < 1 (unless they are really close)
+        # although in practice we would not need to calculate v_eff, we would just use
+        #   activity = P_v0(rc) / P_loop(rc) × M
+
+        effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2)
+        #effective_volume = (2/3*math.pi*mean_sq_ee_dist)**gamma * 1e-24 # 1e-24 to convert nm3 to L.
+        #activity = (1/N_AVOGADRO)*(1/effective_volume)
+        # Using AVOGADRO_VOLUME_NM3 to avoid redundant conversions:
+        activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3
+        if gamma_corr > 1:
+            activity = activity**gamma_corr
+
+        ## When/where to apply extra gamma? ##
+        # Note: The extra gamma really should be applied to the activity, not just the effective volume:
+        # That is, we would always use exponent of 3/2 for calculating effective volume from mean_sq_ee_dist,
+        # and apply the extra gamma to the unitless activity (v0/effective_volume) as:
+        #   activity = (v0/effective_volume) ** gamma_corr
+        # where gamma_corr = 1+x for gamma_org = 3/2+x
+        # This is also what is effectively done in (Dannenberger, 2015), where γ is outside the expression
+        #     ΔG = - R T γ ln(C/E[r2])
+        # TODO: Check that this is also how Dannenberger actually does it when calculating k₊ in the java code.
+        # To keep ΔG "reasonable" for large E[r2], (Dannenberger et al, 2015) adjusts C approximately as:
+        #   C = 2.2e-18 m² γ - 2.7e-18 m² = 3.34 C0 γ - 4.0 C0,  C(γ=1.5) = C0
+        # Where C0 = 3/(2π) v0**(2/3) = 6.7e-19 m²
+        # This corresponds to increasing Avogadro volume, v0.
+
+        # Note: The "activity" as calculated above appears on paper to be a unitless ratio (P_loop/P_v0).
+        # However, since it is relative to standard conditions (1 M), we just have to implicitly multiply
+        # the unitless ratio with "× 1 M" to get a proper activity.
+
+        # Currently not accounting for bending or zipping energy.
+        return activity
 
 
 
