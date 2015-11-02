@@ -531,6 +531,32 @@ class Complex(nx.Graph):
 
         Note: Previously I also intended this function to determine whether domain1 and domain2 can hybridize
         and what the energy penalty is, i.e. loop energy, helix-bending energy, etc.
+
+
+        ## GLOBAL vs LOCAL model: Using only the minimum loop (shortest path) vs all paths ##
+
+        Consider the following two model cases:
+         ˏ_____A_____ˍ_____B_____ˍ_____C_____₅       ˏ_____A_____ˍ_____B_____ˍ_____C_____₅
+         |           ⁞‾‾‾‾‾‾‾‾‾‾‾               -->  |           ⁞‾‾‾‾‾‾‾‾‾‾‾
+         |           ˋ̃ ̃ ̃ ̃ ̃ ̃ ̃ ̃ ̃ ̃                      |           ⁞___________
+         ˋ‾‾‾‾‾D‾‾‾‾‾ˉ‾‾‾‾‾E‾‾‾‾‾ˉ‾‾‾‾‾F‾‾‾‾‾³'      ˋ‾‾‾‾‾D‾‾‾‾‾ˉ‾‾‾‾‾E‾‾‾‾‾ˉ‾‾‾‾‾F‾‾‾‾‾³'
+         ˏ_____A_____ˍ_____B_____ˍ_____C_____₅       ˏ_____A_____ˍ_____B_____ˍ_____C_____₅
+         |           ⁞‾‾‾‾‾‾‾‾‾‾‾ ‾‾‾‾‾‾‾‾‾‾‾|  -->  |           ⁞‾‾‾‾‾‾‾‾‾‾‾ ‾‾‾‾‾‾‾‾‾‾‾|
+         |           ˋ̃ ̃ ̃ ̃ ̃ ̃ ̃ ̃ ̃ ̃   ₃__________⌡       |           ⁞___________ ₃__________⌡
+         ˋ‾‾‾‾‾D‾‾‾‾‾ˉ‾‾‾‾‾E‾‾‾‾‾ˉ‾‾‾‾‾F‾‾‾‾‾³'      ˋ‾‾‾‾‾D‾‾‾‾‾ˉ‾‾‾‾‾E‾‾‾‾‾ˉ‾‾‾‾‾F‾‾‾‾‾³'
+
+        In both cases, when connecting (B3p-E5p), we would only consider the shortest path, (B3p-A5p-A3p-D5p-D3p-E5p).
+        However, the second-shortest path (B3p-B5p-C3p-C5p-F3p-F5p-E3p-E5p) would clearly also have an influence
+        on the PDF overlap (or, activity/effective_volume) of domain B and E.
+
+        To make the energy calculation more precise, you could do a search for secondary and tertiary loops.
+        If these are present, that would increase the activity.
+
+        More refs:
+        * https://en.wikipedia.org/wiki/Loop_entropy
+
+        TODO: Check for secondary loops
+
         """
         #path = self.domains_shortest_path(domain1, domain2)
         #path_elements = self.domain_path_elements(path)
@@ -548,6 +574,9 @@ class Complex(nx.Graph):
         ## 5p3p-level shortest path:
         path = self.ends5p3p_shortest_path(domain1, domain2)
         path_elements = self.end5p3p_path_partial_elements(path, length_only='both', summarize=True)
+
+        ## TODO: Check for secondary loops!
+
         # list of [(interaction, total-length), ...]
         # For rigid, double-helical elements, element length, l, is N_bp * 0.34 nm.
         # For single-stranded elements, we estimate the end-to-end distance by splitting the strand into
@@ -556,6 +585,7 @@ class Complex(nx.Graph):
         #   E[r²] = ∑ Nᵢbᵢ² for i ≤ m = N (1.8 nm)²
         #         = round(N_nt*0.6nm/1.8nm) (1.8 nm)² = N_nt * 0.6/1.8 * 1.8*1.8 nm² = N_nt 0.6*1.8 nm²
         #         = N_nt * lˢˢ * λˢˢ = N_nt * 1.08 nm²
+        # Why use interaction as first maximum criteria??
         _, LRE_len, LRE_len_sq, LRE_idx = max((interaction, elem_length, elem_len_sq, i)
                                               for i, (interaction, (elem_length, elem_len_sq))
                                               in enumerate(path_elements)
@@ -578,7 +608,14 @@ class Complex(nx.Graph):
 
         if LRE_len > SRE_len:
             # The domains cannot reach each other.
-            # Hybridization requires helical bending; TODO: Not implemented yet; just returning 0 meaning "impossible".
+            # Hybridization requires helical bending; Not implemented yet; just returning 0 meaning "impossible".
+            # TODO: Implement hybridization via helical bending.
+            #   Persistance length 50 nm (physiological salt)
+            #   - Depends on ionic strength and cationic valency
+            # TODO: Look at formulas for k_on and k_off rates under stress.
+            #   For DNA, there is certainly a difference between axial "ripping" and perpendicular "zipping".
+            #   - Zippering occours at about 10-15 pN (sequence dependent).
+            #   -
             return 0
         ## There is probably some profound relation between the elements and the gamma factor.
         ## E.g. if the contour length is long enough for the domains to reach, but the
@@ -600,6 +637,22 @@ class Complex(nx.Graph):
         # Hmm... probably need to do some further analysis of different examples and try to figure out
         # a proper relationship between link-elements and gamma_corr... And it might not be as simple
         # as a simple exponential correction to (P_loop/P_v0).
+
+        # If LRE_len_sq > SRE_len_sq, then the approximation assumption "we many links of length l_i"
+        # is certainly not valid (we only have 1 link of length LRE_len).
+        # Instead of considering P_loop(r<rc)/P_v0(r<rc), we have to consider P_SRE(r=LRE+/-rc)/V(r=LRE)/P_v0(r<rc).
+        # that is, the probability of the SRE end-end distance equaling LRE length, normalized by the shell
+        # volume at r=LRE.
+        # This gives us a factor that seems to be:
+        # 1/(4 π LRE_len_sq) exp(-3*LRE_len_sq / (2*SRE_len_sq))
+        # although the first part would give us a non-unitless factor which is not acceptable. It probably has to be
+        # normalized in some way, but for now just use the exponential part.
+        # Edit: Actually, the first part is probably something like LRE_len/rc
+        #
+        # For LRE_len_sq == SRE_len_sq, this gives us exp(-3*LRE_len_sq / (2*SRE_len_sq)) = 1/e = 0.22.
+        # For example 1, this will give us:
+        # exp(-3*LRE_len_sq / (2*SRE_len_sq)) = 0.02.
+        LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq))
 
         gamma_corr = 1
         if LRE_len_sq > SRE_len_sq:
@@ -652,9 +705,10 @@ class Complex(nx.Graph):
 
         # Note: The "activity" as calculated above appears on paper to be a unitless ratio (P_loop/P_v0).
         # However, since it is relative to standard conditions (1 M), we just have to implicitly multiply
-        # the unitless ratio with "× 1 M" to get a proper activity.
+        # the unitless ratio with "× 1 M" to get a proper molar activity.
 
-        # Currently not accounting for bending or zipping energy.
+        # TODO: Currently not accounting for bending or zipping energy.
+        # TODO: Account for secondary (and tertiary?) loops
         return activity
 
 

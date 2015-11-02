@@ -375,6 +375,23 @@ class SystemMgr():
             # Hybridization rate constant, k, is in unit of /M/s = L/mol/s.
             # Activity is always in units of M - so resultant
             c_j = k_on*activity # should be e.g. 0.1 /s
+
+            ## Should we include stacking interactions in k_on? (That would increase k_on...)
+            # a) Yes: We include them in k_off, so they must also always be included in k_on (because...)
+            # b1) No: Stacking and unstacking is separate from hybridization/dehybridization:
+            #           (unhybridized, unstacked) ←→ (hybridized, unstacked) ←→ (hybridized, stacked)
+            #           To de-hybridize, a domain must first un-stack.
+            #           AND WE ONLY CONSIDER DE-HYBRIDIZATION REACTION FOR UN-STACKED DOMAINS
+            #           (No.. because stacking reactions might be much faster than hybridization)
+            # b2) No: We have a separate reaction for stacking/unstacking.
+            #           If the domain is stacked, that is included in k_off, but the domain can spontaneously unstack.
+            # c) From a thermodynamic/kinetic perspective: Not sure.
+            #           On one hand, I wouldn't expect stacking to increase hybridization rate.
+            #           On second thought:
+            # d) Thermodynamically: If you include stacking interactions in k_off, you CANNOT also include them in k_on,
+            #           as this would effectively include it twice:
+            #           ∆G/RT = ln(K) = ln(k_on/k_off) = ln(k_on) - ln(k_off)
+            #                 = ln(k_on0*k_stacking) - ln(k_off0/k_stacking) = ln(k_on) - ln(k_off) + 2*ln(k_stacking)
         else:
             # k_off depends on ΔG°  (at least when we are at T < Tm at molar concentrations where ΔG° < 0)
             k_off = self.dehybridization_rate_constant(d1, d2)
@@ -420,15 +437,24 @@ class SystemMgr():
     def dehybridization_rate_constant(self, d1, d2):
         """
         Calculate dehybridization rate constant:
-            k_off = k_on/K,   K = exp(-ΔG°/RT)
+            K = exp(-ΔG°/RT) = exp(-(ΔH°-TΔS°)/RT) = exp(ΔS°/R-ΔH°/R/T) = exp(ΔS°-ΔH°/T) # ΔH°, ΔS° in units of R, R/K
+            k_off = k_on/K,
                   = k_on * exp(+ΔG°/RT)
         """
         T = self.temperature
         # dH, dS, dG at standard conditions
         dH, dS = self.dHdS_from_state_cache(d1, d2) # Units of R, R/K
         #dG = dH - T*dS # No need to perform extra operation, just use dH and dS:
-        k_off = 1e5 * exp(dH/T - dS)
-        return 1e5
+
+        # Consideration: Do we really need to have a state-specific energy cache?
+        #   a) Yes: Because we might have bending energies, etc which have complex state dependence
+        #   b) No:  It should be pleanty fast to do dHdS = 
+
+        K = exp(dS - dH/T)
+        if K > 1:
+            k_on = 1e5
+            k_off = k_on/K
+        return k_off
 
 
     def dHdS_from_state_cache(self, d1, d2):
