@@ -19,6 +19,13 @@
 
 """
 
+Note: This was a primitive test module to explore having a "event/state-change" dispatcher
+running as a separate process. The conclusion was to try to stick to threads rather than
+separate processes, since inter-process communication (e.g. via sockets) is hard to get
+right and adds a lot of overhead. Separate processes are only when you do not have control
+over the code you are trying to use (i.e. pre-compiled binaries).
+
+
 Dispatcher script. Responsible for:
  1) Saving state change events to file:
  2) Forwarding the state change to real-time graph visualizer,

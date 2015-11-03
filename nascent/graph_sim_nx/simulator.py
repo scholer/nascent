@@ -63,8 +63,6 @@ def complex_sizes_hist(complexes):
 
 
 
-
-
 class Simulator():
     """
     Simulator class to hold everything required for a single simulation.
@@ -107,6 +105,7 @@ class Simulator():
         ## Hooks ##
         self.Visualization_hook = None
         self.print_post_step_fmt = "{self.N_steps: 5} {self.N_selections: 5}"
+        self.dispatcher = None
 
 
     def print_setup(self, fp=None):

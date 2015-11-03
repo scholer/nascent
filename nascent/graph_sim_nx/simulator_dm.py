@@ -30,7 +30,7 @@ import random
 from collections import deque
 #import math
 from math import log as ln # exp
-#from datetime import datetime
+from datetime import datetime
 import time
 if sys.platform == "win32":
     timer = time.clock
@@ -47,7 +47,10 @@ else:
 from .simulator import Simulator
 # N_AVOGADRO in /mol,
 # Universal Gas constant in cal/mol/K
-#from .constants import N_AVOGADRO, R
+from .constants import (N_AVOGADRO, R,
+                        HYBRIDIZATION_INTERACTION,
+                        PHOSPHATEBACKBONE_INTERACTION,
+                        STACKING_INTERACTION)
 
 # Module-level constants and variables
 VERBOSE = 0
@@ -119,9 +122,10 @@ class DM_Simulator(Simulator):
     """
 
 
-    def __init__(self, **kwargs):
+    def __init__(self, params, **kwargs):
         #super().__init__(**kwargs)
-        Simulator.__init__(self, **kwargs)
+        Simulator.__init__(self, params=params, **kwargs)
+        self.time_per_T = params.get('time_per_T', 10) # seconds
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)
         self.print_post_step_fmt = ("\r{self.N_steps: 5} "
@@ -130,15 +134,26 @@ class DM_Simulator(Simulator):
                                     " {stats[tau_mean]:0.02e}] "
                                     "[{timings[step_time]:0.02e}] "
                                     "[{timings[step_time]:0.02e}] "
-                                    )
+                                   )
+        # Must specify: time, tau, T, nodes
+        self.state_change_hybridization_template = {'change_type': 1,
+                                                    'forming': 1,
+                                                    'interaction': HYBRIDIZATION_INTERACTION,
+                                                    'multi': False}
+        self.state_change_dehybridization_template = {'change_type': 1,
+                                                      'forming': 0,
+                                                      'interaction': HYBRIDIZATION_INTERACTION,
+                                                      'multi': False}
 
 
-    def simulate(self, T=None, n_steps_max=100000):
+    def simulate(self, T=None, n_steps_max=100000, simulation_time=None, systime_max=None):
         """
         Simulate at most n_steps number of rounds at temperature T.
         """
         self.timings['simulation_start_time'] = timer()
         self.timings['step_start_time'] = self.timings['step_end_time'] = self.timings['simulation_start_time']
+        if systime_max is None:
+            systime_max = self.sim_system_time + simulation_time
 
         sysmgr = self.systemmgr
         if T is None:
@@ -162,6 +177,9 @@ class DM_Simulator(Simulator):
             # Step 2: Generate values for τ and j:  - easy.
             r1, r2 = random.random(), random.random()
             dt = ln(1/r1)/a0_sum
+            if systime_max and self.sim_system_time + dt > systime_max:
+                self.sim_system_time = systime_max
+                return n_done
             # find j:
             breaking_point = r2*a0_sum
             j = 0 # python 0-based index: a[0] = j_1
@@ -188,6 +206,26 @@ class DM_Simulator(Simulator):
                 changed_complexes, new_complexes, obsolete_complexes, free_strands = sysmgr.hybridize(d1, d2)
             else:
                 changed_complexes, new_complexes, obsolete_complexes, free_strands = sysmgr.dehybridize(d1, d2)
+
+            # 3c: Dispatch the state change
+            if self.dispatcher:
+                # The state_change received by dispatch() is either a dict with keys:
+                #     - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
+                #     - forming: 1=forming, 0=eliminating
+                #     - interaction: 1=backbone, 2=hybridization, 3=stacking (only for edge changes)
+                #     - time: Current system time (might be subjective to rounding errors).
+                #     - tau:  Change in system time between this directive and the former.
+                #     - T:    Current system temperature.
+                #     - multi: If True, interpret "nodes" as a list of pairs (u₁, u₂, ...) for NODE-altering directives,
+                #                 or (u₁, v₁, u₂, v₂, ...) for EDGE-altering directives.
+                #     - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
+                directive = self.state_change_hybridization_template.copy()
+                directive['forming'] = int(is_hybridizing)
+                directive['time'] = self.sim_system_time
+                directive['T'] = sysmgr.temperature
+                directive['tau'] = dt
+                directive['nodes'] = (d1, d2)  # Not sure if we have to give str representation here
+                self.dispatcher.dispatch(directive, directive_is_list=False)
 
             # 4: Update/re-calculate possible_hybridization_reactions and propensity_functions
             # - domain_state_subspecies  - this is basically x̄ ← x̄ + νj
@@ -220,5 +258,32 @@ class DM_Simulator(Simulator):
                       (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
 
 
+    def anneal(self, T_start, T_finish, delta_T=-1, n_steps_per_T=None, time_per_T=None):
+        """
+        Simulate annealing repeatedly from T_start to T_finish,
+        decreasing temperature by delta_T for every round,
+        doing either:
+            (a) at most n_steps number of steps at each temperature, or
+            (b) at most time_per_T simulation time at each temperature.
+
+        """
+
+        # Range only useful for integers...
+        n_steps_per_T = n_steps_per_T or self.N_steps_per_T
+        time_per_T = time_per_T or self.time_per_T
+        T = T_start
+        assert delta_T != 0
+        assert T_start > T_finish if delta_T < 0 else T_finish > T_start
+        print(("\nStarting annealing - ramp is %s K to %s K in %s K increments, "
+               "using %s steps or %s seconds simulation time at each temperature...") %
+              (T_start, T_finish, delta_T, n_steps_per_T, time_per_T))
+        while T >= T_finish if delta_T < 0 else T <= T_finish:
+            print("\nSimulating at %s K for %s steps or %s seconds simulation time..." % \
+                  (T, n_steps_per_T, time_per_T))
+            self.simulate(T, n_steps_max=n_steps_per_T, simulation_time=time_per_T)
+            T += delta_T
+            self.save_stats_cache() # Save cache once per temperature
+        print("Annealing complete! (%s)" % datetime.now().strftime("%Y-%m-%d %H:%M"))
+        self.print_setup()
 
 

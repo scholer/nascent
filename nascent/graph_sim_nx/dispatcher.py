@@ -28,7 +28,7 @@ The dispatcher is resposible for:
  (2) Writing state changes to file.
  (3) Propagating the state change to the live graph, by:
     (a) Translating the state change directive to a graph event,
-        according to the live graph view.
+        according to the live graph view (domain-level vs 5p3p-level).
     (b) Invoking the correct graph-updating methods for the events.
 
 Regarding (3): The graph_visualization objects are agnostic to "domains", "strands", etc.
@@ -94,6 +94,18 @@ class StateChangeDispatcher():
             method(event), e.g.
             add_node(event):
             -->
+
+    The state_change received by dispatch() is either a dict with keys:
+        - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
+        - forming: 1=forming, 0=eliminating
+        - interaction: 1=backbone, 2=hybridization, 3=stacking (only for edge changes)
+                        Edit: Using constants values, e.g. HYBRIDIZATION_INTERACTION (='h').
+        - time: Current system time (might be subjective to rounding errors).
+        - tau:  Change in system time between this directive and the former.
+        - T:    Current system temperature.
+        - multi: If True, interpret "nodes" as a list of pairs (u₁, u₂, ...) for NODE-altering directives,
+                    or (u₁, v₁, u₂, v₂, ...) for EDGE-altering directives.
+        - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
     """
 
     def __init__(self, config):
@@ -215,7 +227,7 @@ class StateChangeDispatcher():
         - multi: It might be nice to have the option to propagate multiple events with
             a shared set of T, time, dt, interaction, etc. I'm specifically thinking of
             "stacking change cycles", where we re-calculate the stacking state of all possible stacking interactions.
-            Note: This is not the same as the 'multi' argument given to this method, which
+            Note: This is not the same as the 'directive_is_list' argument given to this method, which
             is whether state_change is a single state-change dict or a list of state-change dicts.
         - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
         Note: Unlike a state_change dict, a graph event should not have a 'multi' directive.
@@ -224,6 +236,8 @@ class StateChangeDispatcher():
         if directive_is_list is None:
             directive_is_list = isinstance(state_change, (list, tuple))
         state_changes = state_change if directive_is_list else [state_change]
+
+        ## Write state change to file (if this dispatcher has a file configured):
         if self.outputfd:
             # Write state changes continuously:
             if directive_is_list:
@@ -240,12 +254,15 @@ class StateChangeDispatcher():
                 self.state_changes_cache.append(state_change)
             if len(self.state_changes_cache) >= self.state_changes_cache_size:
                 self.flush_state_changes_cache()
-        graph_events = self.state_changes_to_graph_events(state_changes)
-        if len(graph_events) == 0:
-            print("NO GRAPH EVENTS!")
-            return
-        print("len(graph_events):", len(graph_events))
+
+        ## Propagate the graph state change directive to live graph streamer, if one is configured:
         if self.live_streamer:
+            # Translate the state_changes list-of-dicts to a list of "pure, domain-agnostic" graph events:
+            graph_events = self.state_changes_to_graph_events(state_changes)
+            if len(graph_events) == 0:
+                print("Dispatcher: NO GRAPH EVENTS!")
+                return
+            print("len(graph_events):", len(graph_events))
             if len(graph_events) == 1:
                 self.propagate_graph_event(graph_events[0])  # or maybe 'stream_change' ?
             else:

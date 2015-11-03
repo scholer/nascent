@@ -77,7 +77,7 @@ class SystemMgr():
 
         self.params = params
         self.temperature = params.get('temperature', 300)
-        self.volume = volume
+        self.volume = volume or params.get('volume')
         # Base single-molecule activity of two free single reactants in volume.
         self.specific_bimolecular_activity = 1/self.volume/N_AVOGADRO # × M
         self.include_steric_repulsion = True
