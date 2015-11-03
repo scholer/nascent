@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
 ##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
-##    This program is free software: you can redistribute it and/or modify
-##    it under the terms of the GNU General Public License as published by
-##    the Free Software Foundation, either version 3 of the License, or
-##    (at your option) any later version.
+##    This file is part of Nascent.
+##
+##    Nascent is free software: you can redistribute it and/or modify
+##    it under the terms of the GNU Affero General Public License as
+##    published by the Free Software Foundation, either version 3 of the
+##    License, or (at your option) any later version.
 ##
 ##    This program is distributed in the hope that it will be useful,
 ##    but WITHOUT ANY WARRANTY; without even the implied warranty of
 ##    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-##    GNU General Public License for more details.
+##    GNU Affero General Public License for more details.
 ##
-##    You should have received a copy of the GNU General Public License
-##    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+##    You should have received a copy of the GNU Affero General Public License
+##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 # pylint: disable=C0103
 
@@ -65,17 +67,18 @@ class Complex(nx.Graph):
                         or four domais if they are stacked.
         junctionI graph: Like helixI, but represents N-way junctions, e.g. a Holliday junction.
     """
-    def __init__(self, strands=None, origin="o"):
-        super().__init__(sid=next(make_sequential_id),
-                        )
+    def __init__(self, data=None, strands=None, origin="o"):
+        super().__init__(data=data, sid=next(make_sequential_id))
         if strands is None:
             strands = {}
         for strand in strands:
             strand.graph['complex'] = self
+        self.domains = self.nodes  # alias
         # Should strands be a set or list? Set is most natural, but a list might play better with a adjacency matrix.
         # Then, you could just have a dict mapping strand -> index of the matrix
         self.strands = set(strands)
-        self.domains = self.nodes
+        # TODO: If you have a strand_graph, then strands set is not needed
+        self.strand_graph = nx.MultiGraph() # Only add if you really know it is needed.
         #self._domains = itertools.chain(s.domains for s in strands)
         self.add_nodes_from(self.domains_gen()) # Add all domains as nodes
 
@@ -556,6 +559,8 @@ class Complex(nx.Graph):
         * https://en.wikipedia.org/wiki/Loop_entropy
 
         TODO: Check for secondary loops
+        TODX: Saving secondary loops/paths might be be useful when determining if a dehybridization will split
+              up a complex. Although that is pretty much the reverse process and can't really be used. Nevermind.
 
         """
         #path = self.domains_shortest_path(domain1, domain2)

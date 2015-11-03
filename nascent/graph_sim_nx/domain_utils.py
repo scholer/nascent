@@ -1,19 +1,20 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 ##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
-##    This program is free software: you can redistribute it and/or modify
-##    it under the terms of the GNU General Public License as published by
-##    the Free Software Foundation, either version 3 of the License, or
-##    (at your option) any later version.
+##    This file is part of Nascent.
+##
+##    Nascent is free software: you can redistribute it and/or modify
+##    it under the terms of the GNU Affero General Public License as
+##    published by the Free Software Foundation, either version 3 of the
+##    License, or (at your option) any later version.
 ##
 ##    This program is distributed in the hope that it will be useful,
 ##    but WITHOUT ANY WARRANTY; without even the implied warranty of
 ##    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-##    GNU General Public License for more details.
+##    GNU Affero General Public License for more details.
 ##
-##    You should have received a copy of the GNU General Public License
-##    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+##    You should have received a copy of the GNU Affero General Public License
+##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 # pylint: disable=W0142,C0103,C0301,W0141
 
@@ -68,15 +69,15 @@ def distance_cached(domain1, domain2, return_parents=False):
         if fset in distances:
             distances[ftset] = distances[uset] + distances[fset]
 
-        if u.Partner:
-            #print("Checking u's partner, %s" % u.Partner)
-            parents[u.Partner] = u
-            dset = frozenset((domain1, u.Partner))
+        if u.partner:
+            #print("Checking u's partner, %s" % u.partner)
+            parents[u.partner] = u
+            dset = frozenset((domain1, u.partner))
             if dset not in distances:
                 #print(" - Adding %s = %s to distances (same as %s)." % (dset, distances[uset], uset))
                 distances[dset] = distances[uset]
-                Q.append(u.Partner)
-            if u.Partner == domain2:
+                Q.append(u.partner)
+            if u.partner == domain2:
                 return (distances[dset], parents) if return_parents else distances[dset]
         for d in u.domain5p3p():
             # TODO: This is not the most efficient way to iterate; if we are searching in the
@@ -144,4 +145,3 @@ def print_domain_distances(distances):
                                           +([] if len(ds) > 1 else [d.Name for d in ds])
                                           +[dist])
                     for ds, dist in distances.items()))
-

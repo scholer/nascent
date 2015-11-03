@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
 ##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
-##    This program is free software: you can redistribute it and/or modify
-##    it under the terms of the GNU General Public License as published by
-##    the Free Software Foundation, either version 3 of the License, or
-##    (at your option) any later version.
+##    This file is part of Nascent.
+##
+##    Nascent is free software: you can redistribute it and/or modify
+##    it under the terms of the GNU Affero General Public License as
+##    published by the Free Software Foundation, either version 3 of the
+##    License, or (at your option) any later version.
 ##
 ##    This program is distributed in the hope that it will be useful,
 ##    but WITHOUT ANY WARRANTY; without even the implied warranty of
 ##    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-##    GNU General Public License for more details.
+##    GNU Affero General Public License for more details.
 ##
-##    You should have received a copy of the GNU General Public License
-##    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+##    You should have received a copy of the GNU Affero General Public License
+##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 # pylint: disable=C0103,W0142
 
@@ -75,13 +77,14 @@ class Simulator():
         """
         self.params = params
         self.systemmgr = SystemMgr(volume=volume, strands=strands, params=params, domain_pairs=domain_pairs)
-        self.simulation_time = 0
+        self.sim_system_time = 0  # System time within the simulator, typically measured in micro-seconds.
 
         ## Simulation stats, counts:
         self.N_steps = 0    # Total number of steps
         self.N_changes = 0  # Number of state changes (hybridizations or de-hybridizations)
         self.N_selections = 0 # Total number of succeessfull selection of domain1 and domain2.
         self.N_steps_per_T = params.get('n_steps_per_T', 100000)
+        self.system_stats = {}
 
 
         ## Data recording ##
@@ -103,6 +106,7 @@ class Simulator():
 
         ## Hooks ##
         self.Visualization_hook = None
+        self.print_post_step_fmt = "{self.N_steps: 5} {self.N_selections: 5}"
 
 
     def print_setup(self, fp=None):

@@ -46,6 +46,8 @@ DNA_NN3 = {
     'GG/CC': (-8.0, -19.9)}
 
 # SantaLucia & Hicks (2004), Annu. Rev. Biophys. Biomol. Struct 33: 415-440
+# Stacks are interpreted as: 'GT/CA' = 5'-GT-3' / 3'-CA-5'
+# Thus, 'GT/CA' is equivalent to AC/TG == 'GT/CA'[::-1]
 DNA_NN4 = {
     'init': (0.2, -5.7), 'init_A/T': (2.2, 6.9), 'init_G/C': (0, 0),
     'init_oneG/C': (0, 0), 'init_allA/T': (0, 0), 'init_5T/A': (0, 0),

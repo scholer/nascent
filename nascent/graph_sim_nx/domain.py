@@ -1,19 +1,20 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 ##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
-##    This program is free software: you can redistribute it and/or modify
-##    it under the terms of the GNU General Public License as published by
-##    the Free Software Foundation, either version 3 of the License, or
-##    (at your option) any later version.
+##    This file is part of Nascent.
+##
+##    Nascent is free software: you can redistribute it and/or modify
+##    it under the terms of the GNU Affero General Public License as
+##    published by the Free Software Foundation, either version 3 of the
+##    License, or (at your option) any later version.
 ##
 ##    This program is distributed in the hope that it will be useful,
 ##    but WITHOUT ANY WARRANTY; without even the implied warranty of
 ##    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-##    GNU General Public License for more details.
+##    GNU Affero General Public License for more details.
 ##
-##    You should have received a copy of the GNU General Public License
-##    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+##    You should have received a copy of the GNU Affero General Public License
+##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 # pylint: disable=W0142,C0103,C0301,W0141
 
@@ -118,6 +119,7 @@ class Domain():
         """
         This is a hash of:
             (domain_strand_specie, complex-state, in-complex-identifier)
+        TODO: Consider not making duplexes state-dependent but rather just depend on their local stacking state.
         """
         if not domain._specie_state_fingerprint:
             c = s.complex
@@ -172,9 +174,10 @@ class DomainEnd():
         self.domain = domain
         self.end = end
         self.hyb_partner = None
-        self.pb_upstream = None
-        self.pb_downstream = None
-        self.stack_partner = None
+        self.pb_upstream = None     # end connected by phosphate backbone on same strand
+        self.pb_downstream = None   # end connected by phosphate backbone on same strand
+        self.stack_partner = None   # stacking partner
+        self.stack_string = None    # Stacking string, e.g. "CA/GT" or maybe frozenset("CG", "AT")
 
 class Domain5pEnd(DomainEnd):
     def __init__(self, domain):
