@@ -85,7 +85,7 @@ class Strand(nx.Graph):
                         for d in domains]
         domain_interfaces = zip([d.end5p for d in domains], [d.end5p for d in domains[1:]],
                                 itertools.cycle([edge_attrs]))
-        self.ends5p3p_graph.add_edges_from(domain_edges+domain_interfaces)
+        self.ends5p3p_graph.add_edges_from(itertools.chain(domain_edges, domain_interfaces))
 
         # Make sure all domains have this strand registered as their parent:
         for domain in domains:

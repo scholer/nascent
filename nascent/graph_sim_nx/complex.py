@@ -24,12 +24,9 @@ Module for
 
 """
 
-import math
-import itertools
-from collections import deque
+
+from collections import defaultdict #, deque
 import networkx as nx
-from networkx.algorithms.shortest_paths import shortest_path
-import numpy as np
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
@@ -37,10 +34,6 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
                         N_AVOGADRO, AVOGADRO_VOLUME_NM3)
-from .structural_elements import strand, helix, bundle
-from .structural_elements.strand import SingleStrand
-from .structural_elements.helix import DsHelix
-from .structural_elements.bundle import HelixBundle
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
@@ -83,7 +76,7 @@ class Complex(nx.Graph):
         if data is None:
             #self.add_nodes_from(self.domains_gen()) # Add all domains as nodes
             # Use the (linear) strand graphs to build an initial graph with phosphate backbones:
-            for strand in strand:
+            for strand in strands:
                 self.add_edges_from(strand)
 
         # Distances between domains.
@@ -126,7 +119,8 @@ class Complex(nx.Graph):
         #       I don't want to do that for strand-level and ends5p3p as well.
         #       Probably better to make use of system-level graphs as much as possible.
         #self.strand_graph = nx.MultiGraph() # Only add if you really know it is needed.
-        # Not sure if each complex should have a 5p3p graph. After all, we already have a system-level 5p3p graph in the simulator.
+        # Not sure if each complex should have a 5p3p graph.
+        # After all, we already have a system-level 5p3p graph in the simulator.
         #self.ends5p3p_graph = nx.Graph()
 
         # Graph with only hybridization connections between strands. Might be useful for some optimizations.
@@ -152,6 +146,7 @@ class Complex(nx.Graph):
             # self.ends5p3p_graph.add_path(domain.end5p, domain.end3p, edge_attrs)
 
     def remove_domain(self, domain, update_graph=False):
+        """ Remove a single domain, updating self.domains_by_name. """
         self.domains_by_name[domain.name].remove(domain)
         if update_graph:
             # strand is also a (linear) graph of domains:
@@ -259,10 +254,11 @@ class Complex(nx.Graph):
                 self.stacking_fingerprint()
                 ))
 
-    def domains_gen(self):
-        return (domain for strand in self.strands for domain in strand.domains)
+    # def domains_gen(self):
+    #     return (domain for strand in self.strands for domain in strand.domains)
 
     def strands_species_count(self):
+        """ Count the number of strand species. Used as part of complex state finger-printing. """
         species_counts = {}
         for strand in self.strands:
             if strand.name not in species_counts:
@@ -274,6 +270,7 @@ class Complex(nx.Graph):
         return frozenset(species_counts.items())
 
     def strands_fingerprint(self):
+        """ Create a finger-print of the current strands (species). """
         if not self._strands_fingerprint:
             self._strands_fingerprint = hash(self.strands_species_count())
         return self._strands_fingerprint
@@ -387,12 +384,14 @@ class Complex(nx.Graph):
 
 
     def fqdn(self):
-        return "C[%s]" % (self.graph['sid'])
+        """ Return a fully-qualified name. """
+        return "C[%s]" % (self.cuid)
 
     def __repr__(self):
         # return "%s[%s]" % (self.name, self.ruid % 100)
-        return "Complex[%s] at %s" % (self.graph['sid'], hex(id(self)))
+        return "Complex[%s] at %s" % (self.cuid, hex(id(self)))
 
     def __str__(self):
         # return "%s[%s]" % (self.name, self.ruid % 100)
-        return "C[%s]" % (self.graph['sid'])
+        # String representation should be invariant through the life-time of an object:
+        return "C[%s]" % (self.cuid)

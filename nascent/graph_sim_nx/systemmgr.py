@@ -772,31 +772,33 @@ class SystemMgr(StructureAnalyzer):
         ## Update complex:
         if c1 and c2:
             if c1 == c2:
-                # Intra-complex hybridization
+                ## Intra-complex hybridization
                 assert strand1 in c2.strands and strand2 in c1.strands
                 # c1.add_edge(domain1, domain2, interaction=HYBRIDIZATION_INTERACTION) # done below
                 c_major = c1
             else:
-                # Merge the two complexs:
+                ## Merge the two complexs:
                 #obsolete_complexes = merge_complex()
                 c_major, c_minor = (c1, c2) if (len(c1.nodes()) >= len(c2.nodes())) else (c2, c1)
                 for strand in c_minor.strands:
                     strand.complex = c_major
                 c_major.strands |= c_minor.strands
                 c_major.N_strand_changes += c_minor.N_strand_changes
+                ## Delete the minor complex:
                 c_major.add_edges_from(c_minor.edges())
                 c_minor.strands = set()
                 c_minor.adj = {}        # For networkx, the graph.adj attribute is the main data store
                 obsolete_complexes = [c_minor]
         elif c1:
-            # domain2/strand2 is not in a complex:
+            ## domain2/strand2 is not in a complex; use c1
             c1.add_strand(strand2)
             c_major = c1
         elif c2:
+            ## domain1/strand1 is not in a complex; use c2
             c2.add_strand(strand1)
             c_major = c2
         else:
-            # Neither strands are in existing complex; create new complex
+            ## Neither strands are in existing complex; create new complex
             new_complex = Complex()
             new_complexes = [new_complex]
             new_complex.strands |= {strand1, strand2}
@@ -806,8 +808,9 @@ class SystemMgr(StructureAnalyzer):
             c_major = new_complex
             new_complexes = [new_complex]
 
-        c_major.domain_distances = {} # Reset distances
+        # Create the hybridization connection in the major complex graph:
         c_major.add_edge(domain1, domain2, interaction=HYBRIDIZATION_INTERACTION)
+        c_major.domain_distances = {} # Reset distances
         changed_complexes = [c_major]
 
         assert strand1.complex == strand2.complex != None
@@ -851,16 +854,15 @@ class SystemMgr(StructureAnalyzer):
             return None, None, None, [strand1]
         assert c is not None
 
-        # Update complex graph:
+        changed_complexes, new_complexes, obsolete_complexes, free_strands = [c], None, None, []
+
+        ## Update complex graph, breaking the d1-d2 hybridization edge:
         c.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
         c.strand_graph.remove_edge(strand1, strand2, s_edge_key)
 
-        changed_complexes, new_complexes, obsolete_complexes, free_strands = [c], None, None, []
+        c.domain_distances = {}  # Reset distances:
 
-        ## Break the complex:
-        # Update distance:
-        c.domain_distances = {}
-        #dist = distance_cached(domain1, domain2) # We have just reset, so needs to be re-calculated
+        ## Determine the connected component for strand 1:
         dom1_cc_oligos = nx.node_connected_component(self.strand_graph, strand1)
         # Could also use nx.connected_components_subgraphs(c)
 
@@ -886,27 +888,25 @@ class SystemMgr(StructureAnalyzer):
 
         assert len(c.strands) == dom1_cc_size + dom2_cc_size
 
-        if dom2_cc_size > 1 or dom1_cc_size > 1:
-            # Case (a) Two smaller complexes or case (b) one complex and one unhybridized strand
+        if dom2_cc_size > 1 and dom1_cc_size > 1:
+            # Case (a) Two smaller complexes - must create a new complex for detached domain:
             # Determine which of the complex fragments is the major and which is the minor:
-
-            if dom2_cc_size > 1 and dom1_cc_size > 1:
-                # Case (a) Two smaller complexes - must create a new complex for detached domain:
-                graph_minor, graph_major = sorted(connected_component_subgraphs(c),
-                                                  key=lambda g: len(g.nodes()))
-                # Remember to add the departing domain.strand to the new_complex_oligos list:
-                new_complex_oligos = set(dom2_cc_oligos if domain1 in graph_major.nodes() else dom1_cc_oligos)
-                # Use graph_minor to initialize; then all other is obsolete
-                c_new = Complex(data=graph_minor, strands=new_complex_oligos)
-                c.strands -= new_complex_oligos
-                c.remove_nodes_from(graph_minor.nodes())
-                new_complexes = [c_new]
-                changed_complexes.append(c_new)
-            else:
-                # case (b) one complex and one unhybridized strand - no need to do much further
-                domain_minor = domain1 if dom1_cc_size == 1 else domain2
-                free_strands = [domain_minor.strand]
-                c.remove_strand.remove(domain_minor.strand, update_graph=True)
+            graph_minor, graph_major = sorted(connected_component_subgraphs(c),
+                                              key=lambda g: len(g.nodes()))
+            # Remember to add the departing domain.strand to the new_complex_oligos list:
+            new_complex_oligos = set(dom2_cc_oligos if domain1 in graph_major.nodes() else dom1_cc_oligos)
+            # Use graph_minor to initialize; then all other is obsolete
+            c_new = Complex(data=graph_minor, strands=new_complex_oligos)
+            c.strands -= new_complex_oligos
+            c.remove_nodes_from(graph_minor.nodes())
+            new_complexes = [c_new]
+            changed_complexes.append(c_new)
+        elif dom2_cc_size > 1 or dom1_cc_size > 1:
+            # Case (b) one complex and one unhybridized strand - no need to do much further
+            # Which-ever complex has more than 1 strands is the major complex:
+            domain_minor = domain1 if dom1_cc_size == 1 else domain2
+            free_strands = [domain_minor.strand]
+            c.remove_strand.remove(domain_minor.strand, update_graph=True)
         else:
             # Case (c) Two unhybridized strands
             free_strands = [domain1.strand, domain2.strand]
