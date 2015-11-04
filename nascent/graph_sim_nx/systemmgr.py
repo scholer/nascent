@@ -66,15 +66,18 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         STACKING_INTERACTION,
                         N_AVOGADRO, AVOGADRO_VOLUME_NM3)
 from .complex import Complex
+from .structure_analyzer import StructureAnalyzer
 
 
-class SystemMgr():
+class SystemMgr(StructureAnalyzer):
     """
     Simulator class to hold everything required for a single simulation.
+
+    StructureAnalyzer provides everything related to loops and intra-complex activity calculation.
     """
 
     def __init__(self, volume, strands, params, domain_pairs=None):
-
+        StructureAnalyzer.__init__(self)
         self.params = params
         self.temperature = params.get('temperature', 300)
         self.volume = volume or params.get('volume')
@@ -86,7 +89,7 @@ class SystemMgr():
         self.strands = strands
         self.strands_by_name = defaultdict(list)
         for strand in strands:
-            self.strands_by_name[strand.Name].append(strand)
+            self.strands_by_name[strand.name].append(strand)
         print("Strands in self.strands_by_name:")
         print("\n".join("- %10s: %s species" % (sname, len(strands))
                         for sname, strands in self.strands_by_name.items()))
@@ -96,7 +99,7 @@ class SystemMgr():
         # Stats - counts
         self.N_domains = len(self.domains)
         self.N_strands = len(self.strands)
-        self.N_domains_hybridized = sum(1 for domain in self.domains_list if domain.partner)
+        self.N_domains_hybridized = sum(1 for domain in self.domains_list if domain.partner is not None)
         self.N_strands_hybridized = sum(1 for oligo in self.strands if oligo.is_hybridized())
         # Keep track of domain state depletions.
         # If the (grouped) domain species count occilates between 0 and 1, then the grouped approach might be
@@ -112,7 +115,11 @@ class SystemMgr():
         self.hybridized_domains_by_name = defaultdict(set)
 
         for d in self.domains:
-            self.domains_by_name[d.Name].append(d)
+            self.domains_by_name[d.name].append(d)
+            if d.partner is None:
+                self.unhybridized_domains_by_name[d.name].add(d)
+            else:
+                self.hybridized_domains_by_name[d.name].add(d)
         print("Domains in self.domains_by_name:")
         print("\n".join("- %10s: %s species" % (dname, len(domains))
                         for dname, domains in self.domains_by_name.items()))
@@ -120,12 +127,12 @@ class SystemMgr():
             # mapping: dom_a -> dom_A, dom_A -> dom_a
             # TODO: This could perhaps be a list, if you want to have different types of domains interacting,
             # E.g. dom_a could be perfect match for dom_A, while dom_ax has 1 mismatch:
-            # domain_pairs[dom_A.Name] = [dom_a.Name, dom_ax.Name]
+            # domain_pairs[dom_A.name] = [dom_a.name, dom_ax.name]
             # Or it could be a set of sets: {{da, dA}, {dA, dax}} and then generate partners by:
             # partners_species = set(chain(pair for pair in domain_pairs if dA in pair)) - {dA}
             # However, might as well only do this once and save the list!
             # Also, if you change domain_pairs mapping, remember to adjust Domain_dHdS cache as well.
-            domain_pairs = {d.Name: d.name.lower() if d.name == d.name.upper() else d.name.upper()
+            domain_pairs = {d.name: d.name.lower() if d.name == d.name.upper() else d.name.upper()
                             for d in self.domains_list}
             # remove pairs without partner:
             domain_pairs = {d1name: d2name for d1name, d2name in domain_pairs.items()
@@ -140,21 +147,6 @@ class SystemMgr():
               % (self.volume, len(self.strands), len(self.domains)))
 
 
-        ### System graphs ###
-        # Not sure whether we should have system-level graphs or a graph for each complex.
-        # Domain-level graphs can be created for each graph, in cases where we need cheap reduced graphs.
-        # Otherwise, system-level graphs are probably cheaper and easier.
-        # Why have graphs at multiple levels?
-        # - Some operations, e.g. connected_strands() are much cheaper if we have strand-level graph.
-        # MultiGraph vs Graph?
-        # - Should be a multigraph to support stacking
-        # - domains and ends can connect to the same partner via both backbone and stacking interactions
-        # - hairpins without loops has hybridization to same domain as phosphate backbone.
-        # - Not sure what the performance penalty of multi graphs are vs regular graphs?
-        # - We could have a separate graphs without stacking, but not sure when those would be useful?
-        self.ends_graph = nx.MultiGraph()
-        self.domain_graph = nx.MultiGraph()
-        self.strand_graph = nx.MultiGraph()
 
 
         ## Symbol nomenclature:
@@ -165,7 +157,7 @@ class SystemMgr():
         ### Caches: ###
         self.cache = {} # defaultdict(dict)
         # Standard enthalpy and entropy of hybridization,
-        # indexed as [frosenset({d1.Name, d2.Name})][0 for enthalpy, 1 for entropy]
+        # indexed as [frozenset((d1.name, d2.name))][0 for enthalpy, 1 for entropy]
         # - Note: index with frozenset((a,b)) or just cache[a, b] = cache[b, a] = value? # d[1,2] same as d[(1,2)]
         # --> Creating a set() or frozenset() takes about 10x longer than to make tuple.
         # --> dict assignment with frozenset is 0.4/0.5 us vs 0.17/0.05 for the "double tuple entry" (python/pypy),
@@ -209,7 +201,7 @@ class SystemMgr():
         # Using Fᵢ = domain.domain_state_fingerprint() will give us a proper hash.
         self.domain_state_subspecies = defaultdict(set)
         for domain in self.domains_list:
-            self.domain_state_subspecies[domain.domain_state_fingerprint()].append(domain)
+            self.domain_state_subspecies[domain.domain_state_fingerprint()].add(domain)
 
 
         # Up-to-date list of hybridizations that are currently possible:
@@ -224,6 +216,9 @@ class SystemMgr():
         # Propencity functions:  aj(x)
         # {(domain1, cstate), (domain2, cstate)} => a
         self.propensity_functions = {} # Indexed by indexed by {F₁, F₂}
+        if strands:
+            self.init_possible_reactions()
+            self.init_all_propensity_functions()
 
 
 
@@ -254,10 +249,11 @@ class SystemMgr():
             self.domain_state_subspecies[domspec] - will you all domains matching <domspec>
         Maybe a better name would be domain_subpopulation_by_state?
         """
+        print("Initializing possible reactions...")
         Rxs = {}
         for d1 in self.domains:
             d1_statespecie = d1.domain_state_fingerprint()
-            if d1.partner:
+            if d1.partner is not None:
                 # If d1 is hybridized, then there is only one possible reaction channel: dehybridizing
                 d2 = d1.partner
                 d2_statespecie = d2.domain_state_fingerprint()
@@ -269,14 +265,19 @@ class SystemMgr():
                 # find all possible reaction channels for domain d1
                 # self.domain_pairs[dname] = [list of complementary domain names]
                 # all possible hybridization partners/candidates:
+                if d1.name not in self.domain_pairs:
+                    # No domain partners for this domain
+                    continue
                 for d2 in (d for cname in self.domain_pairs[d1.name]
                            for d in self.unhybridized_domains_by_name[cname]):
+                    assert d2.partner is None
                     d2_statespecie = d2.domain_state_fingerprint()
                     doms_specs = frozenset((d1_statespecie, d2_statespecie))
                     if doms_specs not in Rxs:
                         # R_j = (c_j, v_j) - propensity constant for reaction j
                         Rxs[doms_specs] = self.calculate_c_j(d1, d2, is_hybridizing=True)
         self.possible_hybridization_reactions = Rxs
+        print(len(self.possible_hybridization_reactions), "possible hybridization reactions initialized.")
 
 
     def update_possible_reactions(self, changed_domains, d1, d2, is_hybridizing):
@@ -308,7 +309,7 @@ class SystemMgr():
         changed_domspecs = set()
         new_domspecs = set()
         Rxs = self.possible_hybridization_reactions
-        old_d1d2_doms_specs = frozenset(d1._specie_state_fingerprint, d2._specie_state_fingerprint)
+        old_d1d2_doms_specs = frozenset((d1._specie_state_fingerprint, d2._specie_state_fingerprint))
 
         if is_hybridizing:
             self.unhybridized_domains_by_name[d1.name].remove(d1)
@@ -378,7 +379,7 @@ class SystemMgr():
                 self.possible_hybridization_reactions[k] = v
                 self.N_state_repletions += 1
             d1 = next(iter(self.domain_state_subspecies[domspec]))
-            if d1.partner:
+            if d1.partner is not None:
                 d2 = d1.partner
                 d2_domspec = d2.domain_state_fingerprint()
                 doms_specs = frozenset((domspec, d2_domspec))
@@ -425,7 +426,7 @@ class SystemMgr():
 
 
 
-    def init_all_propencity_functions(self):
+    def init_all_propensity_functions(self):
         """
         Reaction propensity specifies how likely a certain reaction of one or more species is to occour.
         The product "propensity × dt" denotes the probability that a reaction will occour in infinitesimal time dt.
@@ -474,11 +475,13 @@ class SystemMgr():
             (2) we don't need to worry about uni- vs bi- vs tri-molecular etc, we just need to multiply c_j with
                 the reactant species population count, x₁ (x₂, x₃, etc) to get the propensity function a_j.
         """
+        print("Initializing propensity functions...")
         # doms_specs (plural) is: frozenset({(domain1, cstate), (domain2, cstate)})
         a = {doms_specs: c_j * (np.prod([len(self.domain_state_subspecies[ds]) for ds in doms_specs])
                                 if is_hybridizing else len(self.domain_state_subspecies[doms_specs[0]]))
              for doms_specs, (c_j, is_hybridizing) in self.possible_hybridization_reactions.items()}
         self.propensity_functions = a
+        print(len(self.propensity_functions), "propensity functions initialized.")
 
 
     def calculate_c_j(self, d1, d2, is_hybridizing):
@@ -507,7 +510,7 @@ class SystemMgr():
         * c_j is stochastic, k_j is *mass-action* rate constant.⁽¹⁾
         * c_j = k_j / (N_A ∙ volume)ᴺ⁻¹   # N is the number of reactants, e.g. 2 for bimolecular reactions.
         * v_j = k_j [S₁] [S₁]   # reaction rate, has unit of M/s. (Note: not state change vector ν_j, nu)
-        * a_j = c_j x₁ x₂       # propencity function, has unit of s⁻¹
+        * a_j = c_j x₁ x₂       # propensity function, has unit of s⁻¹
 
         Question: Where would it be appropriate to include effects of intra-complex reactions:
         * Effects related to effective volume / effective/relative activity should be included
@@ -544,14 +547,14 @@ class SystemMgr():
             [3]: http://www.async.ece.utah.edu/BioBook/lec4.pdf
         """
         if is_hybridizing:
-            if d1.complex == d2.complex != None:
+            if d1.strand.complex == d2.strand.complex != None:
                 # Intra-complex reaction:
                 stochastic_activity = self.intracomplex_activity(d1, d2)
             else:
                 # Inter-complex reaction:
                 stochastic_activity = self.specific_bimolecular_activity # Same as 1/self.volume/N_AVOGADRO × M
             if self.include_steric_repulsion:
-                steric_activity_factor = np.prod([1 if d.complex is None else self.steric_activity_factor(d)
+                steric_activity_factor = np.prod([1 if d.strand.complex is None else self.steric_activity_factor(d)
                                                   for d in (d1, d2)])
                 stochastic_activity *= steric_activity_factor
 
@@ -598,12 +601,13 @@ class SystemMgr():
         TODO: Add steric/electrostatic/surface repulsion (individual activity contribution for d1 and d2,
               so that activity = intercomplex_activity*d1_activity*d2_activity)
         """
-        assert d1.complex == d2.complex != None
+        assert d1.strand.complex == d2.strand.complex != None
         cache_key = frozenset([d.domain_state_fingerprint() for d in (d1, d2)])
         cache = self.cache['intracomplex_activity']
         if cache_key in cache:
             return cache[cache_key]
-        activity = d1.complex.intracomplex_activity(d1, d2)
+        #activity = d1.strand.complex.intracomplex_activity(d1, d2)
+        activity = super().intracomplex_activity(d1, d2)
         cache[cache_key] = activity
         return activity
 
@@ -703,20 +707,22 @@ class SystemMgr():
         #     d2_relative_activity = [(domain2-specie, domain2-complex-state)]
         #  - If the domain strand is not in a complex, relative activity is set to 1.
         #      [{domain1-specie, complex-statedomain2-specie}, complex-fingerprint, intra-complex-reactivity)]
-        if d1.complex is None:
+        if d1.strand.complex is None:
             d1_rel_act = 1
-        if d2.complex is None:
+        if d2.strand.complex is None:
             d2_rel_act = 1
-        if d1.complex == d2.complex != None:
+        if d1.strand.complex == d2.strand.complex != None:
             rel_act = 1
 
 
     def n_hybridized_domains(self):
         """ Count the number of hybridized domains. """
-        count = sum(1 for domain in self.domains_list if domain.partner)
+        count = sum(1 for domain in self.domains_list if domain.partner is not None)
         if not count % 2 == 0:
             print("Weird - n_hybridized_domains counts to %s (should be an even number)" % count)
-            print("Hybridized domains:", ", ".join(str(domain) for domain in self.domains_list if domain.partner))
+            print("Hybridized domains:", ", ".join(str(domain) for domain in self.domains_list
+                                                   if domain.partner is not None))
+            print("Hybridized domains:", ", ".join(str(domain) for domain in self.hybridized_domains_by_name))
         return count
 
     def n_hybridized_strands(self):
@@ -737,7 +743,7 @@ class SystemMgr():
         assert domain2.partner is None
 
         #dset = frozenset((domain1, domain2))
-        #sset = frozenset(domain1.strand, domain2.strand)
+        #sset = frozenset((domain1.strand, domain2.strand))
         domain1.partner = domain2
         domain2.partner = domain1
         strand1 = domain1.strand
@@ -750,8 +756,8 @@ class SystemMgr():
         key = (domain1.universal_name, domain2.universal_name, HYBRIDIZATION_INTERACTION)
         self.strand_graph.add_edge(strand1, strand2, key=key, interaction=HYBRIDIZATION_INTERACTION)
         self.domain_graph.add_edge(domain1, domain2, **edge_kwargs)
-        self.ends_graph.add_edge(domain1.end5p, domain2.end3p, **edge_kwargs)
-        self.ends_graph.add_edge(domain2.end5p, domain1.end3p, **edge_kwargs)
+        self.ends5p3p_graph.add_edge(domain1.end5p, domain2.end3p, **edge_kwargs)
+        self.ends5p3p_graph.add_edge(domain2.end5p, domain1.end3p, **edge_kwargs)
 
         changed_complexes, new_complexes, obsolete_complexes, free_strands = None, None, None, []
 
@@ -762,7 +768,6 @@ class SystemMgr():
                 strand1.complex.add_edge(domain1, domain2, interaction=HYBRIDIZATION_INTERACTION)
                 changed_complexes = [c1]
             return changed_complexes, new_complexes, obsolete_complexes, free_strands
-
 
         ## Update complex:
         if c1 and c2:
@@ -796,6 +801,8 @@ class SystemMgr():
             new_complexes = [new_complex]
             new_complex.strands |= {strand1, strand2}
             strand1.complex = strand2.complex = new_complex
+            new_complex.add_strand(strand1)
+            new_complex.add_strand(strand2)
             c_major = new_complex
             new_complexes = [new_complex]
 
@@ -836,14 +843,15 @@ class SystemMgr():
                       HYBRIDIZATION_INTERACTION)
         self.strand_graph.remove_edge(strand1, strand2, key=s_edge_key)
         self.domain_graph.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
-        self.ends_graph.remove_edge(domain1.end5p, domain2.end3p, key=HYBRIDIZATION_INTERACTION)
-        self.ends_graph.remove_edge(domain2.end5p, domain1.end3p, key=HYBRIDIZATION_INTERACTION)
+        self.ends5p3p_graph.remove_edge(domain1.end5p, domain2.end3p, key=HYBRIDIZATION_INTERACTION)
+        self.ends5p3p_graph.remove_edge(domain2.end5p, domain1.end3p, key=HYBRIDIZATION_INTERACTION)
 
         if strand1 == strand2 and c is None:
             # The domains are on the same strand and we don't have any complex to update
             return None, None, None, [strand1]
         assert c is not None
 
+        # Update complex graph:
         c.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
         c.strand_graph.remove_edge(strand1, strand2, s_edge_key)
 
@@ -898,13 +906,13 @@ class SystemMgr():
                 # case (b) one complex and one unhybridized strand - no need to do much further
                 domain_minor = domain1 if dom1_cc_size == 1 else domain2
                 free_strands = [domain_minor.strand]
-                c.strands.remove(domain_minor.strand)
-                c.strand_graph.remove_node(domain_minor.strand)
+                c.remove_strand.remove(domain_minor.strand, update_graph=True)
         else:
             # Case (c) Two unhybridized strands
-            free_strands = [d.strand for d in (domain1, domain2)]
-            c.strands -= {strand1, strand2}
+            free_strands = [domain1.strand, domain2.strand]
+            c.remove_strands({strand1, strand2})
             assert c.strands == set()
+            assert all(len(strandset) == 0 for strandset in c.strands_by_name.values())
             obsolete_complexes = [c]
             strand1.complex, strand2.complex = None, None
 

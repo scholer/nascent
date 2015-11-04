@@ -30,7 +30,9 @@ import numpy as np
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
-from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
+from .constants import (PHOSPHATEBACKBONE_INTERACTION,
+                        HYBRIDIZATION_INTERACTION,
+                        STACKING_INTERACTION,
                         interactions)
 
 # Module-level constants and variables:
@@ -50,34 +52,49 @@ class Strand(nx.Graph):
     def __init__(self, name, domains, start_complex=None):
         # all **kwargs given to nx.Graph is used as attributes.
         # a graph's attributes are simply a dict stored in Graph.graph member
-        self.domains = domains
-        self.length = sum(d.length for d in domains)
-        self.name = name
-        self.uuid = next(sequential_uuid_gen)
-        self.instance_name = "%s#%s" % (self.name, self.uuid)
-        # suid = Strand unique id. Can be the same as a domain's id. But two strands will never have the same id.
         super().__init__(name=name,
                          complex=start_complex,
                          suid=next(make_sequential_id),
-                         #domains=domains,
                         )
+        #self.name = name  # Is a native Graph property, linked to self.graph
+        self.uuid = next(sequential_uuid_gen)   # sequential number unique across all objects
+        self.suid = next(make_sequential_id)    # sequential number unique across strands
+        self.instance_name = "%s#%s" % (self.name, self.uuid)
+        self.ends5p3p_graph = nx.Graph()
+        # suid = Strand unique id. Can be the same as a domain's id. But two strands will never have the same id.
+        if domains:
+            self.set_domains(domains)
+
+
+    def set_domains(self, domains):
+        """ Set this strands domains. Should only be invoked once. """
+        self.domains = domains
+        self.length = sum(d.length for d in domains)
+
         # self is a graph of domains:
         self.add_nodes_from(domains) # Add all domains as nodes
         # connect nodes from the 5p end to the 3p end:
         edge_attrs = {'weight': 1,  # Not the edge betwen 5p-3p in one domain, but 3p of one domain to 5p of the next.
-                      'type': PHOSPHATE_BACKBONE,
+                      'type': PHOSPHATEBACKBONE_INTERACTION,
                       'direction': None}
         edges = zip(iter(domains), iter(domains[1:]), itertools.cycle([edge_attrs]))
         self.add_edges_from(edges)
+
+        ## Update ends5p3p_graph:
+        domain_edges = [(d.end5p, d.end3p, dict(edge_attrs, weight=len(d), len=len(d)))
+                        for d in domains]
+        domain_interfaces = zip([d.end5p for d in domains], [d.end5p for d in domains[1:]],
+                                itertools.cycle([edge_attrs]))
+        self.ends5p3p_graph.add_edges_from(domain_edges+domain_interfaces)
+
         # Make sure all domains have this strand registered as their parent:
         for domain in domains:
-            domain.strand = self
-
+            domain.set_strand(self)
 
         ## Adjacency and distance matrices ##
-        # could be {frozenset(d1, d2): dist} or a matrix.
+        # could be {frozenset((d1, d2)): dist} or a matrix.
         self.strand_domain_distances = {
-            frozenset(d1, d2): 1
+            frozenset((d1, d2)): 1
             for d1, d2 in zip(iter(domains), iter(domains[1:]))}
         n = len(domains)
         self.adjacency_matrix = np.ndarray((n, n), dtype=bool)
@@ -92,28 +109,39 @@ class Strand(nx.Graph):
             self.nt_distance_matrix[i, j] = self.nt_distance_matrix[j, i] = \
                 sum(dom.length for dom in domains[i+1:j])
 
+
     @property
     def complex(self):
         return self.graph['complex']
 
-    @Complex.setter
-    def complex(self, complex):
-        self.graph['complex'] = complex
+    @complex.setter
+    def complex(self, cmplx):
+        self.graph['complex'] = cmplx
 
-    @property
-    def name(self):
-        return self.graph['name']
+    # 'name' is already a built-in property of nx.Graph objects
+    # @property
+    # def name(self):
+    #     return self.graph['name']
+    #
+    # @name.setter
+    # def name(self, name):
+    #     self.graph['name'] = name
 
     def sequence(self, sep=""):
         """ Return the full strand sequence as the sequence of each domain, separated by <sep>. """
-        return sep.join(d.Sequence for d in self.domains)
+        return sep.join(d.sequence for d in self.domains)
+
+    def is_hybridized(self):
+        return all(domain.partner is not None for domain in self.domains)
 
     def fqdn(self):
         """ Return Complex:Strand[Domain] """
         return "%s:%s[%s]" % (str(self.graph['complex']), self.graph['name'], self.graph['suid'])
 
     def __repr__(self):
-        return self.FQDN()
+        return self.fqdn()
 
     def __str__(self):
-        return self.FQDN()
+        #return self.fqdn()
+        # string representation must be INVARIANT during the course of the simulation!
+        return self.instance_name

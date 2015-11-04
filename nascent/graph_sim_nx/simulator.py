@@ -36,6 +36,9 @@ from datetime import datetime
 
 
 from nascent.energymodels.biopython import Tm_NN
+# Consider using NN table that has units of R, R/K:
+#from nascent.energymodels.biopython import energy_tables_in_units_of_R
+#DNA_NN4 = energy_tables_in_units_of_R["DNA_NN4"]
 from .thermodynamic_utils import thermodynamic_meltingcurve
 from .systemmgr import SystemMgr
 
@@ -124,15 +127,6 @@ class Simulator():
         print("Total number of domains:", sysmgr.N_domains, file=fp)
         print(" - number of different domains:", len(sysmgr.domains_by_name), file=fp)
         print("Steps per T:", self.N_steps_per_T, file=fp)
-        oversampling_factor = self.params['probablity_oversampling_factor']
-        print("Probability oversampling factor:", oversampling_factor, file=fp)
-        print("Domain concentration * oversampling factor: {:.02g}\n - less than 1e-3: {}".format(
-            c*oversampling_factor, c*oversampling_factor < 1e-3), file=fp)
-        print("n_steps_per_T * domain concentration * oversampling factor: {:.02g}".format(
-            self.N_steps_per_T * oversampling_factor * c), file=fp)
-        coverage = self.N_steps_per_T * oversampling_factor * c / sysmgr.N_domains
-        print("Coverage: {:.02g}\n - larger than 1: {}".format(
-            coverage, coverage > 1), file=fp)
 
     def save_report(self, reportfile):
         """ Save the output of print_setup to file. """
@@ -155,14 +149,14 @@ class Simulator():
             print("n_species (copies):", len(strands), file=fp)
             print("c_strand_total: {:0.04g} uM".format(c_strand_total*1e6), file=fp)
             for domain in strands[0].domains:
-                print("Domain:", domain.Name, file=fp)
-                print(" - total copy count of this domain:", len(sysmgr.domains_by_name[domain.Name]), file=fp)
+                print("Domain:", domain.name, file=fp)
+                print(" - total copy count of this domain:", len(sysmgr.domains_by_name[domain.name]), file=fp)
                 print("\n".join(" - %s: %s" % (att, getattr(domain, att))
                                 for att in ('Sequence', )), file=fp)
                 try:
-                    deltaH, deltaS = sysmgr.domain_dHdS[domain.Name]
+                    deltaH, deltaS = sysmgr.domain_dHdS[domain.name]
                     print(" - deltaH, deltaS: {:.04g} kcal/mol, {:.04g} cal/mol/K".format(
-                        *sysmgr.domain_dHdS[domain.Name]), file=fp)
+                        *sysmgr.domain_dHdS[domain.name]), file=fp)
                 except KeyError:
                     pass
                 else:
@@ -170,9 +164,9 @@ class Simulator():
                     Q_melt = (c_strand_total - c_strand_total/2)
                     Tm = (1000 * deltaH) / (deltaS + (R * (math.log(Q_melt)))) - 273.15
                     print(" - Tm: {:.04g} (from deltaH, deltaS)".format(Tm), file=fp)
-                Tm = Tm_NN(domain.Sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9, **Tm_params)
+                Tm = Tm_NN(domain.sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9, **Tm_params)
                 print(" - Tm: {:.04g} (from Tm_NN)".format(Tm), file=fp)
-                Tm = Tm_NN(domain.Sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9,
+                Tm = Tm_NN(domain.sequence, dnac1=c_strand_total*1e9, dnac2=c_strand_total*1e9,
                            nn_table="DNA_NN4", **Tm_params)
                 print(" - Tm: {:.04g} (from Tm_NN using DNA_NN4)".format(Tm), file=fp)
 

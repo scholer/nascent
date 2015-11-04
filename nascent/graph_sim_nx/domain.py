@@ -30,14 +30,15 @@ TODO: Change all mentions of "strand" to "oligo" to conform with cadnano's nomen
 import math
 #from collections import deque, OrderedDict
 #from itertools import zip_longest, chain#, accumulate
-import itertools
-import networkx as nx
-import numpy as np
+# import itertools
+# import networkx as nx
+# import numpy as np
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
-from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
-                        N_AVOGADRO, ss_kuhn_length, ss_rise_per_nt, ds_rise_per_bp)
+from .constants import STACKING_INTERACTION #, PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION,
+# from .constants import N_AVOGADRO
+from .constants import ss_kuhn_length, ss_rise_per_nt, ds_rise_per_bp
 from .algorithms import connectivity_rings
 
 
@@ -60,12 +61,17 @@ class Domain():
         5' -------- --------- -------- 3'
     """
     def __init__(self, name, strand, seq=None, partner=None):
+        # Domain unique id (duid). Can be the same as a strand's id. But two domains will never have the same id.
+        self.duid = next(make_sequential_id)
+        self.uuid = next(sequential_uuid_gen)  # Universally unique id. Should be unique across all objects.
         self.name = name
-        self.strand = strand
-        self.complex = None
-        self.domain_strand_specie = (strand.name, name)
         self.instance_name = "%s#%s" % (self.name, self.uuid)
-        self.universal_name = "%s:%s" % (self.strand.instance_name, self.instance_name)
+        if strand:
+            self.set_strand(strand)
+        else:
+            self.strand = None
+            self.domain_strand_specie = (None, name)
+            self.universal_name = "%s:%s" % (None, self.instance_name)
         self.sequence = seq
         self.length = self.n_nt = len(seq)
         # E[r²] = ∑ Nᵢbᵢ² for i ≤ m = N (λˢˢ)², N = N_nt∙lˢˢ/λˢˢ
@@ -80,14 +86,17 @@ class Domain():
         self.end3p = Domain3pEnd(self)
         #self.stacked_upstream = None  # Edit, is self.end5p.stack_partner.domain
         #self.stacked_downstream = None
-        # Domain unique id. Can be the same as a strand's id. But two domains will never have the same id.
-        self.duid = next(make_sequential_id)
-        self.uuid = next(sequential_uuid_gen)
 
         # Cached values:
         self._in_complex_identifier = None
         self._specie_state_fingerprint = None
 
+
+    def set_strand(self, strand):
+        """ (re-)set domain's strand. """
+        self.strand = strand
+        self.domain_strand_specie = (strand.name, self.name)
+        self.universal_name = "%s:%s" % (self.strand.instance_name, self.instance_name)
 
 
     def in_complex_identifier(self, strandgraph=None):
@@ -95,7 +104,7 @@ class Domain():
         Return a hash that can be used to identify the current domain within the complex.
         """
         if self._in_complex_identifier is None:
-            s = domain.strand
+            s = self.strand
             c = s.complex
             if not c or len(c.strands_by_name[s.name]) < 2:
                 # If only one strand in the complex, no need to calculate strand-domain identifier:
@@ -111,38 +120,42 @@ class Domain():
                                                     edge_filter=dont_follow_stacking_interactions)
                 # TODO: THe hash should probably include the strand specie as well
                 self._in_complex_identifier = hash(tuple(d.domain_strand_specie for d in neighbor_rings))
-                specie_instances = c.domains_by_name[self.name]
+                #specie_instances = c.domains_by_name[self.name]
         return self._in_complex_identifier
 
 
-    def domain_state_fingerprint(domain, strandgraph=None):
+    def domain_state_fingerprint(self, strandgraph=None):
         """
         This is a hash of:
             (domain_strand_specie, complex-state, in-complex-identifier)
         TODO: Consider not making duplexes state-dependent but rather just depend on their local stacking state.
         """
-        if not domain._specie_state_fingerprint:
-            c = s.complex
-            dspecie = domain.domain_strand_specie,  # e.g. (strandA, domain1)
+        if not self._specie_state_fingerprint:
+            dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
             # the complex's state:
-            c_state = c.state_fingerprint() if c else 0,
-            domain._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
-        return domain._specie_state_fingerprint
+            c_state = self.strand.complex.state_fingerprint() if self.strand.complex else 0
+            self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
+        return self._specie_state_fingerprint
 
 
     def state_change_reset(self):
+        """ Reset state-dependent attributes (must be invoked after a state change). """
         self._in_complex_identifier = None
         self._specie_state_fingerprint = None
 
 
     def fqdn(self):
-        return "%s:%s[%s]" % (self.strand.fqdn(), self.name, self.did)
+        """ Return a "fully qualified" name, typically [complex][strand][domains]. """
+        return "%s:%s[%s]" % (self.strand.fqdn(), self.name, self.duid)
 
     def __repr__(self):
         return self.fqdn()
 
     def __str__(self):
-        return self.fqdn()
+        #return self.fqdn()
+        # fqdn returns in a complex; we are using string representation as nodes
+        # which MUST BE INVARIANT throughout the simulation.
+        return self.universal_name
 
     def __len__(self):
         return len(self.sequence)
@@ -181,7 +194,8 @@ class DomainEnd():
 
 class Domain5pEnd(DomainEnd):
     def __init__(self, domain):
-        super().__init__(self, domain, end="5p")
+        #super().__init__(self, domain, end="5p")
+        DomainEnd.__init__(self, domain, end="5p")
 
     def stacked_upstream(self, ):
         return self.stack_partner
@@ -194,7 +208,8 @@ class Domain5pEnd(DomainEnd):
 
 class Domain3pEnd(DomainEnd):
     def __init__(self, domain):
-        super().__init__(self, domain, end="3p")
+        #super().__init__(self, domain, end="3p")
+        DomainEnd.__init__(self, domain, end="3p")
 
     def stacked_upstream(self, ):
         """ If a domain is hybridized, we assume it is the domain's ends are stacked. """

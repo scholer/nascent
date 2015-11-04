@@ -42,7 +42,7 @@ LIBPATH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, LIBPATH)
 
 import nascent.nascent_sim
-from nascent.graph_sim_nx.simulator_dm import DM_Simulator
+from nascent.graph_sim_nx.simulator_dm import DM_Simulator as Simulator
 from nascent.graph_sim_nx.fileio import parse_strand_domains_file, check_strands
 from nascent.graph_sim_nx.dispatcher import StateChangeDispatcher
 
@@ -61,37 +61,45 @@ def test(simulator, usepdb=False):
 
     #local = {'simulator': simulator}
     #ns = locals()
-    domA = next(d for d in simulator.Domains if d.Name == 'A')
-    domB = next(d for d in simulator.Domains if d.Name == 'B')
-    domC = next(d for d in simulator.Domains if d.Name == 'C')
-    domb = next(d for d in simulator.Domains if d.Name == 'b')
-    domD = next(d for d in simulator.Domains if d.Name == 'D')
-    domE = next(d for d in simulator.Domains if d.Name == 'E')
-    domF = next(d for d in simulator.Domains if d.Name == 'F')
-    domc = next(d for d in simulator.Domains if d.Name == 'c')
-    domG = next(d for d in simulator.Domains if d.Name == 'G')
-    domH = next(d for d in simulator.Domains if d.Name == 'H')
-    domg = next(d for d in simulator.Domains if d.Name == 'g')
-    domK = next(d for d in simulator.Domains if d.Name == 'K')
-    domi = next(d for d in simulator.Domains if d.Name == 'i')
-    domL = next(d for d in simulator.Domains if d.Name == 'L')
+    sysmgr = simulator.systemmgr
+    domA = next(d for d in sysmgr.domains if d.name == 'A')
+    domB = next(d for d in sysmgr.domains if d.name == 'B')
+    domC = next(d for d in sysmgr.domains if d.name == 'C')
+    domb = next(d for d in sysmgr.domains if d.name == 'b')
+    domD = next(d for d in sysmgr.domains if d.name == 'D')
+    domE = next(d for d in sysmgr.domains if d.name == 'E')
+    domF = next(d for d in sysmgr.domains if d.name == 'F')
+    domc = next(d for d in sysmgr.domains if d.name == 'c')
+    domG = next(d for d in sysmgr.domains if d.name == 'G')
+    domH = next(d for d in sysmgr.domains if d.name == 'H')
+    domg = next(d for d in sysmgr.domains if d.name == 'g')
+    domK = next(d for d in sysmgr.domains if d.name == 'K')
+    domi = next(d for d in sysmgr.domains if d.name == 'i')
+    domL = next(d for d in sysmgr.domains if d.name == 'L')
 
     if usepdb:
         # Use the python debugger (includes readline since 3.3):
         import pdb
-        pdb.run('simulator.simulate(T=350, n_steps_max=1, systime_max=1)')
+        #pdb.run('simulator.simulate(T=350, n_steps_max=1, systime_max=1)', locals=locals())
         # Or start main script from console using:
         # python -m pdb simulator_test.py
         # If you want to debug at a certain place in the code, use pdb.set_trace() to break out to the pdb.
         # To enter debug after experiencing an exception, use pdb.pm(). Debug starts from sys.last_traceback
         # To enter debug while you have a current exception or traceback, use pdb.post_morten
+        #pdb.set_trace()
+        try:
+            simulator.simulate(T=350, n_steps_max=1, systime_max=100)
+        except:
+            pdb.pm()
+        #pdb.post_mortem()
+        #pdb.pm()
     else:
         readline.set_completer(rlcompleter.Completer(locals()).complete)
         readline.parse_and_bind("tab: complete")
         from importlib import reload
         #newc, oldc = moves.hybridize(domb, domB)
         # Simulate a single step:
-        simulator.simulate(T=350, n_steps_max=1, systime_max=1)
+        simulator.simulate(T=350, n_steps_max=1, systime_max=100)
 
         interact(local=locals())
 
@@ -99,33 +107,46 @@ def test(simulator, usepdb=False):
 
 def cleanup(outputstatsfile):
     """ Remove all outputfiles related to outputstatsfile. """
-    os.remove(outputstatsfile)  # clean up, if we are not saving.
+    if os.path.exists(outputstatsfile):
+        try:
+            os.remove(outputstatsfile)  # clean up, if we are not saving.
+        except IOError as e:
+            print("Could not remove %s: %s" % (outputstatsfile, e))
     # TODO: You should remove all files explicitly. Some datafiles are appended, not overwritten.
     for fn in glob.glob(os.path.splitext(outputstatsfile)[0]+"*"):
         print("- Removing", fn)
-        os.remove(fn)
+        try:
+            os.remove(fn)
+            print("- Removed", fn)
+        except IOError as e:
+            print("- Unable to remove", fn, ":", e)
+
 
 def prompt_yes_no(prompt, default=None):
-        answer = ""
-        while answer not in ('y', 'n'):
-            answer = input(prompt).strip().lower()
-            if not answer:
-                if default:
-                    answer = default
-            else:
-                answer = answer[0]
-            if answer not in ('y', 'n'):
-                print("Answer must start with Y/y or N/n. Please try again")
-        return answer
+    """ Prompt user for a yes/no answer, defaulting to :default:.
+    If default is None, this function will continue to ask until a clear yes or no has been given."""
+    answer = ""
+    while answer not in ('y', 'n'):
+        answer = input(prompt).strip().lower()
+        if not answer:
+            if default:
+                answer = default
+        else:
+            answer = answer[0].lower()
+        if answer not in ('y', 'n'):
+            print("Answer must start with Y/y or N/n. Please try again.")
+    return answer
 
 
 def main():
+    """ Main test function. """
     #strand_defs_file = os.path.join(os.path.dirname(__file__), "testfiles", "strand_defs01.txt")
     # LIBPATH,
     # adhoc_testing = False
     adhoc_testing = True
     usepdb = True
-    strand_defs_folder = os.path.join(os.path.dirname(nascent.__file__), "testfiles")
+    strand_defs_folder = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(nascent.__file__))), "testfiles")
     #structure = "duplex1"
     #structure = "duplex1_2"
     #structure = "circ1"
@@ -150,26 +171,26 @@ def main():
     print("Loading strand/domain defs from file:", strand_defs_file)
     input_oligos = parse_strand_domains_file(strand_defs_file, n_clones_default=n_strand_copies_default)
     check_strands(input_oligos)
-    n_domains = sum(len(s.Domains) for s in input_oligos)
+    n_domains = sum(len(s.domains) for s in input_oligos)
 
-    run_directory = os.path.join(os.path.expanduser("~/Nascent"),
+    run_directory = os.path.join(os.path.expanduser("~"),
+                                 "Nascent",
                                  "simdata",
                                  structure,
                                  datetime.now().strftime("%Y-%m-%d %H%M"))
     if os.path.isdir(run_directory):
-        clean = prompt_yes_no("Directory '" + run_directory + "' already exists. Remove this before proceeding?")
-        if clean:
+        clean = prompt_yes_no("Directory '" + run_directory + "' already exists. Remove this before proceeding? ")
+        if clean == 'y':
             os.remove(run_directory)
     elif os.path.exists(run_directory):
         print("Directory '" + run_directory + "' already exists BUT IS NOT A DIRECTORY. ABORTING!")
-        raise OSError("Statsfolder already exists and is not a folder:", statsfolder)
+        #raise OSError("Statsfolder/run_directory already exists and is not a folder:", run_directory)
         return
     else:
         os.makedirs(run_directory)
 
-    dispatcher_config = {'dispatcher_state_changes_fn': os.path.expanduser()}
-
     statsfolder = run_directory # os.path.join(strand_defs_folder, "simdata", structure)
+
     # if not os.path.exists(statsfolder):
     #     os.mkdir(statsfolder)
     # elif not os.path.isdir(statsfolder):
@@ -225,7 +246,7 @@ def main():
                     'n_steps_per_T': n_steps_per_T
                    }
     simulator = Simulator(volume=volume, strands=input_oligos, params=adhoc_params,
-                          outputstatsfiles=outputstatsfile, verbose=0)
+                          outputstatsfiles=outputstatsfile)
 
     ## Hook up dispatcher
     dispatcher_config = {'dispatcher_state_changes_fn': outputfn(uid=uid, statstype="changes", ext="txt"),
@@ -241,6 +262,7 @@ def main():
                          'livestreamer_auto_apply_layout': 0,
                          'livestreamer_graph_layout_method': 'force-directed',
                          'dispatcher_livestreamer': None, # 'gephi', 'cytoscape'
+                         'dispatcher_debug_print': True, # print debug statements in dispatcher
                         }
     dispatcher = StateChangeDispatcher(dispatcher_config)
     simulator.dispatcher = dispatcher
@@ -283,7 +305,7 @@ def main():
                        'datetime': datetime.now().isoformat(),
                        'note': note
                       }, fp)
-
+        print("Basic simulation parameters saved to file:", outputstatsfile)
         ## INITIATE ANNEALING
         simulator.anneal(T_start=T_start, T_finish=T_finish, delta_T=step)
 
@@ -309,7 +331,7 @@ def main():
 
     Tm_filename = os.path.splitext(outputstatsfile)[0] + ".energies.yaml"
     with open(Tm_filename, 'w') as fp:
-        yaml.dump(simulator.Domain_dHdS, fp)
+        yaml.dump(simulator.systemmgr.domain_dHdS, fp)
 
     reportfilename = os.path.splitext(outputstatsfile)[0] + ".domainstats.txt"
     simulator.save_domain_stats(reportfilename)

@@ -16,6 +16,7 @@
 ##    You should have received a copy of the GNU Affero General Public License
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+# pylint:disable=C0103,R0914
 
 """
 
@@ -23,7 +24,10 @@ Module for
 
 """
 
+import math
 
+from .constants import N_AVOGADRO, R
+from nascent.energymodels.biopython import hybridization_dH_dS
 
 
 
@@ -62,7 +66,7 @@ def thermodynamic_meltingcurve(T_start, T_finish, delta_T, volume,
                     # compl_name list is empty after filtering
                     continue
             if dname not in domain_dHdS:
-                domain_dHdS[dname] = hybridization_dH_dS(domains[0].Sequence)
+                domain_dHdS[dname] = hybridization_dH_dS(domains[0].sequence)
             # standard-condition energies:
             deltaH, deltaS = domain_dHdS[dname]
             # deltaH in kcal/mol, deltaS in cal/mol/K:
@@ -100,6 +104,7 @@ def thermodynamic_meltingcurve(T_start, T_finish, delta_T, volume,
         cum_stats[T] = (hybridized, non_hybridized, total_conc, domains_total)
         T += delta_T
     return cum_stats, domain_stats
+
 
 def solvetwocomponent(Ai, Bi, K):
     """

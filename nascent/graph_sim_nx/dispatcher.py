@@ -254,6 +254,11 @@ class StateChangeDispatcher():
                 self.state_changes_cache.append(state_change)
             if len(self.state_changes_cache) >= self.state_changes_cache_size:
                 self.flush_state_changes_cache()
+        if self.config.get('dispatcher_debug_print'):
+            if directive_is_list:
+                print(*[self.state_change_str(directive) for directive in state_changes], sep="\n")
+            else:
+                print(self.state_change_str(state_change))
 
         ## Propagate the graph state change directive to live graph streamer, if one is configured:
         if self.live_streamer:

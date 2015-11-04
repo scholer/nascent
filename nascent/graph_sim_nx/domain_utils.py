@@ -53,7 +53,7 @@ def distance_cached(domain1, domain2, return_parents=False):
         return (0, parents) if return_parents else 0
 
     print("Determining distance from %s to %s in complex %s" %
-          (domain1.Name, domain2.Name, domain1.strand.complex))
+          (domain1.name, domain2.name, domain1.strand.complex))
     Q = deque()
     dset = frozenset((domain1, domain1)) # = {domain1}, can only have unique elements.
     #assert dset in distances and distances[dset] == 0
@@ -63,13 +63,13 @@ def distance_cached(domain1, domain2, return_parents=False):
     ## or, equivalently, if you use the domain-domain dist matrix where you search for zeros.
     while Q:    # is not empty
         u = Q.popleft()     # We pop "from the left"
-        #print("u node = %s" % u.Name)
+        #print("u node = %s" % u.name)
         uset = frozenset((domain1, u))
         fset = frozenset((domain2, u))
         if fset in distances:
             distances[ftset] = distances[uset] + distances[fset]
 
-        if u.partner:
+        if u.partner is not None:
             #print("Checking u's partner, %s" % u.partner)
             parents[u.partner] = u
             dset = frozenset((domain1, u.partner))
@@ -85,7 +85,7 @@ def distance_cached(domain1, domain2, return_parents=False):
             # However, the old didn't give the right behaviour for strands with more than 4 domains.
             if d:   # could be None
                 parents[d] = u
-                #print("At child domain %s" % d.Name)
+                #print("At child domain %s" % d.name)
                 dset = frozenset((domain1, d))
                 if dset not in distances:
                     distances[dset] = distances[uset] + 1
@@ -97,7 +97,7 @@ def distance_cached(domain1, domain2, return_parents=False):
                     distances[dset] = distances[uset] + 1
                     Q.append(d)
                 if d == domain2:
-                    #print("Found target domain %s" % domain2.Name)
+                    #print("Found target domain %s" % domain2.name)
                     return (distances[dset], parents) if return_parents else distances[dset]
 
 def gen_parents_connection(parents, domain):
@@ -141,7 +141,7 @@ def print_domain_distances(distances):
     Since distances {{d1, d2}: dist} can have d1==d2, so just be {d1}: dist
     then it is a little tricky/tedious to print.
     """
-    print("\n".join("%s<->%s: %s" % tuple([d.Name for d in ds]
-                                          +([] if len(ds) > 1 else [d.Name for d in ds])
+    print("\n".join("%s<->%s: %s" % tuple([d.name for d in ds]
+                                          +([] if len(ds) > 1 else [d.name for d in ds])
                                           +[dist])
                     for ds, dist in distances.items()))

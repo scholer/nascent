@@ -76,11 +76,11 @@ class DM_Simulator(Simulator):
         doms_specs = frozenset({domspec1, domspec2})
 
     Primary data structures:
-        - possible_hybridization_reactions[doms_specs] = propencity_constant cj, is_hybridizing
+        - possible_hybridization_reactions[doms_specs] = propensity_constant cj, is_hybridizing
             Contains up-to-date hybridization and dehybridization reactions
             dict, keyed by doms_specs = {domain1-state, domain2-state}
             This is "R" and "R_j" in Gillespie's formulas
-        - propensity_functions[doms_specs] = actual propencity for reaction between domain1 and domain2
+        - propensity_functions[doms_specs] = actual propensity for reaction between domain1 and domain2
             with domain-states doms_specs = {domain1-state, domain2-state}
             This is "a" or "a(x)" in Gillespie's formulas.
 
@@ -169,9 +169,12 @@ class DM_Simulator(Simulator):
             # sysmgr.propensity_functions is dict with              {doms_specs: a_j}
 
             # Step 1. (I expect that propensity_functions is up-to-date)
-            reactions, propensity_functions = zip(sysmgr.propensity_functions.items())
+            if not sysmgr.propensity_functions:
+                print("\n\nERROR: sysmgr.propensity_functions is:",
+                      sysmgr.propensity_functions, " - ABORTING SIMULATION.\n\n")
+            reactions, propensity_functions = zip(*sysmgr.propensity_functions.items())
             # reactions: list of possible reactions
-            a = propensity_functions # propensity_functions[j]: propencity for reaction[j]
+            a = propensity_functions # propensity_functions[j]: propensity for reaction[j]
             a0_sum = sum(propensity_functions)
 
             # Step 2: Generate values for τ and j:  - easy.
@@ -183,13 +186,18 @@ class DM_Simulator(Simulator):
             # find j:
             breaking_point = r2*a0_sum
             j = 0 # python 0-based index: a[0] = j_1
-            sum_j = 0
+            sum_j = a[j]
             while sum_j < breaking_point:
-                sum_j += a[j]
                 j += 1
+                sum_j += a[j]
+            # [0.25, 0.25, 0.25, 0.25]
+            # [0.25, 0.50, 0.75, 1.00]
+            # bp = 0.9
+            # j =
             # Propensity functions are only used to select which reaction path to fire.
             # Now that we have that, we just have to select an domain pair with doms_specs
-            reaction_doms_specs = reactions[j]  # is a doms_specs {F₁, F₂}
+            # is a doms_specs = {dom_spec1, dom_spec2} = {F₁, F₂}
+            reaction_doms_specs = reactions[j]
 
             # 3. Effect the next reaction by updating time and counts (replacing t ← t + τ and x̄ ← x̄ + νj).
             # 3a: Update system time.
@@ -231,9 +239,13 @@ class DM_Simulator(Simulator):
             # - domain_state_subspecies  - this is basically x̄ ← x̄ + νj
             # - possible_hybridization_reactions
             # - propensity_functions
+            # Note: If evaluating whether an object is boolean False, the steps include:
+            # - Does it have a __len__ attribute? - Yes? Return bool(len(obj))
+            # Whereas evaluating whether "obj is None" is about 10 times faster.
             changed_domains = [domain for cmplx in changed_complexes for domain in cmplx.nodes()
-                               if not domain.partner]+\
-                              [domain for strand in free_strands for domain in strand.domains if not domain.partner]
+                               if domain.partner is not None]+\
+                              [domain for strand in free_strands
+                               for domain in strand.domains if domain.partner is not None]
             if is_hybridizing:
                 # d1, d2 are partnered and not included in changed_domains (which filtered out hybridized domains)
                 changed_domains.extend([d1, d2])
@@ -285,5 +297,3 @@ class DM_Simulator(Simulator):
             self.save_stats_cache() # Save cache once per temperature
         print("Annealing complete! (%s)" % datetime.now().strftime("%Y-%m-%d %H:%M"))
         self.print_setup()
-
-
