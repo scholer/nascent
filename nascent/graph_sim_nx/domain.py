@@ -62,10 +62,12 @@ class Domain():
     """
     def __init__(self, name, strand, seq=None, partner=None):
         # Domain unique id (duid). Can be the same as a strand's id. But two domains will never have the same id.
-        self.duid = next(make_sequential_id)
-        self.uuid = next(sequential_uuid_gen)  # Universally unique id. Should be unique across all objects.
+        self.duid = next(make_sequential_id)    # sequential number unique across domains
+        self.uuid = next(sequential_uuid_gen)   # Universally unique id. Unique across all objects.
+        # duid vs uuid? I prefer d/s/c uid versions. (complex#1, strand#1, domain#1).
+        # uuid's are used mostly for debuggin.
         self.name = name
-        self.instance_name = "%s#%s" % (self.name, self.uuid)
+        self.instance_name = "%s#%s" % (self.name, self.duid)
         if strand:
             self.set_strand(strand)
         else:
@@ -130,11 +132,13 @@ class Domain():
             (domain_strand_specie, complex-state, in-complex-identifier)
         TODO: Consider not making duplexes state-dependent but rather just depend on their local stacking state.
         """
-        if not self._specie_state_fingerprint:
+        if self._specie_state_fingerprint is None:
             dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
             # the complex's state:
             c_state = self.strand.complex.state_fingerprint() if self.strand.complex else 0
-            self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
+            # self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
+            self._specie_state_fingerprint = (dspecie, c_state, self.in_complex_identifier())
+            print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
         return self._specie_state_fingerprint
 
 

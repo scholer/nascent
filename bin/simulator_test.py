@@ -86,20 +86,20 @@ def test(simulator, usepdb=False):
         # If you want to debug at a certain place in the code, use pdb.set_trace() to break out to the pdb.
         # To enter debug after experiencing an exception, use pdb.pm(). Debug starts from sys.last_traceback
         # To enter debug while you have a current exception or traceback, use pdb.post_morten
-        #pdb.set_trace()
-        try:
-            simulator.simulate(T=350, n_steps_max=1, systime_max=100)
-        except:
-            pdb.pm()
-        #pdb.post_mortem()
-        #pdb.pm()
+        # pdb.set_trace()
+        simulator.simulate(T=350, n_steps_max=10, systime_max=100)
+        # try:
+        #     simulator.simulate(T=350, n_steps_max=10, systime_max=100)
+        # except TypeError:
+        #     pdb.post_mortem()  # use while handling an exception.
+        #pdb.pm()  # only use after execution, when sys.last_traceback has been set.
     else:
         readline.set_completer(rlcompleter.Completer(locals()).complete)
         readline.parse_and_bind("tab: complete")
         from importlib import reload
         #newc, oldc = moves.hybridize(domb, domB)
         # Simulate a single step:
-        simulator.simulate(T=350, n_steps_max=1, systime_max=100)
+        simulator.simulate(T=350, n_steps_max=10, systime_max=100)
 
         interact(local=locals())
 
@@ -206,7 +206,7 @@ def main():
     assert outputfn(uid=uid, statstype="stats", ext="txt") == outputstatsfile
     while os.path.exists(outputstatsfile):
         uid += 1
-        outputstatsfile = os.path.expanduser(outputstatsfnfmt.format(uid=uid))
+        outputstatsfile = outputfn(uid=uid, statstype="stats", ext="txt")
     print("Using outputstatsfile:", outputstatsfile)
     # Make sure to touch file (in case you are running multiple simulations)
 
@@ -270,6 +270,7 @@ def main():
     # Perform calculations and start simulation
     if adhoc_testing:
         test(simulator, usepdb=usepdb)
+        return
     try:
         offset = 0 #0.3
         start = 40  # deg C

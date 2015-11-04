@@ -152,7 +152,7 @@ class Simulator():
                 print("Domain:", domain.name, file=fp)
                 print(" - total copy count of this domain:", len(sysmgr.domains_by_name[domain.name]), file=fp)
                 print("\n".join(" - %s: %s" % (att, getattr(domain, att))
-                                for att in ('Sequence', )), file=fp)
+                                for att in ('sequence', )), file=fp)
                 try:
                     deltaH, deltaS = sysmgr.domain_dHdS[domain.name]
                     print(" - deltaH, deltaS: {:.04g} kcal/mol, {:.04g} cal/mol/K".format(

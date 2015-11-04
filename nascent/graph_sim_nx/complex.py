@@ -40,7 +40,7 @@ make_sequential_id = sequential_number_generator()
 
 
 
-class Complex(nx.Graph):
+class Complex(nx.MultiGraph):
     """
     This class represents a graph of connected domains.
 
@@ -49,6 +49,10 @@ class Complex(nx.Graph):
      2. Hybridization connections.
      3. Stacking connections.
 
+    I believe we need a MultiGraph to represent this, since
+    two domains can be edge-connected with both a backbone interaction AND
+    a stacking interaction, or, if we allow zero-loop hairpins, both
+    backbone interaction AND hybridization interaction.
 
     It is not for representing a graph of connected strands,
     although it can generate such a graph using strands_graph().
@@ -62,7 +66,7 @@ class Complex(nx.Graph):
     """
     def __init__(self, data=None, strands=None, origin="o"):
         self.cuid = next(make_sequential_id)
-        self.uuid = next(sequential_uuid_gen)
+        self.uuid = next(sequential_uuid_gen)   # Universally unique id; mostly used for debugging.
         super().__init__(data=data, cuid=self.cuid)
         if strands is None:
             strands = []
@@ -248,11 +252,12 @@ class Complex(nx.Graph):
 
         """
         if not self._state_fingerprint:
-            self._state_fingerprint = hash((
+            self._state_fingerprint = (str(self), hash((
                 self.strands_fingerprint(),
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()
-                ))
+                )))
+        return self._state_fingerprint
 
     # def domains_gen(self):
     #     return (domain for strand in self.strands for domain in strand.domains)

@@ -52,14 +52,14 @@ class Strand(nx.Graph):
     def __init__(self, name, domains, start_complex=None):
         # all **kwargs given to nx.Graph is used as attributes.
         # a graph's attributes are simply a dict stored in Graph.graph member
-        super().__init__(name=name,
-                         complex=start_complex,
-                         suid=next(make_sequential_id),
-                        )
-        #self.name = name  # Is a native Graph property, linked to self.graph
         self.uuid = next(sequential_uuid_gen)   # sequential number unique across all objects
         self.suid = next(make_sequential_id)    # sequential number unique across strands
-        self.instance_name = "%s#%s" % (self.name, self.uuid)
+        super().__init__(name=name,
+                         complex=start_complex,
+                         suid=self.suid,
+                        )
+        #self.name = name  # Is a native Graph property, linked to self.graph
+        self.instance_name = "%s#%s" % (self.name, self.suid)
         self.ends5p3p_graph = nx.Graph()
         # suid = Strand unique id. Can be the same as a domain's id. But two strands will never have the same id.
         if domains:
@@ -132,11 +132,12 @@ class Strand(nx.Graph):
         return sep.join(d.sequence for d in self.domains)
 
     def is_hybridized(self):
-        return all(domain.partner is not None for domain in self.domains)
+        """ Return whether any domain in strand is hybridized. """
+        return any(domain.partner is not None for domain in self.domains)
 
     def fqdn(self):
         """ Return Complex:Strand[Domain] """
-        return "%s:%s[%s]" % (str(self.graph['complex']), self.graph['name'], self.graph['suid'])
+        return "%s:%s[%s]" % (self.complex, self.name, self.suid)
 
     def __repr__(self):
         return self.fqdn()

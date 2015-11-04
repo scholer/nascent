@@ -31,6 +31,7 @@ from collections import deque
 #import math
 from math import log as ln # exp
 from datetime import datetime
+from pprint import pprint
 import time
 if sys.platform == "win32":
     timer = time.clock
@@ -173,6 +174,7 @@ class DM_Simulator(Simulator):
                 print("\n\nERROR: sysmgr.propensity_functions is:",
                       sysmgr.propensity_functions, " - ABORTING SIMULATION.\n\n")
             reactions, propensity_functions = zip(*sysmgr.propensity_functions.items())
+            assert set(reactions) == set(sysmgr.possible_hybridization_reactions.keys())
             # reactions: list of possible reactions
             a = propensity_functions # propensity_functions[j]: propensity for reaction[j]
             a0_sum = sum(propensity_functions)
@@ -208,12 +210,45 @@ class DM_Simulator(Simulator):
 
             # 3b: Hybridize/dehybridize:
             c_j, is_hybridizing = sysmgr.possible_hybridization_reactions[reaction_doms_specs]
-            d1, d2 = [species_list.pop() for species_list in
+
+            ## HERE WE SELECT (formerly REMOVE/POP) arbitrary domains FROM sysmgr.domain_state_subspecies sets ##
+            d1, d2 = [next(iter(species_list))  # species_list.pop()
+                      for species_list in
                       [sysmgr.domain_state_subspecies[dom_spec] for dom_spec in reaction_doms_specs]]
+
+            domain_species_keys_before = {k: len(v) for k, v in sysmgr.domain_state_subspecies.items()}
             if is_hybridizing:
+                print("Hybridizing domain %s (%s) and %s (%s)..." %
+                      (d1, d1._specie_state_fingerprint, d2, d2._specie_state_fingerprint))
                 changed_complexes, new_complexes, obsolete_complexes, free_strands = sysmgr.hybridize(d1, d2)
+                #print("Completed hybridization of domain %s and %s..." % (d1, d2))
+                print("Completed hybridization of domain %s (%s) and %s (%s)..." %
+                      (d1, d1._specie_state_fingerprint, d2, d2._specie_state_fingerprint))
             else:
+                print("De-hybridizing domain %s (%s) and %s (%s)..." %
+                      (d1, d1._specie_state_fingerprint, d2, d2._specie_state_fingerprint))
                 changed_complexes, new_complexes, obsolete_complexes, free_strands = sysmgr.dehybridize(d1, d2)
+                hyb_result = sysmgr.dehybridize(d1, d2)
+                #print("Completed de-hybridization of domain %s and %s..." % (d1, d2))
+                print("Completed de-hybridization of domain %s (%s) and %s (%s)..." %
+                      (d1, d1._specie_state_fingerprint, d2, d2._specie_state_fingerprint))
+            #domain_species_keys_after = set(sysmgr.domain_state_subspecies.keys())
+            domain_species_keys_after = {k: len(v) for k, v in sysmgr.domain_state_subspecies.items()}
+            if domain_species_keys_after != domain_species_keys_before:
+                print("domain_species_keys_after != domain_species_keys_before (%s vs %s elements)" %
+                      (len(domain_species_keys_after), len(domain_species_keys_before)))
+                print("domain_species_keys_before:")
+                pprint(domain_species_keys_before)
+                print("domain_species_keys_after:")
+                pprint(domain_species_keys_after)
+            # else:
+            #     print("domain_species_keys_after == domain_species_keys_before (%s vs %s elements)" %
+            #           (len(domain_species_keys_after), len(domain_species_keys_before)))
+            #     print("domain_species_keys_after hybridization/dehybridization:")
+            #     pprint(domain_species_keys_after)
+
+            assert set(reactions) == set(sysmgr.possible_hybridization_reactions.keys())
+            assert set(sysmgr.propensity_functions.keys()) == set(sysmgr.possible_hybridization_reactions.keys())
 
             # 3c: Dispatch the state change
             if self.dispatcher:
@@ -235,6 +270,8 @@ class DM_Simulator(Simulator):
                 directive['nodes'] = (d1, d2)  # Not sure if we have to give str representation here
                 self.dispatcher.dispatch(directive, directive_is_list=False)
 
+            ## TODO: CONSIDER WHETHER ALL OF THIS SHOULD BE DONE AUTOMATICALLY IN SYSMGR!
+
             # 4: Update/re-calculate possible_hybridization_reactions and propensity_functions
             # - domain_state_subspecies  - this is basically x̄ ← x̄ + νj
             # - possible_hybridization_reactions
@@ -242,14 +279,42 @@ class DM_Simulator(Simulator):
             # Note: If evaluating whether an object is boolean False, the steps include:
             # - Does it have a __len__ attribute? - Yes? Return bool(len(obj))
             # Whereas evaluating whether "obj is None" is about 10 times faster.
-            changed_domains = [domain for cmplx in changed_complexes for domain in cmplx.nodes()
-                               if domain.partner is not None]+\
-                              [domain for strand in free_strands
-                               for domain in strand.domains if domain.partner is not None]
+            # Fixed: Excluding domains that have no partners -- these will never undergo hybridization reaction.
+            changed_domains = []
+            if hyb_result['changed_complexes']:
+                changed_domains += [domain for cmplx in hyb_result['changed_complexes'] for domain in cmplx.nodes()
+                                    if domain.partner is None and domain.name in sysmgr.domain_pairs]
+            if hyb_result['new_complexes']:
+                changed_domains += [domain for cmplx in hyb_result['new_complexes'] for domain in cmplx.nodes()
+                                    if domain.partner is None and domain.name in sysmgr.domain_pairs]
+            if hyb_result['free_strands']:
+                changed_domains += [domain for strand in hyb_result['free_strands'] for domain in strand.domains
+                                    if domain.partner is None and domain.name in sysmgr.domain_pairs]
             if is_hybridizing:
-                # d1, d2 are partnered and not included in changed_domains (which filtered out hybridized domains)
-                changed_domains.extend([d1, d2])
-            sysmgr.update_possible_reactions(changed_domains, d1, d2, is_hybridizing)
+                # d1, d2 are partnered and not included in changed_domains (which currently excludes hybridized domains)
+                changed_domains += [d1, d2]
+
+            if len(changed_domains) != len(set(changed_domains)):
+                print("WARNING: changed_domains contains duplicates!! THIS SHOULD NOT HAPPEN!")
+                print("changed_domains:")
+                pprint(changed_domains)
+                print("changed_complexes:")
+                pprint(changed_complexes)
+                print("changed_complexes domains: (using complex.nodes())")
+                pprint([domain for cmplx in changed_complexes for domain in cmplx.nodes()])
+                print("changed_complexes domains: (using complex.strands)")
+                pprint([domain for cmplx in changed_complexes for s in cmplx.strands for domain in s.domains])
+                print("free_strands:")
+                pprint(free_strands)
+                print("free_strands domains:")
+                pprint([d for s in free_strands for d in s.domains])
+
+                print("( %s reaction between %s (%s) and %s (%s) )" %
+                      ("Hybridization" if is_hybridizing else "De-hybridization", d1, repr(d1), d2, repr(d2)))
+                print("-----------------")
+
+            sysmgr.update_possible_reactions(changed_domains, d1, d2, is_hybridizing, reaction_doms_specs)
+            assert set(sysmgr.propensity_functions.keys()) == set(sysmgr.possible_hybridization_reactions.keys())
 
 
             ## FINISH OF AND LOOP TO STEP (1)
@@ -258,12 +323,13 @@ class DM_Simulator(Simulator):
             self.system_stats['tau'] = dt
             self.system_stats['tau_deque'].append(dt)
             self.system_stats['tau_mean'] = sum(self.system_stats['tau_deque'])/len(self.system_stats['tau_deque'])
-            self.timings['start_time'], self.timings['end_time'] = self.timings['end_time'], timer()
-            self.timings['step_time'] = self.timings['start_time'] - self.timings['end_time']
+            self.timings['step_start_time'], self.timings['step_end_time'] = self.timings['step_end_time'], timer()
+            self.timings['step_time'] = self.timings['step_start_time'] - self.timings['step_end_time']
 
             print(self.print_post_step_fmt.format(
                 self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.systemmgr),
                   end="")
+
             if n_done % 10000 == 0:
                 print(("Simulated %s of %s steps at T=%s K (%0.0f C). "+
                        "%s state changes with %s selections in %s total steps.") %

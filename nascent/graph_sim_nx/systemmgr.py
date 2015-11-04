@@ -16,7 +16,7 @@
 ##    You should have received a copy of the GNU Affero General Public License
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# pylint: disable=C0103
+# pylint: disable=C0103,
 
 """
 
@@ -53,18 +53,15 @@ from collections import defaultdict
 #import math
 from math import exp #, log as ln
 #from datetime import datetime
-
+from pprint import pprint
 import networkx as nx
 from networkx.algorithms.components import connected_components, connected_component_subgraphs
 import numpy as np
 
 
 from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
-from .constants import N_AVOGADRO #, R # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K
-from .constants import (PHOSPHATEBACKBONE_INTERACTION,
-                        HYBRIDIZATION_INTERACTION,
-                        STACKING_INTERACTION,
-                        N_AVOGADRO, AVOGADRO_VOLUME_NM3)
+from .constants import N_AVOGADRO, AVOGADRO_VOLUME_NM3 #, R # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K
+from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION
 from .complex import Complex
 from .structure_analyzer import StructureAnalyzer
 
@@ -84,8 +81,9 @@ class SystemMgr(StructureAnalyzer):
         # Base single-molecule activity of two free single reactants in volume.
         self.specific_bimolecular_activity = 1/self.volume/N_AVOGADRO # × M
         self.include_steric_repulsion = True
-        self.complexes = []
-        self.removed_complexes = []
+        # complexes are assigned sequential complex-unique IDs upon instantiation, no need to keep track of order here.
+        self.complexes = set()
+        self.removed_complexes = [] # But it might be interesting to keep track of deletion order.
         self.strands = strands
         self.strands_by_name = defaultdict(list)
         for strand in strands:
@@ -131,7 +129,7 @@ class SystemMgr(StructureAnalyzer):
             # Or it could be a set of sets: {{da, dA}, {dA, dax}} and then generate partners by:
             # partners_species = set(chain(pair for pair in domain_pairs if dA in pair)) - {dA}
             # However, might as well only do this once and save the list!
-            # Also, if you change domain_pairs mapping, remember to adjust Domain_dHdS cache as well.
+            # Also, if you change domain_pairs mapping, remember to adjust domain_dHdS cache as well.
             domain_pairs = {d.name: d.name.lower() if d.name == d.name.upper() else d.name.upper()
                             for d in self.domains_list}
             # remove pairs without partner:
@@ -145,8 +143,6 @@ class SystemMgr(StructureAnalyzer):
 
         print("Simulation system manager initiated at V=%s with %s strands spanning %s domains." \
               % (self.volume, len(self.strands), len(self.domains)))
-
-
 
 
         ## Symbol nomenclature:
@@ -280,7 +276,7 @@ class SystemMgr(StructureAnalyzer):
         print(len(self.possible_hybridization_reactions), "possible hybridization reactions initialized.")
 
 
-    def update_possible_reactions(self, changed_domains, d1, d2, is_hybridizing):
+    def update_possible_reactions(self, changed_domains, d1, d2, is_hybridizing, reaction_doms_specs=None):
         """
         Maybe it is better to just re-calculate a_j for all changed domains,
         and then filter out reactions with a_j = 0.
@@ -304,6 +300,12 @@ class SystemMgr(StructureAnalyzer):
 
         Instead, I guess we could have
         """
+        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+
+        n_possible_start = len(self.possible_hybridization_reactions)
+        n_propensity_start = len(self.propensity_functions)
+        n_species_start = len(self.domain_state_subspecies)
+
         # Add changed domains to new species
         depleted_domspecs = set()
         changed_domspecs = set()
@@ -324,24 +326,39 @@ class SystemMgr(StructureAnalyzer):
 
 
         for domain in changed_domains:
+            print("update_possible_reactions: processing changed domain:", domain)
+            # IMPORTANT: changed_domains must not contain any
             # Set vs list:
             # - Lists are slightly faster to iterate over;
             # - Sets are significantly faster for lookups and removing arbitrary elements (about 80 times faster)
             old_domspec = domain._specie_state_fingerprint
+            # For d1, d2, old_domspec yields the new domspec instead!
             try:
                 # This is really expensive for lists so domain_species should be a set
                 self.domain_state_subspecies[old_domspec].remove(domain)
             except KeyError as e:
-                if domain not in (d1, d2):
+                print("domain %s not in self.domain_state_subspecies[%s]:" % (domain, old_domspec),
+                      self.domain_state_subspecies[old_domspec])
+                for domspec_i, spec_domain_set in self.domain_state_subspecies.items():
+                    if domain in spec_domain_set:
+                        print(" - domain %s was found in self.domain_state_subspecies[%s]:" % (domain, domspec_i),
+                              self.domain_state_subspecies[domspec_i])
+                if domain not in (d1, d2) or True:
                     raise e
             if len(self.domain_state_subspecies[old_domspec]) == 0:
                 depleted_domspecs.add(old_domspec)
                 del self.domain_state_subspecies[old_domspec]
             else:
                 changed_domspecs.add(old_domspec)
+            print("Re-setting and re-calculating domain_state_fingerprint for %s - old is: %s"
+                  % (domain, domain._specie_state_fingerprint))
             domain.state_change_reset()
             new_domspec = domain.domain_state_fingerprint()
+            if new_domspec == old_domspec:
+                print("Weird: new_domspec == old_domspec for changed domain %s: %s == %s" %
+                      (domain, new_domspec, old_domspec))
             if new_domspec not in self.domain_state_subspecies:
+                # perhaps use self.hybridization_reactions_by_domspec ??
                 new_domspecs.add(new_domspec)
             else:
                 changed_domspecs.add(new_domspec)
@@ -364,25 +381,36 @@ class SystemMgr(StructureAnalyzer):
         for domspec in depleted_domspecs:
             depleted_reactions = {k: v for k, v in self.possible_hybridization_reactions.items()
                                   if domspec in k} # k is frozendict(domspec1, domspec2)
-            for k, v in depleted_reactions:
-                del self.possible_hybridization_reactions[k]
-                del self.propensity_functions[k]
+            for k, v in depleted_reactions.items():
+                try:
+                    del self.possible_hybridization_reactions[k]
+                    del self.propensity_functions[k]
+                except KeyError as e:
+                    print("Unexpected KeyError:", e)
+                    print("Starting pdb...")
+                    import pdb
+                    pdb.set_trace()
                 self.depleted_hybridization_reactions[k] = v
                 self.N_state_depletions += 1
+
+        updated_reactions = set()
 
         ## New domain states:
         for domspec in new_domspecs:
             repleted_reactions = {k: v for k, v in self.depleted_hybridization_reactions.items()
-                                  if domspec in k and all(len(self.domain_state_subspecies[F]) > 0) for F in k}
-            for k, v in repleted_reactions:
+                                  if domspec in k and all(len(self.domain_state_subspecies[F]) > 0 for F in k)}
+            for k, v in repleted_reactions.items():
                 del self.depleted_hybridization_reactions[k]
                 self.possible_hybridization_reactions[k] = v
                 self.N_state_repletions += 1
+            # When do we add domain with domspec to domain_state_subspecies ?
             d1 = next(iter(self.domain_state_subspecies[domspec]))
             if d1.partner is not None:
                 d2 = d1.partner
                 d2_domspec = d2.domain_state_fingerprint()
                 doms_specs = frozenset((domspec, d2_domspec))
+                self.hybridization_reactions_by_domspec[domspec] = doms_specs
+                self.hybridization_reactions_by_domspec[d2_domspec] = doms_specs
                 if doms_specs not in Rxs:
                     # tuple values are (propensity constant c_j, is_hybridizing)
                     Rxs[doms_specs] = self.calculate_c_j(d1, d2, is_hybridizing=False)
@@ -390,23 +418,96 @@ class SystemMgr(StructureAnalyzer):
                     # Should not happen - it is supposedly a "new domain state".
                     print(("Weird: doms_specs %s for hybridized domains d1, d2 = (%s, %s) is"
                            "already in possible_reactions - that should not happen.") % (doms_specs, d1, d2))
+                self.recalculate_propensity_function(doms_specs)
+                updated_reactions.add(doms_specs)
             else:
                 ## No partner -- consider hybridization reactions with all other unhybridized complementary domains.
-                for d2 in (d for cname in self.domain_pairs[d1.name]
-                           for d in self.unhybridized_domains_by_name[cname]):
-                    d2_domspec = d2.domain_state_fingerprint()
-                    doms_specs = frozenset((domspec, d2_domspec))
-                    if doms_specs not in Rxs:
-                        # R_j = (c_j, v_j) - propensity constant for reaction j
-                        Rxs[doms_specs] = self.calculate_c_j(d1, d2, is_hybridizing=True)
-                        self.hybridization_reactions_by_domspec[domspec] = doms_specs
-                        self.hybridization_reactions_by_domspec[d2_domspec] = doms_specs
+                # for d2 in [d for cname in self.domain_pairs[d1.name]
+                #            for d in self.unhybridized_domains_by_name[cname]]:
+                #pdb.set_trace()
+                if d1.name in self.domain_pairs:
+                    try:
+                        for cname in self.domain_pairs[d1.name]:
+                            for d2 in self.unhybridized_domains_by_name[cname]:
+                                d2_domspec = d2.domain_state_fingerprint()
+                                doms_specs = frozenset((domspec, d2_domspec))
+                                if doms_specs not in Rxs:
+                                    # R_j = (c_j, v_j) - propensity constant for reaction j
+                                    Rxs[doms_specs] = self.calculate_c_j(d1, d2, is_hybridizing=True)
+                                self.hybridization_reactions_by_domspec[domspec] = doms_specs
+                                self.hybridization_reactions_by_domspec[d2_domspec] = doms_specs
+                                self.recalculate_propensity_function(doms_specs)
+                                updated_reactions.add(doms_specs)
+                    except KeyError as e:
+                        print("KeyError:", e)
+                        print("d1, d1.name:", d1, ",", d1.name)
+                        print("self.domain_pairs:")
+                        pprint(self.domain_pairs)
+                        print("self.domain_pairs[d1.name]:")
+                        pprint(self.domain_pairs[d1.name])
+                        print("self.unhybridized_domains_by_name:")
+                        pprint(self.unhybridized_domains_by_name)
+                        print("All domains that should be unhybridized (partner is None):")
+                        real_unhybridized_domains = [d for d in self.domains if d.partner is None]
+                        pprint(real_unhybridized_domains)
+                        print(" - %s elements" % len(real_unhybridized_domains))
+                        print("Difference (symmetric):")
+                        print(set(self.unhybridized_domains_by_name.keys()) ^
+                              set(d.name for d in real_unhybridized_domains))
+                        print("d2, d2.name:", d2, ",", d2.name)
+                        pdb.set_trace()
 
         ## Changed domains states (i.e. only a change in number of domains in that state)
         ## Just update propensity_functions for those domspec
-        for domspec in changed_domspecs | new_domspecs:
+        for domspec in changed_domspecs: #| new_domspecs:
+            ## TODO: Make sure we do not calculate the full product "matrix", but only one of the symmetric halfs.
+            # print(("Re-evaluating propensity for all hybridization reactions involving domspec "
+            #        "%s in changed_domspecs | new_domspecs..." % (domspec, )))
             for doms_specs in self.hybridization_reactions_by_domspec[domspec]:
+                # print("Re-calculating propensity for doms_specs %s ..." % doms_specs)
                 self.recalculate_propensity_function(doms_specs)
+
+        n_possible_end = len(self.possible_hybridization_reactions)
+        n_propensity_end = len(self.propensity_functions)
+        n_species_end = len(self.domain_state_subspecies)
+
+        if n_possible_end != n_propensity_end:
+            print("\n!! n_possible_end != n_propensity_end: %s != %s" % (n_possible_end, n_propensity_end))
+            print("n_possible_start, n_propensity_start:", n_possible_start, n_propensity_start)
+            print("n_species_start, n_species_end:", n_species_start, n_species_end)
+            print("changed_domains:", changed_domains)
+            print("d1, d2:", d1, d2)
+            print("reaction_doms_specs:", reaction_doms_specs)
+            print("is_hybridizing:", is_hybridizing)
+            print("self.possible_hybridization_reactions: (%s elements)" % len(self.possible_hybridization_reactions))
+            pprint(list(self.possible_hybridization_reactions))
+            print("self.propensity_functions: (%s elements)" % len(self.propensity_functions))
+            pprint(list(self.propensity_functions))
+            print("Shared keys: (%s elements)" %
+                  len(set(self.possible_hybridization_reactions.keys()) & set(self.propensity_functions.keys())))
+            pprint(list(set(self.possible_hybridization_reactions.keys()) & set(self.propensity_functions.keys())))
+            print("Differing keys: (symmetric difference, %s elements)" %
+                  len(set(self.possible_hybridization_reactions.keys()) ^ set(self.propensity_functions.keys())))
+            pprint(list(set(self.possible_hybridization_reactions.keys()) ^ set(self.propensity_functions.keys())))
+
+            print("self.depleted_hybridization_reactions: (%s elements)" % len(self.depleted_hybridization_reactions))
+            pprint(list(self.depleted_hybridization_reactions.keys()))
+
+            print("self.domain_state_subspecies.keys(): (%s elements)" % len(self.domain_state_subspecies))
+            pprint(list(self.domain_state_subspecies.keys()))
+
+            print("new_domspecs: (%s elements)" % len(new_domspecs))
+            pprint(new_domspecs)
+            print("changed_domspecs: (%s elements)" % len(changed_domspecs))
+            pprint(changed_domspecs)
+            print("depleted_domspecs: (%s elements)" % len(depleted_domspecs))
+            pprint(depleted_domspecs)
+
+            print("self.hybridization_reactions_by_domspec:")
+            pprint(self.hybridization_reactions_by_domspec)
+
+
+        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
 
     def recalculate_propensity_function(self, doms_specs):
@@ -422,7 +523,9 @@ class SystemMgr(StructureAnalyzer):
                 np.prod([len(self.domain_state_subspecies[ds]) for ds in doms_specs])
         else:
             # a_j = c_j * x₃ ,      x₃ is number of duplexes
-            self.propensity_functions[doms_specs] = c_j * len(self.domain_state_subspecies[doms_specs[0]])
+            #self.propensity_functions[doms_specs] = c_j * len(self.domain_state_subspecies[doms_specs[0]])
+            self.propensity_functions[doms_specs] = c_j * len(self.domain_state_subspecies[next(iter(doms_specs))])
+
 
 
 
@@ -478,7 +581,8 @@ class SystemMgr(StructureAnalyzer):
         print("Initializing propensity functions...")
         # doms_specs (plural) is: frozenset({(domain1, cstate), (domain2, cstate)})
         a = {doms_specs: c_j * (np.prod([len(self.domain_state_subspecies[ds]) for ds in doms_specs])
-                                if is_hybridizing else len(self.domain_state_subspecies[doms_specs[0]]))
+                                #if is_hybridizing else len(self.domain_state_subspecies[doms_specs[0]]))
+                                if is_hybridizing else len(self.domain_state_subspecies[next(iter(doms_specs))]))
              for doms_specs, (c_j, is_hybridizing) in self.possible_hybridization_reactions.items()}
         self.propensity_functions = a
         print(len(self.propensity_functions), "propensity functions initialized.")
@@ -680,7 +784,15 @@ class SystemMgr(StructureAnalyzer):
         """
         doms_state_hash = frozenset(d.domain_state_fingerprint() for d in (d1, d2))
         if doms_state_hash not in self._statedependent_dH_dS:
-            dH, dS = self.domain_dHdS[(d1.name, d2.name)]
+            if (d1.name, d2.name) not in self.domain_dHdS:
+                self.domain_dHdS[(d1.name, d2.name)] = dH, dS = \
+                    hybridization_dH_dS(d1.sequence, c_seq=d2.sequence[::-1])
+            else:
+                dH, dS = self.domain_dHdS[(d1.name, d2.name)]
+            ## Also add for individual domains, just for good measure.
+            for d in (d1, d2):
+                if d1.name not in self.domain_dHdS:
+                    self.domain_dHdS[d.name] = hybridization_dH_dS(d1.sequence)
             # TODO: make adjustments, e.g. due to:
             # * dangling ends
             # * stacking
@@ -753,8 +865,10 @@ class SystemMgr(StructureAnalyzer):
 
         # Update system-level graphs:
         edge_kwargs = {"key": HYBRIDIZATION_INTERACTION, "interaction": HYBRIDIZATION_INTERACTION}
-        key = (domain1.universal_name, domain2.universal_name, HYBRIDIZATION_INTERACTION)
-        self.strand_graph.add_edge(strand1, strand2, key=key, interaction=HYBRIDIZATION_INTERACTION)
+        #key = (domain1.universal_name, domain2.universal_name, HYBRIDIZATION_INTERACTION)
+        s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)), HYBRIDIZATION_INTERACTION)
+        print("Adding strand_graph edge (%s, %s, key=%s)" % (strand1, strand2, s_edge_key))
+        self.strand_graph.add_edge(strand1, strand2, key=s_edge_key, interaction=HYBRIDIZATION_INTERACTION)
         self.domain_graph.add_edge(domain1, domain2, **edge_kwargs)
         self.ends5p3p_graph.add_edge(domain1.end5p, domain2.end3p, **edge_kwargs)
         self.ends5p3p_graph.add_edge(domain2.end5p, domain1.end3p, **edge_kwargs)
@@ -809,7 +923,7 @@ class SystemMgr(StructureAnalyzer):
             new_complexes = [new_complex]
 
         # Create the hybridization connection in the major complex graph:
-        c_major.add_edge(domain1, domain2, interaction=HYBRIDIZATION_INTERACTION)
+        c_major.add_edge(domain1, domain2, **edge_kwargs)
         c_major.domain_distances = {} # Reset distances
         changed_complexes = [c_major]
 
@@ -842,8 +956,8 @@ class SystemMgr(StructureAnalyzer):
         assert c == strand2.complex
 
         # Update system-level graphs:
-        s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)),
-                      HYBRIDIZATION_INTERACTION)
+        s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)), HYBRIDIZATION_INTERACTION)
+        print("Removing strand_graph edge (%s, %s, key=%s)" % (strand1, strand2, s_edge_key))
         self.strand_graph.remove_edge(strand1, strand2, key=s_edge_key)
         self.domain_graph.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
         self.ends5p3p_graph.remove_edge(domain1.end5p, domain2.end3p, key=HYBRIDIZATION_INTERACTION)
@@ -854,11 +968,16 @@ class SystemMgr(StructureAnalyzer):
             return None, None, None, [strand1]
         assert c is not None
 
-        changed_complexes, new_complexes, obsolete_complexes, free_strands = [c], None, None, []
+        result = {'changed_complexes': [c],
+                  'new_complexes': None,
+                  'obsolete_complexes': None,
+                  'free_strands': None,
+                  'case': None}
+        #changed_complexes, new_complexes, obsolete_complexes, free_strands = [c], None, None, []
 
         ## Update complex graph, breaking the d1-d2 hybridization edge:
         c.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
-        c.strand_graph.remove_edge(strand1, strand2, s_edge_key)
+        #c.strand_graph.remove_edge(strand1, strand2, s_edge_key)  ## complex strand_graph is obsolete
 
         c.domain_distances = {}  # Reset distances:
 
@@ -868,7 +987,9 @@ class SystemMgr(StructureAnalyzer):
 
         if strand2 in dom1_cc_oligos:
             ## The two strands are still connected: No need to do anything further
-            return changed_complexes, new_complexes, obsolete_complexes, free_strands
+            result['case'] = 0
+            return result
+            #return changed_complexes, new_complexes, obsolete_complexes, free_strands
 
 
         #### The two strands are no longer connected: ####
@@ -878,7 +999,7 @@ class SystemMgr(StructureAnalyzer):
         ## Case (b) One complex and one unhybridized strand - no need to do much further
         ## Case (c) Two unhybridized strands
 
-        dom2_cc_oligos = nx.node_connected_component(self.strand_graph, strand1)
+        dom2_cc_oligos = nx.node_connected_component(self.strand_graph, strand2)
         assert strand2 not in dom1_cc_oligos
         assert strand1 not in dom2_cc_oligos
         dom1_cc_size = len(dom1_cc_oligos)  # cc = connected component
@@ -909,11 +1030,13 @@ class SystemMgr(StructureAnalyzer):
             c.remove_strand.remove(domain_minor.strand, update_graph=True)
         else:
             # Case (c) Two unhybridized strands
-            free_strands = [domain1.strand, domain2.strand]
+            changed_complexes, obsolete_complexes, free_strands = [], [c], [domain1.strand, domain2.strand]
             c.remove_strands({strand1, strand2})
+            c.remove_nodes_from(strand1)
+            c.remove_nodes_from(strand2)
             assert c.strands == set()
             assert all(len(strandset) == 0 for strandset in c.strands_by_name.values())
-            obsolete_complexes = [c]
+            assert len(c.nodes()) == 0
             strand1.complex, strand2.complex = None, None
 
         assert domain1.partner is None
