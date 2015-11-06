@@ -16,7 +16,7 @@
 ##    You should have received a copy of the GNU Affero General Public License
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# pylint: disable=C0103,W0142
+# pylint: disable=C0103,W0142,W0212
 
 """
 
@@ -386,7 +386,6 @@ class SystemMgr(StructureAnalyzer):
         depleted_domspecs = set()
         changed_domspecs = set()
         new_domspecs = set()
-        Rxs = self.possible_hybridization_reactions
         old_d1d2_doms_specs = frozenset((d1._specie_state_fingerprint, d2._specie_state_fingerprint))
 
         if is_hybridizing:
@@ -1299,3 +1298,154 @@ class SystemMgr(StructureAnalyzer):
         assert domain1.partner is None
         assert domain2.partner is None
         return result
+
+
+    def react_and_process(self, doms_specs, is_hybridizing, is_intracomplex="Not implemented"):
+        """
+        Will select a random pair of domain instances from the domain species pair
+        for hybridization reaction, or a random duplex in case of dehybridization reactions.
+        Reaction specie consists of:
+            ({domspec1, domspec2}, is_hybridizing, is_intracomplex)
+        """
+
+        if not all(domspec in self.domain_state_subspecies for domspec in doms_specs):
+            print("doms_specs:", doms_specs)
+            print("Not all domspec in doms_specs are in self.domain_state_subspecies:")
+            pprint(self.domain_state_subspecies)
+        assert all(domspec in self.domain_state_subspecies for domspec in doms_specs)
+        ## HERE WE SELECT (formerly REMOVE/POP) arbitrary domains FROM self.domain_state_subspecies sets ##
+        if is_hybridizing:
+            # For each domspec in doms_specs, select a domain instance belonging to that specie population.
+            # Hmm... how do we tell whether the reaction is supposed to be intra-complex hybridization
+            # vs between two domains in two separate complexes? I need to have a flag for that as well.
+            # Argh, another good reason NOT to have domain-specie based reactions but just have a reaction
+            # path for *each* combination of domain instace pairs.
+            # Obviously, you could still use domspecs for caching.
+            d1, d2 = [next(iter(species_list))  # species_list.pop()
+                      for species_list in
+                      [self.domain_state_subspecies[dom_spec] for dom_spec in doms_specs]]
+        else:
+            # Duplex de-hybridization reaction:
+            d1 = next(iter(self.domain_state_subspecies[next(iter(doms_specs))]))
+            d2 = d1.partner
+            assert d2 is not None
+
+        domain_species_keys_before = {k: len(v) for k, v in self.domain_state_subspecies.items()}
+        if is_hybridizing:
+            print("Hybridizing domain %s %s and %s %s..." %
+                  (repr(d1), d1._specie_state_fingerprint, repr(d2), d2._specie_state_fingerprint))
+            # changed_complexes, new_complexes, obsolete_complexes, free_strands = self.hybridize(d1, d2)
+            hyb_result = self.hybridize(d1, d2)
+            print("Completed hybridization of domain %s and %s..." % (d1, d2))
+            # print("Completed hybridization of domain %s (%s) and %s (%s)..." %
+            #       (d1, d1._specie_state_fingerprint, d2, d2._specie_state_fingerprint))
+        else:
+            print("De-hybridizing domain %s %s and %s %s..." %
+                  (d1, d1._specie_state_fingerprint, d2, d2._specie_state_fingerprint))
+            #changed_complexes, new_complexes, obsolete_complexes, free_strands = self.dehybridize(d1, d2)
+            hyb_result = self.dehybridize(d1, d2)
+            print("Completed de-hybridization of domain %s and %s..." % (d1, d2))
+            # print("Completed de-hybridization of domain %s (%s) and %s (%s)..." %
+            #       (d1, d1._specie_state_fingerprint, d2, d2._specie_state_fingerprint))
+        #domain_species_keys_after = set(self.domain_state_subspecies.keys())
+        domain_species_keys_after = {k: len(v) for k, v in self.domain_state_subspecies.items()}
+        if domain_species_keys_after != domain_species_keys_before:
+            print("domain_species_keys_after != domain_species_keys_before (%s vs %s elements)" %
+                  (len(domain_species_keys_after), len(domain_species_keys_before)))
+            print("domain_species_keys_before:")
+            pprint(domain_species_keys_before)
+            print("domain_species_keys_after:")
+            pprint(domain_species_keys_after)
+        # else:
+        #     print("domain_species_keys_after == domain_species_keys_before (%s vs %s elements)" %
+        #           (len(domain_species_keys_after), len(domain_species_keys_before)))
+        #     print("domain_species_keys_after hybridization/dehybridization:")
+        #     pprint(domain_species_keys_after)
+
+
+        ## TODO: CONSIDER WHETHER ALL OF THIS SHOULD BE DONE AUTOMATICALLY IN SYSMGR!
+
+        # 4: Update/re-calculate possible_hybridization_reactions and propensity_functions
+        # - domain_state_subspecies  - this is basically x̄ ← x̄ + νj
+        # - possible_hybridization_reactions
+        # - propensity_functions
+        # Note: If evaluating whether an object is boolean False, the steps include:
+        # - Does it have a __len__ attribute? - Yes? Return bool(len(obj))
+        # Whereas evaluating whether "obj is None" is about 10 times faster.
+        # Fixed: Excluding domains that have no partners -- these will never undergo hybridization reaction.
+
+        print("hyb_result: (is_hybridizing: %s)" % is_hybridizing)
+        pprint(hyb_result)
+        if hyb_result['free_strands']:
+            print("free strands domains:")
+            pprint([s.domains for s in hyb_result['free_strands']])
+
+        changed_domains = []
+        if hyb_result['changed_complexes']:
+            ch_cmplx_domains = [domain for cmplx in hyb_result['changed_complexes'] for domain in cmplx.nodes()
+                                if domain.partner is None and domain.name in self.domain_pairs]
+            print("Changed complexes domains:")
+            pprint(ch_cmplx_domains)
+            changed_domains += ch_cmplx_domains
+        if hyb_result['new_complexes']:
+            self.complexes |= set(hyb_result['new_complexes'])
+            print("Adding new complexes %s to sysmgr.complexes:" % hyb_result['new_complexes'])
+            pprint(self.complexes)
+            new_cmplx_domains = [domain for cmplx in hyb_result['new_complexes'] for domain in cmplx.nodes()
+                                 if domain.partner is None and domain.name in self.domain_pairs]
+            changed_domains += new_cmplx_domains
+            print("New complexes domains:")
+            pprint(new_cmplx_domains)
+        if hyb_result['free_strands']:
+            free_st_domains = [domain for strand in hyb_result['free_strands'] for domain in strand.domains
+                               if domain.partner is None and domain.name in self.domain_pairs]
+            changed_domains += free_st_domains
+        if hyb_result['obsolete_complexes']:
+            self.complexes -= set(hyb_result['obsolete_complexes'])
+            self.removed_complexes += hyb_result['obsolete_complexes']
+            print("Removing obsolete complexes %s from sysmgr.complexes:" % hyb_result['obsolete_complexes'])
+            pprint(self.complexes)
+            print("sysmgr.removed_complexes:")
+            pprint(self.removed_complexes)
+
+        if is_hybridizing:
+            # d1, d2 are partnered and not included in changed_domains (which currently excludes hybridized domains)
+            changed_domains += [d1, d2]
+
+        if len(changed_domains) != len(set(changed_domains)):
+            print("WARNING: changed_domains contains duplicates!! THIS SHOULD NOT HAPPEN!")
+            print("changed_domains:")
+            pprint(changed_domains)
+            print("hyb_result['changed_complexes']:")
+            pprint(hyb_result['changed_complexes'])
+            print("changed_complexes domains: (using complex.nodes())")
+            pprint([domain for cmplx in hyb_result['changed_complexes'] for domain in cmplx.nodes()])
+            print("changed_complexes domains: (using complex.strands)")
+            pprint([domain for cmplx in hyb_result['changed_complexes']
+                    for s in cmplx.strands for domain in s.domains])
+            print("free_strands:")
+            pprint(hyb_result['free_strands'])
+            print("free_strands domains:")
+            pprint([d for s in hyb_result['free_strands'] for d in s.domains])
+
+            print("( %s reaction between %s (%s) and %s (%s) )" %
+                  ("Hybridization" if is_hybridizing else "De-hybridization", d1, repr(d1), d2, repr(d2)))
+            print("-----------------")
+
+        self.update_possible_reactions(changed_domains, d1, d2, is_hybridizing, doms_specs)
+        # DEBUGGING: Resetting complex fingerprint.
+        # TODO: Move this hybridization/dehybridization methods and apply conditionally.
+        if d1.strand.complex:
+            d1.strand.complex.reset_state_fingerprint()
+        if d2.strand.complex:
+            d2.strand.complex.reset_state_fingerprint()
+
+        print("changed_domains _specie_state_fingerprint:")
+        pprint([(d, d._specie_state_fingerprint) for d in changed_domains])
+        print("changed_domains specie_state_fingerprint():")
+        pprint([(d, d.domain_state_fingerprint()) for d in changed_domains])
+
+        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+
+        # Return the selected domains that were actually hybridized/dehybridized
+        return d1, d2
