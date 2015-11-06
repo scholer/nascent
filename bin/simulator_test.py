@@ -87,7 +87,26 @@ def test(simulator, usepdb=False):
         # To enter debug after experiencing an exception, use pdb.pm(). Debug starts from sys.last_traceback
         # To enter debug while you have a current exception or traceback, use pdb.post_morten
         # pdb.set_trace()
-        simulator.simulate(T=350, n_steps_max=10, systime_max=100)
+        # simulator.systemmgr.draw_and_save_graphs(n=1)
+        try:
+            # n_done = simulator.simulate(T=330, n_steps_max=10, systime_max=200)
+            n_done = simulator.simulate(T=325, n_steps_max=20, systime_max=200) # Stable complex
+            # n_done = simulator.simulate(T=320, n_steps_max=20, systime_max=200) # Stable complex
+            # simulator.simulate(T=310, n_steps_max=10, systime_max=100) # Staple, irreversible.
+        except Exception as e:
+            print("Exception:", type(e), e)
+            #traceback.print_last()
+            traceback.print_exc()
+            enter_pdb = prompt_yes_no("Enter debugger?")
+            if enter_pdb in ('y', True):
+                pdb.set_trace()
+        print("\n\nTEST RUN COMPLETE. n_done =", n_done)
+        answer = input(("Type 'd' to enter debugger; "
+                        "'g' to save plot to file; any other key to continue..."))
+        if 'g' in answer:
+            sysmgr.draw_and_save_graphs(n="end")
+        if 'd' in answer:
+            pdb.set_trace()
         # try:
         #     simulator.simulate(T=350, n_steps_max=10, systime_max=100)
         # except TypeError:
@@ -243,7 +262,8 @@ def main():
 
     ## SET UP SIMULATOR
     adhoc_params = {'time_per_T': time_per_T,
-                    'n_steps_per_T': n_steps_per_T
+                    'n_steps_per_T': n_steps_per_T,
+                    "working_directory": run_directory,
                    }
     simulator = Simulator(volume=volume, strands=input_oligos, params=adhoc_params,
                           outputstatsfiles=outputstatsfile)

@@ -81,7 +81,8 @@ class Complex(nx.MultiGraph):
             #self.add_nodes_from(self.domains_gen()) # Add all domains as nodes
             # Use the (linear) strand graphs to build an initial graph with phosphate backbones:
             for strand in strands:
-                self.add_edges_from(strand)
+                self.add_nodes_from(strand.nodes(data=True))
+                self.add_edges_from(strand.edges(data=True, keys=True))
 
         # Distances between domains.
         # If we have N domains, then we have sum(1..(N-1)) = N**2 - N possible distances?
@@ -95,6 +96,7 @@ class Complex(nx.MultiGraph):
         # Having a list of strands indexed by strand name is useful (e.g. for fingerprinting)
         self.strands_by_name = defaultdict(set)
         for strand in strands:
+            strand.complex = self
             self.strands_by_name[strand.name].add(strand)
 
         # Domains, indexed by name:
@@ -135,27 +137,27 @@ class Complex(nx.MultiGraph):
         # Also, "5p_domain" is the domain at the 5' end of the interface, which is STACKING USING ITS 3' END.
 
 
-    def add_domain(self, domain, update_graph=False):
-        """
-        Update domains_by_name.
-        update_graph defaults to False, because graph-related stuff
-        is usually handled externally for domains.
-        """
-        #self.domains.add(strand)  # domains are tracked by the graph, self.nodes()
-        self.domains_by_name[domain.name].add(domain)
-        if update_graph:
-            # strand is also a (linear) graph of domains:
-            self.add_node(domain)
-            # edge_attrs = {'weight': len(domain), 'len': len(domain), 'type': PHOSPHATEBACKBONE_INTERACTION}
-            # self.ends5p3p_graph.add_path(domain.end5p, domain.end3p, edge_attrs)
-
-    def remove_domain(self, domain, update_graph=False):
-        """ Remove a single domain, updating self.domains_by_name. """
-        self.domains_by_name[domain.name].remove(domain)
-        if update_graph:
-            # strand is also a (linear) graph of domains:
-            self.remove_node(domain)
-            # self.ends5p3p_graph.remove_nodes_from([domain.end5p, domain.end3p])
+    # def add_domain(self, domain, update_graph=False):
+    #     """
+    #     Update domains_by_name.
+    #     update_graph defaults to False, because graph-related stuff
+    #     is usually handled externally for domains.
+    #     """
+    #     #self.domains.add(strand)  # domains are tracked by the graph, self.nodes()
+    #     self.domains_by_name[domain.name].add(domain)
+    #     if update_graph:
+    #         # strand is also a (linear) graph of domains:
+    #         self.add_node(domain)
+    #         # edge_attrs = {'weight': len(domain), 'len': len(domain), 'type': PHOSPHATEBACKBONE_INTERACTION}
+    #         # self.ends5p3p_graph.add_path(domain.end5p, domain.end3p, edge_attrs)
+    #
+    # def remove_domain(self, domain, update_graph=False):
+    #     """ Remove a single domain, updating self.domains_by_name. """
+    #     self.domains_by_name[domain.name].remove(domain)
+    #     if update_graph:
+    #         # strand is also a (linear) graph of domains:
+    #         self.remove_node(domain)
+    #         # self.ends5p3p_graph.remove_nodes_from([domain.end5p, domain.end3p])
 
 
     def add_strand(self, strand, update_graph=False):
@@ -165,7 +167,8 @@ class Complex(nx.MultiGraph):
         strand.complex = self
         if update_graph:
             # strand is also a (linear) graph of domains:
-            self.add_edges_from(strand)
+            self.add_nodes_from(strand.nodes(data=True))
+            self.add_edges_from(strand.edges(data=True, keys=True))
             # self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph)
             # self.strand_graph.add_node(strand)
 
@@ -188,7 +191,8 @@ class Complex(nx.MultiGraph):
             strand.complex = self
             if update_graph:
                 # strand is also a (linear) graph of domains:
-                self.add_edges_from(strand)
+                self.add_nodes_from(strand.nodes(data=True))
+                self.add_edges_from(strand.edges(data=True, keys=True))
                 # self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph)
         if not isinstance(strands, set):
             strands = set(strands)
@@ -252,12 +256,23 @@ class Complex(nx.MultiGraph):
 
         """
         if not self._state_fingerprint:
+            ## TODO: Re-enable hashing when I'm done debugging
             self._state_fingerprint = (str(self), hash((
                 self.strands_fingerprint(),
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()
-                )))
+                )) % 10000)  # TODO: Modulus only while debugging
         return self._state_fingerprint
+
+    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False):
+        self._state_fingerprint = None
+        if reset_strands:
+            self._strands_fingerprint = None
+        if reset_hybridizations:
+            self._hybridization_fingerprint = None
+        if reset_stacking:
+            self._state_fingerprint = None
+
 
     # def domains_gen(self):
     #     return (domain for strand in self.strands for domain in strand.domains)
@@ -277,7 +292,9 @@ class Complex(nx.MultiGraph):
     def strands_fingerprint(self):
         """ Create a finger-print of the current strands (species). """
         if not self._strands_fingerprint:
-            self._strands_fingerprint = hash(self.strands_species_count())
+            ## TODO: Re-add hashing when I'm done debugging
+            # self._strands_fingerprint = hash(self.strands_species_count())
+            self._strands_fingerprint = self.strands_species_count()
         return self._strands_fingerprint
 
     def hybridization_fingerprint(self):
@@ -325,7 +342,8 @@ class Complex(nx.MultiGraph):
         if not self._hybridization_fingerprint:
             hyb_edges = self.hybridization_edges()
             edgesfs = frozenset(frozenset(d.domain_strand_specie for d in edge) for edge in hyb_edges)
-            self._hybridization_fingerprint = hash(edgesfs)
+            ## TODO: Re-add hashing when I'm done debugging
+            self._hybridization_fingerprint = edgesfs # hash(edgesfs)
         return self._hybridization_fingerprint
 
 
@@ -336,10 +354,10 @@ class Complex(nx.MultiGraph):
 
         """
         # you can loop over all edges and filter by type:
-        #hyb_edges = [frozenset((d1, d2)) for d1, d2, cnxtype in self.edges(data='type')
-                     #if cnxtype == DUPLEX_HYBRIDIZATION]
+        hyb_edges = [(d1, d2) for d1, d2, cnxtype in self.edges(data='interaction')
+                     if cnxtype == HYBRIDIZATION_INTERACTION]
         # or maybe it is easier to keep a dict with hybridization connections:
-        hyb_edges = self.hybridized_domains
+        # hyb_edges = self.hybridized_domains
         return hyb_edges
 
     def stacking_fingerprint(self):
@@ -350,7 +368,8 @@ class Complex(nx.MultiGraph):
         if not self._stacking_fingerprint:
             # This is using (d1, d2) tuple rather than {d1, d2} frozenset, since directionality matters.
             edgesfs = frozenset(tuple(d.duid for d in edge) for edge in self.stacked_domains)
-            self._stacking_fingerprint = hash(edgesfs)
+            ## TODO: Re-enable hasing when I'm done debugging:
+            self._stacking_fingerprint = edgesfs # hash(edgesfs)
         return self._stacking_fingerprint
 
     def stacking_edges(self):
@@ -380,7 +399,7 @@ class Complex(nx.MultiGraph):
         Do we need to filter the domains? We could include the ss domains as non-connected nodes.
         """
         hybridized_domains = [domain for domain in self.domains if domain.partner is not None]
-        edges = [(s, t) for s, t, attrs in self.edges(data=True)
+        edges = [(s, t, key, attrs) for s, t, key, attrs in self.edges(data=True, keys=True)
                  if attrs['interaction'] in (HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)]
         subg = self.subgraph(hybridized_domains)
         subg.add_edges_from(edges)

@@ -86,6 +86,8 @@ class Domain():
         self.partner = partner  # duplex hybridization partner
         self.end5p = Domain5pEnd(self)
         self.end3p = Domain3pEnd(self)
+        self.end5p.pb_downstream = self.end3p
+        self.end3p.pb_upstream = self.end5p
         #self.stacked_upstream = None  # Edit, is self.end5p.stack_partner.domain
         #self.stacked_downstream = None
 
@@ -106,9 +108,8 @@ class Domain():
         Return a hash that can be used to identify the current domain within the complex.
         """
         if self._in_complex_identifier is None:
-            s = self.strand
-            c = s.complex
-            if not c or len(c.strands_by_name[s.name]) < 2:
+            c = self.strand.complex
+            if c is None or len(c.strands_by_name[self.strand.name]) < 2:
                 # If only one strand in the complex, no need to calculate strand-domain identifier:
                 self._in_complex_identifier = 0
             else:
@@ -118,7 +119,7 @@ class Domain():
                 # Note: Using hybridization graph, because no reason to vary based on stacking here
                 # TODO: It is very important that the in-complex-identifier is unique.
                 #       Fortunately, you have the option to VERIFY that it actually is.
-                neighbor_rings = connectivity_rings(c, s, 5,
+                neighbor_rings = connectivity_rings(c, self.strand, 5,
                                                     edge_filter=dont_follow_stacking_interactions)
                 # TODO: THe hash should probably include the strand specie as well
                 self._in_complex_identifier = hash(tuple(d.domain_strand_specie for d in neighbor_rings))
@@ -126,6 +127,7 @@ class Domain():
         return self._in_complex_identifier
 
 
+    ## TODO: domain_state_fingerprint and _specie_state_fingerprint should be named similarly.
     def domain_state_fingerprint(self, strandgraph=None):
         """
         This is a hash of:
@@ -135,10 +137,11 @@ class Domain():
         if self._specie_state_fingerprint is None:
             dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
             # the complex's state:
-            c_state = self.strand.complex.state_fingerprint() if self.strand.complex else 0
+            c_state = self.strand.complex.state_fingerprint() \
+                      if self.strand.complex is not None else 0
             # self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
             self._specie_state_fingerprint = (dspecie, c_state, self.in_complex_identifier())
-            print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
+            # print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
         return self._specie_state_fingerprint
 
 
@@ -190,11 +193,18 @@ class DomainEnd():
     def __init__(self, domain, end):
         self.domain = domain
         self.end = end
+        self.name = domain.name+end
         self.hyb_partner = None
         self.pb_upstream = None     # end connected by phosphate backbone on same strand
         self.pb_downstream = None   # end connected by phosphate backbone on same strand
         self.stack_partner = None   # stacking partner
         self.stack_string = None    # Stacking string, e.g. "CA/GT" or maybe frozenset("CG", "AT")
+
+    def __str__(self):
+        return str(self.domain)+self.end
+
+    def __repr__(self):
+        return repr(self.domain)+self.end # + " at " id(self)
 
 class Domain5pEnd(DomainEnd):
     def __init__(self, domain):

@@ -34,7 +34,7 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
 
 class StructureAnalyzer():
 
-    def __init__(self, ends5p3p_graph=None, domain_graph=None, strand_graph=None):
+    def __init__(self, strands=None, ends5p3p_graph=None, domain_graph=None, strand_graph=None):
         ### System graphs ###
         # Not sure whether we should have system-level graphs or a graph for each complex.
         # Domain-level graphs can be created for each graph, in cases where we need cheap reduced graphs.
@@ -50,6 +50,13 @@ class StructureAnalyzer():
         self.ends5p3p_graph = ends5p3p_graph or nx.MultiGraph()
         self.domain_graph = domain_graph or nx.MultiGraph()
         self.strand_graph = strand_graph or nx.MultiGraph()
+        if strands:
+            self.strand_graph.add_nodes_from(strands)
+            for strand in strands:
+                self.domain_graph.add_nodes_from(strand.nodes(data=True))
+                self.domain_graph.add_edges_from(strand.edges(keys=True, data=True))
+                self.ends5p3p_graph.add_nodes_from(strand.ends5p3p_graph.nodes(data=True))
+                self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph.edges(keys=True, data=True))
 
 
     def domain_path_elements(self, path):
@@ -99,16 +106,42 @@ class StructureAnalyzer():
         Edit: Instead of 1/2/3, use the standard INTERACTION constants values.
         """
         path_edges = []
+        interaction = None
         last_interaction = None
         interaction_group = None
         for i in range(len(path)-1):
             source, target = path[i], path[i+1]
             # Method 1: Use ends5p3p_graph edge attributes (which must include stacking edges!):
             edge = self.ends5p3p_graph[source][target]
-            length = edge.get('length')     # TODO: Reach consensus on "length" vs "len" vs "weight"
+            if self.ends5p3p_graph.is_multigraph():
+                # Select edge with lowest r squared:
+                key, edge = min([(k, edge_i) for k, edge_i in edge.items()], key=lambda kv: kv[1].get('weight', 1))
+            # for multigraphs, graph[u][v] returns a dict with {key: {edge_attr}} containing all edges between u and v.
             interaction = edge.get('interaction')
-            if interaction is None:
+            if interaction is not None:
+                length = edge.get('length')     # TODO: Reach consensus on "length" vs "len" vs "weight" vs ?
+                length_sq = edge.get('weight')     # TODO: Reach consensus on "length" vs "len" vs "weight" vs ?
+                if interaction == PHOSPHATEBACKBONE_INTERACTION and source.domain == target.domain:
+                    # Length depends on whether domain is hybridized:
+                    if source.domain.partner is not None:
+                        # hybridized - consider as rigid stack:
+                        length = source.domain.ds_length_nm
+                        length_sq = source.domain.ds_length_sq
+                        interaction = STACKING_INTERACTION
+                    else:
+                        length = source.domain.ss_length_nm     # mean end-to-end length; not contour length
+                        length_sq = source.domain.ss_length_sq
+                # Regardless of what type of connection (stacking/hybridization/phosphate), if
+                # source.domain != target.domain, then length is always 1 (or maybe it should be 2...)
+                if length is None:
+                    length = 1
+                if length_sq is None:
+                    length_sq = 1
+            else:
+                # edge 'interaction' attribute is not available.
                 # Fallback method: Manually determine what type of interaction we have based on source, target:
+                print("WARNING: ends5p3p_graph edge (%s - %s) has no interaction attribute: %s" % (
+                    source, target, edge))
                 if target == source.stack_partner:
                     interaction = STACKING_INTERACTION
                     length = 1
@@ -117,7 +150,8 @@ class StructureAnalyzer():
                     interaction = HYBRIDIZATION_INTERACTION
                     length = 1 # one nm from one helix to the next. We really don't know for sure because it turns.
                     length_sq = 1
-                elif target in (source.bp_upstream, source.pb_downstream):
+                # Check phosphate backbone up- and downstream (5' and 3').
+                elif target in (source.pb_upstream, source.pb_downstream):
                     if source.hyb_partner and \
                         ((source.end == "5p" and target == source.pb_downstream) or
                          (source.end == "3p" and target == source.bp_upstream)):
@@ -135,15 +169,23 @@ class StructureAnalyzer():
                         length_sq = source.domain.ss_length_sq
                 else:
                     raise ValueError("Could not determine interaction between %s and %s" % (source, target))
+            # end fallback determination of interaction type
 
             if interaction == HYBRIDIZATION_INTERACTION:
                 # We only distinguish between ds-helix vs single-strand; use STACKING_INTERACTION to indicate ds-helix:
                 interaction = STACKING_INTERACTION
 
+            # If interaction of the current path element is different from the last, then
+            # add the old interaction group to path_edges, and
+            # create a new interaction group to put this element in...
             if interaction != last_interaction:
-                path_edges.append((last_interaction, interaction_group))
+                if last_interaction is not None:
+                    path_edges.append((last_interaction, interaction_group))
                 interaction_group = []
                 last_interaction = interaction
+            # interaction group is a group of elements with the same interaction type,
+            # path_edges is a list of (interaction, interaction groups) tuples, e.g.
+            #   [('b', [elements with ss backbone interaction]), ('s', [stacked elms]), ('b', [backbone elms]), ...]
             if length_only:
                 if length_only == 'sq':
                     interaction_group.append(length_sq)
@@ -153,10 +195,18 @@ class StructureAnalyzer():
                     interaction_group.append(length)
             else:
                 interaction_group.append((length, length_sq, source, target))
+        # end iteration over all path elements
+
+        # Append the last interaction group to path_edges:
+        path_edges.append((interaction, interaction_group))
+
+        print("Path edges: %s" % path_edges)
+        #print("Interaction groups: %s" % interaction_group)
+
         if summarize and length_only:
             if length_only == 'both':
                 # Return a list of (interaction, (length, length_squared)) tuples:
-                return [(interaction, (sum(lengths) for lengths in zip(*lengths_tup))) # pylint: disable=W0142
+                return [(interaction, [sum(lengths) for lengths in zip(*lengths_tup)]) # pylint: disable=W0142
                         for interaction, lengths_tup in path_edges]
             else:
                 return [(interaction, sum(lengths)) for interaction, lengths in path_edges]
@@ -329,7 +379,11 @@ class StructureAnalyzer():
 
         ## 5p3p-level shortest path:
         path = self.ends5p3p_shortest_path(domain1, domain2)
+        print("5p3p graph shortest path from %s to %s:" % (domain1, domain2))
+        print(path)
         path_elements = self.ends5p3p_path_partial_elements(path, length_only='both', summarize=True)
+        print("5p3p graph path elements:")
+        print(path_elements)
 
         ## TODO: Check for secondary loops!
 
