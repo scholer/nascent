@@ -212,7 +212,7 @@ class SystemMgr(StructureAnalyzer):
         # Up-to-date list of hybridizations that are currently possible:
         # contains [dom_specie_spec, c_j, is_hybridizing] tuples
         # {(domain1, cstate), (domain2, cstate)} => c_j, is_hybridizing
-        self.possible_hybridization_reactions = {}  # Rj, j=0..M - however, I index by doms_specs
+        self.possible_hybridization_reactions = {}  # Rj, j=0..M - however, I index by reaction_spec
         self.depleted_hybridization_reactions = {}
         # Quick lookup with {F₁: [{F₁, F₂}, ...]}; equivalent to
         # {domspec for k in possible_hybridization_reactions if domspec in k}
@@ -285,10 +285,12 @@ class SystemMgr(StructureAnalyzer):
     def init_possible_reactions(self):
         """
         Reactions have:
-            doms_specs => propensity_constant c_j, state_change_vector v_j
-            {(domain1-specie, cstate), (domain2-specie, cstate)} => c_j, is_hybridizing
-            Edit: {F₁, F₂} => c_j, is_hybridizing
-            Where F₁, F₂ are state-dependent "finger-prints" aka "state-species" for the domains:
+            reaction_spec => propensity_constant c_j, state_change_vector v_j
+        However, I do:
+            ({domspec1, domspec2}, is_hybridizing, is_intracomplex) => propensity_constant.
+        Where domspec is a domain-state fingerprint, and
+            {domspec1, domspec2} = domspec_pair = {F₁, F₂}
+            F₁, F₂ are symbols for state-dependent "finger-prints" aka "state-species" for the domains:
                 hash((dspecie, c_state, self.in_complex_identifier()))
 
         We need to find possible reactions. Possible ways to do that:
@@ -314,18 +316,22 @@ class SystemMgr(StructureAnalyzer):
         for d1 in self.domains:
             d1_domspec = d1.domain_state_fingerprint()
             if d1.partner is not None:
+                is_hyb, is_intra = False, True
                 # If d1 is hybridized, then there is only one possible reaction channel: dehybridizing
                 d2 = d1.partner
                 d2_domspec = d2.domain_state_fingerprint()
-                doms_specs = frozenset((d1_domspec, d2_domspec))
-                if doms_specs not in Rxs:
+                domspec_pair = frozenset((d1_domspec, d2_domspec))
+                reaction_spec = (domspec_pair, is_hyb, is_intra)
+                if reaction_spec not in Rxs:
                     # tuple values are (propensity constant c_j, is_hybridizing)
-                    Rxs[doms_specs] = self.calculate_c_j(d1, d2, is_hybridizing=False)
-                self.hybridization_reactions_by_domspec[d1_domspec].add(doms_specs)
+                    Rxs[reaction_spec] = self.calculate_c_j(d1, d2, is_hybridizing=is_hyb, is_intra=is_intra)
+                self.hybridization_reactions_by_domspec[d1_domspec].add(reaction_spec)
+                self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
             else:
                 # find all possible reaction channels for domain d1
                 # self.domain_pairs[dname] = [list of complementary domain names]
                 # all possible hybridization partners/candidates:
+                is_hyb = True
                 if d1.name not in self.domain_pairs:
                     # No domain partners for this domain
                     continue
@@ -333,11 +339,15 @@ class SystemMgr(StructureAnalyzer):
                            for d in self.unhybridized_domains_by_name[cname]):
                     assert d2.partner is None
                     d2_domspec = d2.domain_state_fingerprint()
-                    doms_specs = frozenset((d1_domspec, d2_domspec))
-                    if doms_specs not in Rxs:
+                    domspec_pair = frozenset((d1_domspec, d2_domspec))
+                    is_intra = (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex) or \
+                               (d1.strand == d2.strand)  # intra-complex OR intra-strand reaction
+                    reaction_spec = (domspec_pair, is_hyb, is_intra)
+                    if reaction_spec not in Rxs:
                         # R_j = (c_j, v_j) - propensity constant for reaction j
-                        Rxs[doms_specs] = self.calculate_c_j(d1, d2, is_hybridizing=True)
-                    self.hybridization_reactions_by_domspec[d1_domspec].add(doms_specs)
+                        Rxs[reaction_spec] = self.calculate_c_j(d1, d2, is_hybridizing=True, is_intra=is_intra)
+                    self.hybridization_reactions_by_domspec[d1_domspec].add(reaction_spec)
+                    self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
         self.possible_hybridization_reactions = Rxs
         print(len(self.possible_hybridization_reactions), "possible hybridization reactions initialized.")
 
@@ -374,10 +384,10 @@ class SystemMgr(StructureAnalyzer):
         ### INITIAL ASSERTIONS. FAIL FAST AND FAIL HARD. ###
         assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
-        generated_reactions_by_domspec_map = self.map_reaction_doms_specs_by_domspecs()
+        generated_reactions_by_domspec_map = self.map_reaction_specs_by_domspec()
 
         if self.hybridization_reactions_by_domspec != generated_reactions_by_domspec_map:
-            print("\n!! self.hybridization_reactions_by_domspec != self.map_reaction_doms_specs_by_domspecs()")
+            print("\n!! self.hybridization_reactions_by_domspec != self.map_reaction_specs_by_domspec()")
             print("self.hybridization_reactions_by_domspec:")
             pprint(self.hybridization_reactions_by_domspec)
             print("self.map_reaction_doms_specs_by_domspecs():")
@@ -436,7 +446,7 @@ class SystemMgr(StructureAnalyzer):
                 depleted_domspecs.add(old_domspec)
                 del self.domain_state_subspecies[old_domspec]
             else:
-                changed_domspecs.add(old_domspec)
+                changed_domspecs.add(old_domspec)  # change in count of this domspec
             # print("Re-setting and re-calculating domain_state_fingerprint for %s - old is: %s"
             #       % (domain, domain._specie_state_fingerprint))
             domain.state_change_reset()
@@ -463,6 +473,8 @@ class SystemMgr(StructureAnalyzer):
         ## but only depends on whether the domain is stacked or not.
         ## E.g. fingerprint = (domain_species_name, (end5p.stack_partner is not None, end3p.stack_partner is not None)
 
+        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+
 
         ## Consideration: Do we really need to check for depleated states all the time?? Maybe just do it
         ## once every 10th run or so.
@@ -471,19 +483,25 @@ class SystemMgr(StructureAnalyzer):
         for domspec in depleted_domspecs:
             # This could be replaced by using hybridization_reactions_by_domspec
             del self.hybridization_reactions_by_domspec[domspec]
-            depleted_reactions = {doms_specs: v for doms_specs, v in self.possible_hybridization_reactions.items()
-                                  if domspec in doms_specs} # doms_specs is frozendict((domspec1, domspec2))
-            for doms_specs, v in depleted_reactions.items():
+            # reaction_spec[0] = domspec_pair is frozendict((domspec1, domspec2))
+            depleted_reactions = {reaction_spec: v for reaction_spec, v in self.possible_hybridization_reactions.items()
+                                  if domspec in reaction_spec[0]}
+            for reaction_spec, v in depleted_reactions.items():
+                domspec_pair = reaction_spec[0]
                 try:
-                    del self.possible_hybridization_reactions[doms_specs]
-                    del self.propensity_functions[doms_specs]
-                    domspec2 = next(F for F in doms_specs if F != domspec)
-                    self.hybridization_reactions_by_domspec[domspec2].remove(doms_specs)
+                    print("Deleting reaction_spec %s from possible_hybridization_reactions..." % (reaction_spec,))
+                    del self.possible_hybridization_reactions[reaction_spec]
+                    print("Deleting reaction_spec %s from propensity_functions..." % (reaction_spec,))
+                    del self.propensity_functions[reaction_spec]
+                    domspec2 = next(F for F in domspec_pair if F != domspec)
+                    print("Removing reaction_spec from hybridization_reactions_by_domspec[domspec1/2]...")
+                    #self.hybridization_reactions_by_domspec[domspec].remove(reaction_spec) # We have already deleted.
+                    self.hybridization_reactions_by_domspec[domspec2].remove(reaction_spec)
                 except KeyError as e:
                     print("Unexpected KeyError:", e)
                     print("Starting pdb...")
                     pdb.set_trace()
-                self.depleted_hybridization_reactions[doms_specs] = v
+                self.depleted_hybridization_reactions[reaction_spec] = v
                 self.N_state_depletions += 1
 
         ## TODO: Check that domspecs in hybridization_reactions_by_domspec matches possible_hybridization_reactions
@@ -492,73 +510,83 @@ class SystemMgr(StructureAnalyzer):
         ##          {{F1, F2}: is_hybridizing, c_j, a_j}
         ##          However, that would make it harder to (a) do expansions, or (b) know if a_j has been calculated.
 
+        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+
+
         # Keep track of which reaction paths we have already updates so we won't re-calculate them.
         # E.g. if we have re-calculated reaction (c hybridize C), don't re-calculate (C hybridize c).
         updated_reactions = set()
 
         ## New domain states:
         for domspec in new_domspecs:
-            repleted_reactions = {doms_specs: v for doms_specs, v in self.depleted_hybridization_reactions.items()
-                                  if domspec in doms_specs and all(
-                                      len(self.domain_state_subspecies[F]) > 0 for F in doms_specs)}
-            for doms_specs, v in repleted_reactions.items():
-                del self.depleted_hybridization_reactions[doms_specs]
-                self.possible_hybridization_reactions[doms_specs] = v
+            repleted_reactions = {reaction_spec: v for reaction_spec, v in self.depleted_hybridization_reactions.items()
+                                  if domspec in reaction_spec[0] and all(
+                                      len(self.domain_state_subspecies[F]) > 0 for F in reaction_spec[0])}
+            for reaction_spec, c_j in repleted_reactions.items():
+                del self.depleted_hybridization_reactions[reaction_spec]
+                self.possible_hybridization_reactions[reaction_spec] = c_j
                 self.N_state_repletions += 1
-                for ds in doms_specs:
-                    self.hybridization_reactions_by_domspec[ds].add(doms_specs)
+                for ds in reaction_spec[0]:
+                    self.hybridization_reactions_by_domspec[ds].add(reaction_spec)
             # When do we add domain with domspec to domain_state_subspecies ?
             d1 = next(iter(self.domain_state_subspecies[domspec]))
             ## TODO: Include hybridization state in domspec. Then you have that as well strand name and domain name,
             ##          meaning you don't have to find a concrete domain instance.
             if d1.partner is not None:
+                is_hyb, is_intra = False, True
                 d2 = d1.partner
                 d2_domspec = d2.domain_state_fingerprint()
-                doms_specs = frozenset((domspec, d2_domspec))
-                self.hybridization_reactions_by_domspec[domspec].add(doms_specs)
-                self.hybridization_reactions_by_domspec[d2_domspec].add(doms_specs)
-                if doms_specs not in self.possible_hybridization_reactions:
+                domspec_pair = frozenset((domspec, d2_domspec))
+                reaction_spec = (domspec_pair, is_hyb, is_intra)
+                self.hybridization_reactions_by_domspec[domspec].add(reaction_spec)
+                self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
+                if reaction_spec not in self.possible_hybridization_reactions:
                     # tuple values are (propensity constant c_j, is_hybridizing)
                     # d1 has a partner (d2), so this must be a de-hybridization reaction:
-                    print(("de-hybrid doms_specs %s for new domspec %s is not in possible_hybridization_reactions, "
-                           "calculating c_j...") % (doms_specs, domspec))
-                    self.possible_hybridization_reactions[doms_specs] = self.calculate_c_j(d1, d2, is_hybridizing=False)
-                elif doms_specs not in updated_reactions:
+                    print(("de-hybrid reaction_spec %s for new domspec %s is not in possible_hybridization_reactions, "
+                           "calculating c_j...") % (reaction_spec, domspec))
+                    self.possible_hybridization_reactions[reaction_spec] = self.calculate_c_j(d1, d2, is_hybridizing=False)
+                elif reaction_spec not in updated_reactions:
                     # Should not happen - it is supposedly a "new domain state".
                     # Edit: Can happen when c and C is changed: (C hybridize c) AND (c hybridize C)
-                    print(("Weird: doms_specs %s for hybridized domains d1, d2 = (%s, %s) is "
-                           "already in possible_reactions - that should not happen.") % (doms_specs, d1, d2))
+                    print(("Weird: reaction_spec %s for hybridized domains d1, d2 = (%s, %s) is "
+                           "already in possible_reactions - that should not happen.") % (reaction_spec, d1, d2))
                 else:
-                    print(" GOOD: doms_specs %s for new domspec %s is already in possible_hybridization_reactions." \
-                          % (doms_specs, domspec))
-                if doms_specs not in updated_reactions:
-                    self.recalculate_propensity_function(doms_specs)
-                    updated_reactions.add(doms_specs)
+                    print(" GOOD: reaction_spec %s for new domspec %s is already in possible_hybridization_reactions." \
+                          % (reaction_spec, domspec))
+                if reaction_spec not in updated_reactions:
+                    self.recalculate_propensity_function(reaction_spec)
+                    updated_reactions.add(reaction_spec)
             else:
                 ## No partner -- consider hybridization reactions with all other unhybridized complementary domains.
                 # for d2 in [d for cname in self.domain_pairs[d1.name]
                 #            for d in self.unhybridized_domains_by_name[cname]]:
                 #pdb.set_trace()
                 if d1.name in self.domain_pairs:
+                    is_hyb = True
                     try:
                         for cname in self.domain_pairs[d1.name]:
                             for d2 in self.unhybridized_domains_by_name[cname]:
                                 d2_domspec = d2.domain_state_fingerprint()
-                                doms_specs = frozenset((domspec, d2_domspec))
-                                if doms_specs not in self.possible_hybridization_reactions:
+                                domspec_pair = frozenset((domspec, d2_domspec))
+                                is_intra = (d1.strand.complex is not None and \
+                                            d1.strand.complex == d2.strand.complex) or \
+                                           (d1.strand == d2.strand)  # intra-complex OR intra-strand reaction
+                                reaction_spec = (domspec_pair, is_hyb, is_intra)
+                                if reaction_spec not in self.possible_hybridization_reactions:
                                     # R_j = (c_j, v_j) - propensity constant for reaction j
-                                    print(("hybridizing doms_specs %s for new domspec %s is not in possible"
-                                           "_hybridization_reactions, calculating c_j...") % (doms_specs, domspec))
-                                    self.possible_hybridization_reactions[doms_specs] = \
+                                    print(("hybridizing reaction_spec %s for new domspec %s is not in possible"
+                                           "_hybridization_reactions, calculating c_j...") % (reaction_spec, domspec))
+                                    self.possible_hybridization_reactions[reaction_spec] = \
                                         self.calculate_c_j(d1, d2, is_hybridizing=True)
                                 else:
-                                    print(" GOOD: doms_specs %s for new domspec %s is already in possible_hybridization_reactions." \
-                                          % (doms_specs, domspec))
-                                self.hybridization_reactions_by_domspec[domspec].add(doms_specs)
-                                self.hybridization_reactions_by_domspec[d2_domspec].add(doms_specs)
-                                if doms_specs not in updated_reactions:
-                                    self.recalculate_propensity_function(doms_specs)
-                                    updated_reactions.add(doms_specs)
+                                    print(" GOOD: reaction_spec %s for new domspec %s is already in possible_hybridization_reactions." \
+                                          % (reaction_spec, domspec))
+                                self.hybridization_reactions_by_domspec[domspec].add(reaction_spec)
+                                self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
+                                if reaction_spec not in updated_reactions:
+                                    self.recalculate_propensity_function(reaction_spec)
+                                    updated_reactions.add(reaction_spec)
                     except KeyError as e:
                         print("KeyError:", e)
                         print("d1, d1.name:", d1, ",", d1.name)
@@ -578,20 +606,24 @@ class SystemMgr(StructureAnalyzer):
                         print("d2, d2.name:", d2, ",", d2.name)
                         pdb.set_trace()
 
+        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+
         ## Changed domains states (i.e. only a change in number of domains in that state)
         ## Just update propensity_functions for those domspec
         for domspec in changed_domspecs: #| new_domspecs:
             ## TODO: Make sure we do not calculate the full product "matrix", but only one of the symmetric halfs.
             # print(("Re-evaluating propensity for all hybridization reactions involving domspec "
             #        "%s in changed_domspecs | new_domspecs..." % (domspec, )))
-            for doms_specs in self.hybridization_reactions_by_domspec[domspec]:
-                assert doms_specs in self.possible_hybridization_reactions
-                print("Re-calculating propensity for doms_specs %s ..." % (doms_specs,))
-                if isinstance(doms_specs, tuple):
+            for reaction_spec in self.hybridization_reactions_by_domspec[domspec]:
+                assert reaction_spec in self.possible_hybridization_reactions
+                print("Re-calculating propensity for reaction_spec %s ..." % (reaction_spec,))
+                if not isinstance(reaction_spec, tuple) and not isinstance(reaction_spec[0], frozenset):
                     pdb.set_trace()
-                if doms_specs not in updated_reactions:
-                    self.recalculate_propensity_function(doms_specs)
-                    updated_reactions.add(doms_specs)
+                if reaction_spec not in updated_reactions:
+                    self.recalculate_propensity_function(reaction_spec)
+                    updated_reactions.add(reaction_spec)
+
+        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
         n_possible_end = len(self.possible_hybridization_reactions)
         n_propensity_end = len(self.propensity_functions)
@@ -602,12 +634,12 @@ class SystemMgr(StructureAnalyzer):
             print("\n!! n_possible_end != n_propensity_end: %s != %s" % (n_possible_end, n_propensity_end))
             print_debug_info = True
 
-        generated_reactions_by_domspec_map = self.map_reaction_doms_specs_by_domspecs()
+        generated_reactions_by_domspec_map = self.map_reaction_specs_by_domspec()
         if self.hybridization_reactions_by_domspec != generated_reactions_by_domspec_map:
-            print("\n!! self.hybridization_reactions_by_domspec != self.map_reaction_doms_specs_by_domspecs()")
+            print("\n!! self.hybridization_reactions_by_domspec != self.map_reaction_specs_by_domspec()")
             print("self.hybridization_reactions_by_domspec:")
             pprint(self.hybridization_reactions_by_domspec)
-            print("self.map_reaction_doms_specs_by_domspecs():")
+            print("self.map_reaction_specs_by_domspec():")
             pprint(generated_reactions_by_domspec_map)
             print_debug_info = True
 
@@ -656,47 +688,49 @@ class SystemMgr(StructureAnalyzer):
     def print_reaction_stats(self):
         """ Print information on reaction pathways. """
         print("Reaction pathways:")
-        for doms_specs, (c_j, is_hybridizing) in self.possible_hybridization_reactions.items():
-            domspec1, domspec2 = tuple(doms_specs)
+        for reaction_spec, (c_j, is_hybridizing) in self.possible_hybridization_reactions.items():
+            domspec1, domspec2 = tuple(reaction_spec[0])
             print("%s %s %s" % (domspec1[0], "hybridize" if is_hybridizing else "de-hybrid", domspec2[0]),
                   (": %0.03e x%02s x%02s = %03e" % (
                       c_j, len(self.domain_state_subspecies[domspec1]), len(self.domain_state_subspecies[domspec2]),
-                      self.propensity_functions[doms_specs])
+                      self.propensity_functions[reaction_spec])
                   ) if is_hybridizing else (":   %0.03e x%02s   = %03e" % (
-                      c_j, len(self.domain_state_subspecies[domspec1]), self.propensity_functions[doms_specs]))
+                      c_j, len(self.domain_state_subspecies[domspec1]), self.propensity_functions[reaction_spec]))
                  )
 
 
-    def map_reaction_doms_specs_by_domspecs(self):
+    def map_reaction_specs_by_domspec(self):
         """
         Generate an equivalent to self.hybridization_reactions_by_domspec
-        from self.possible_hybridization_reactions
+        from self.possible_hybridization_reactions, i.e. a map of
+            domspec => {set of reaction_specs involving this domspec}
         """
         reactions_by_domspec = defaultdict(set)
-        for doms_specs in self.possible_hybridization_reactions:
-            for domspec in doms_specs:
-                reactions_by_domspec[domspec].add(doms_specs)
+        for reaction_spec in self.possible_hybridization_reactions:
+            for domspec in reaction_spec[0]:
+                reactions_by_domspec[domspec].add(reaction_spec)
         return reactions_by_domspec
 
 
     def get_reactions_by_domspec(self, domspec):
         """ Filter possible_hybridization_reactions, returning only reactions involving :domspec:. """
-        return {doms_specs: v
-                for doms_specs, v in self.possible_hybridization_reactions.items()
-                if domspec in doms_specs}
+        return {reaction_spec: v
+                for reaction_spec, v in self.possible_hybridization_reactions.items()
+                if domspec in reaction_spec[0]}
 
 
 
-    def recalculate_propensity_function(self, doms_specs):
+    def recalculate_propensity_function(self, reaction_spec):
         """
-        Recalculate propensity function for a single doms_specs = frozenset((F1, F2)).
+        Recalculate propensity function for a single reaction_spec =
+            (frozenset((F1, F2)), is_hybridizing, is_intra)
         Assumes that c_j, is_hybridizing is already available in
         self.possible_hybridization_reactions.
         """
         try:
-            c_j, is_hybridizing = self.possible_hybridization_reactions[doms_specs]
+            c_j, is_hybridizing = self.possible_hybridization_reactions[reaction_spec]
         except KeyError as e:
-            print("KeyError for self.possible_hybridization_reactions[%s]" % (doms_specs,))
+            print("KeyError for self.possible_hybridization_reactions[%s]" % (reaction_spec,))
             print("self.possible_hybridization_reactions: (%s elements)" % len(self.possible_hybridization_reactions))
             pprint(list(self.possible_hybridization_reactions))
             print("self.propensity_functions: (%s elements)" % len(self.propensity_functions))
@@ -709,12 +743,12 @@ class SystemMgr(StructureAnalyzer):
             pdb.set_trace()
         if is_hybridizing:
             # a_j = c_j * x₁ * x₂
-            self.propensity_functions[doms_specs] = c_j * \
-                np.prod([len(self.domain_state_subspecies[ds]) for ds in doms_specs])
+            self.propensity_functions[reaction_spec] = c_j * \
+                np.prod([len(self.domain_state_subspecies[ds]) for ds in reaction_spec[0]])
         else:
             # a_j = c_j * x₃ ,      x₃ is number of duplexes
-            #self.propensity_functions[doms_specs] = c_j * len(self.domain_state_subspecies[doms_specs[0]])
-            self.propensity_functions[doms_specs] = c_j * len(self.domain_state_subspecies[next(iter(doms_specs))])
+            #self.propensity_functions[domspec_pair] = c_j * len(self.domain_state_subspecies[domspec_pair[0]])
+            self.propensity_functions[reaction_spec] = c_j * len(self.domain_state_subspecies[next(iter(reaction_spec[0]))])
 
 
 
@@ -742,12 +776,12 @@ class SystemMgr(StructureAnalyzer):
 
         Calculation of initial propencities is done here as:
             a = [c_j * (prod(len(domain_subspecies[ds]) for ds in doms_spec)  # equivalnt to: c_j * X₁ * X₂, or c_j * X₁
-                        if is_hybridizing else len(self.domain_state_subspecies[doms_specs[0]]))
+                        if is_hybridizing else len(self.domain_state_subspecies[reaction_spec[0][0]]))
                  for doms_spec, c_j, is_hybridizing in possible_reactions_lst]
         Where doms_spec is a set of Fᵢ = (domain-specie, cstate) for each domain in the reaction, used to specify
         all domains of a particular species (e.g. "domain A") in a particular state (e.g. free or in any complex state).
         The "prod(len(domain_subspecies[ds]) for ds in doms_spec)" expression is equivalent to c_j * X₁ * X₂,
-        for hybridization reactions, while "len(self.domain_state_subspecies[doms_specs[0]]))" is equivalent to c_j * X₁
+        for hybridization reactions, while "len(self.domain_state_subspecies[reaction_spec[0][0]]))" is equivalent to c_j * X₁
         for dehybridzation reactions.
 
         For uni-molecular reactions, c_j is simply the reaction rate constant, k_j.
@@ -769,17 +803,18 @@ class SystemMgr(StructureAnalyzer):
                 the reactant species population count, x₁ (x₂, x₃, etc) to get the propensity function a_j.
         """
         print("Initializing propensity functions...")
-        # doms_specs (plural) is: frozenset({(domain1, cstate), (domain2, cstate)})
-        a = {doms_specs: c_j * (np.prod([len(self.domain_state_subspecies[ds]) for ds in doms_specs])
-                                #if is_hybridizing else len(self.domain_state_subspecies[doms_specs[0]]))
-                                if is_hybridizing else len(self.domain_state_subspecies[next(iter(doms_specs))]))
-             for doms_specs, (c_j, is_hybridizing) in self.possible_hybridization_reactions.items()}
+        # domspec_pair (plural) is: frozenset({(domain1, cstate), (domain2, cstate)})
+        a = {reaction_spec: c_j * (np.prod([len(self.domain_state_subspecies[ds]) for ds in reaction_spec[0]])
+                                   #if is_hybridizing else len(self.domain_state_subspecies[reaction_spec[0][0]]))
+                                   if is_hybridizing else len(self.domain_state_subspecies[next(iter(reaction_spec[0]))]))
+             for reaction_spec, (c_j, is_hybridizing) in self.possible_hybridization_reactions.items()}
         self.propensity_functions = a
         print(len(self.propensity_functions), "propensity functions initialized.")
 
 
-    def calculate_c_j(self, d1, d2, is_hybridizing):
+    def calculate_c_j(self, d1, d2, is_hybridizing, is_intra=None):
         """
+        :is_intra: whether the reaction is intra-molecular; that is, either intra-complex or intra-strand.
         Calculate propensity constant, c_j, for hybridization or dehybridization of d1 and d2.
         Edit: Changed name from "propensity constant" to just "c_j", to avoid confusion with propensity *function*, a_j.
         Alternative names:
@@ -1306,22 +1341,24 @@ class SystemMgr(StructureAnalyzer):
         return result
 
 
-    def react_and_process(self, doms_specs, is_hybridizing, is_intracomplex="Not implemented"):
+    def react_and_process(self, domspec_pair, is_hybridizing, is_intra="Not implemented"):
         """
         Will select a random pair of domain instances from the domain species pair
         for hybridization reaction, or a random duplex in case of dehybridization reactions.
         Reaction specie consists of:
             ({domspec1, domspec2}, is_hybridizing, is_intracomplex)
         """
-
-        if not all(domspec in self.domain_state_subspecies for domspec in doms_specs):
-            print("doms_specs:", doms_specs)
-            print("Not all domspec in doms_specs are in self.domain_state_subspecies:")
+        print("react_and_process invoked with args: is_hybridizing=%s, is_intra=%s, domspec_pair:" %
+              (is_hybridizing, is_intra))
+        pprint(domspec_pair)
+        if not all(domspec in self.domain_state_subspecies for domspec in domspec_pair):
+            print("domspec_pair:", domspec_pair)
+            print("Not all domspec in domspec_pair are in self.domain_state_subspecies:")
             pprint(self.domain_state_subspecies)
-        assert all(domspec in self.domain_state_subspecies for domspec in doms_specs)
+        assert all(domspec in self.domain_state_subspecies for domspec in domspec_pair)
         ## HERE WE SELECT (formerly REMOVE/POP) arbitrary domains FROM self.domain_state_subspecies sets ##
         if is_hybridizing:
-            # For each domspec in doms_specs, select a domain instance belonging to that specie population.
+            # For each domspec in domspec_pair, select a domain instance belonging to that specie population.
             # Hmm... how do we tell whether the reaction is supposed to be intra-complex hybridization
             # vs between two domains in two separate complexes? I need to have a flag for that as well.
             # Argh, another good reason NOT to have domain-specie based reactions but just have a reaction
@@ -1329,10 +1366,10 @@ class SystemMgr(StructureAnalyzer):
             # Obviously, you could still use domspecs for caching.
             d1, d2 = [next(iter(species_list))  # species_list.pop()
                       for species_list in
-                      [self.domain_state_subspecies[dom_spec] for dom_spec in doms_specs]]
+                      [self.domain_state_subspecies[dom_spec] for dom_spec in domspec_pair]]
         else:
             # Duplex de-hybridization reaction:
-            d1 = next(iter(self.domain_state_subspecies[next(iter(doms_specs))]))
+            d1 = next(iter(self.domain_state_subspecies[next(iter(domspec_pair))]))
             d2 = d1.partner
             assert d2 is not None
 
@@ -1438,7 +1475,7 @@ class SystemMgr(StructureAnalyzer):
                   ("Hybridization" if is_hybridizing else "De-hybridization", d1, repr(d1), d2, repr(d2)))
             print("-----------------")
 
-        self.update_possible_reactions(changed_domains, d1, d2, is_hybridizing, doms_specs)
+        self.update_possible_reactions(changed_domains, d1, d2, is_hybridizing, domspec_pair)
         # DEBUGGING: Resetting complex fingerprint.
         # TODO: Move this hybridization/dehybridization methods and apply conditionally.
         if d1.strand.complex:

@@ -76,22 +76,22 @@ class DM_Simulator(Simulator):
 
     Obviously, much of the data regards a combination of two domains.
     To group these combinations, I use a frozenset of the two domspecs:
-        doms_specs = frozenset({domspec1, domspec2})
+        domspec_pair = frozenset({domspec1, domspec2})
 
     Primary data structures:
-        - possible_hybridization_reactions[doms_specs] = propensity_constant cj, is_hybridizing
+        - possible_hybridization_reactions[domspec_pair] = propensity_constant cj, is_hybridizing
             Contains up-to-date hybridization and dehybridization reactions
-            dict, keyed by doms_specs = {domain1-state, domain2-state}
+            dict, keyed by domspec_pair = {domain1-state, domain2-state}
             This is "R" and "R_j" in Gillespie's formulas
-        - propensity_functions[doms_specs] = actual propensity for reaction between domain1 and domain2
-            with domain-states doms_specs = {domain1-state, domain2-state}
+        - propensity_functions[domspec_pair] = actual propensity for reaction between domain1 and domain2
+            with domain-states domspec_pair = {domain1-state, domain2-state}
             This is "a" or "a(x)" in Gillespie's formulas.
 
 
     Overview of the different caches:
     To avoid doing a lot of re-calculation, I generally save all results.
     If the result involves only one domain, I store it as domspec for that domain.
-    If the result involves two domains, I store it under the doms_specs = {domain1-domspec, domain2-domspec}
+    If the result involves two domains, I store it under the domspec_pair = {domain1-domspec, domain2-domspec}
 
 
     1-domain caches, state-dependent (domspec):
@@ -99,7 +99,7 @@ class DM_Simulator(Simulator):
             If the domains are not in part of the same complex, I can usually just take a "quick look around"
             and estimate steric interactions.
 
-    2-domain caches, state-dependent (doms_specs):
+    2-domain caches, state-dependent (domspec_pair):
         - domain activities for intra-complex reactions.
             If the two domains are part of the same complex, estimating their mutual activity is a lot harder.
             I generally see if they are mechanically, physically separated, whether they are close or far,
@@ -182,8 +182,8 @@ class DM_Simulator(Simulator):
 
             print("\n\n------ Step %03s -----------\n" % n_done)
 
-            # sysmgr.possible_hybridization_reactions is dict with  {doms_specs: (c_j, is_hybridizing)}
-            # sysmgr.propensity_functions is dict with              {doms_specs: a_j}
+            # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_hybridizing)}
+            # sysmgr.propensity_functions is dict with              {domspec_pair: a_j}
 
             # Step 1. (I expect that propensity_functions is up-to-date)
             if not sysmgr.propensity_functions:
@@ -214,8 +214,8 @@ class DM_Simulator(Simulator):
             # bp = 0.9
             # j =
             # Propensity functions are only used to select which reaction path to fire.
-            # Now that we have that, we just have to select an domain pair with doms_specs
-            # is a doms_specs = {dom_spec1, dom_spec2} = {F₁, F₂}
+            # Now that we have that, we just have to select an domain pair with domspec_pair
+            # is a domspec_pair = {dom_spec1, dom_spec2} = {F₁, F₂}
             # Edit: If you want to group reactions by domain species, you need:
             #   reaction spec = ({domspec1, domspec2}, is_hybridizing, is_intracomplex)
             reaction_spec = reaction_specs[j]
@@ -229,37 +229,39 @@ class DM_Simulator(Simulator):
 
             # 3b: Hybridize/dehybridize:
             c_j, is_hybridizing = sysmgr.possible_hybridization_reactions[reaction_spec]
-            d1, d2 = sysmgr.react_and_process(reaction_spec, is_hybridizing)
+            d1, d2 = sysmgr.react_and_process(*reaction_spec)
 
             # Repeat for grouped system mgr:
-            print("\nRepeating reaction for grouped sysmgr; reaction_spec is:")
-            pprint(reaction_spec)
-            print("---- sysmgr reaction pathways: ----")
-            sysmgr.print_reaction_stats()
-            print("---- sysmgr_grouped reaction pathways: ----")
-            sysmgr_grouped.print_reaction_stats()
-            c_j_g, is_hybridizing_g = sysmgr_grouped.possible_hybridization_reactions[reaction_spec]
-            print("c_j, is_hybridizing:", c_j, is_hybridizing)
-            print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
-            assert np.isclose(c_j_g, c_j) and is_hybridizing_g == is_hybridizing
-            print("React and process using reaction_spec %s:" % reaction_spec)
-            d1_g, d2_g = sysmgr_grouped.react_and_process(reaction_spec, is_hybridizing)
-            # the grouped sysmgr might select different domains for hybridizing, but they should
-            # have the same state, and the domspec distribution should be equivalent.
-            try:
-                assert (d1_g.domain_state_fingerprint() == d1.domain_state_fingerprint() and \
-                        d2_g.domain_state_fingerprint() == d2.domain_state_fingerprint()) or \
-                       (d1_g.domain_state_fingerprint() == d2.domain_state_fingerprint() and \
-                        d2_g.domain_state_fingerprint() == d1.domain_state_fingerprint())
-            except AssertionError as e:
-                print("\nReacted domain species for grouped system does not match that for ungrouped:")
-                print("d1.domain_state_fingerprint():", d1.domain_state_fingerprint())
-                print("d1_g.domain_state_fingerprint():", d1_g.domain_state_fingerprint())
-                print("d2.domain_state_fingerprint():", d2.domain_state_fingerprint())
-                print("d2_g.domain_state_fingerprint():", d2_g.domain_state_fingerprint())
+            mirror_grouped_system = True
+            if mirror_grouped_system:
+                print("\nRepeating reaction for grouped sysmgr; reaction_spec is:")
+                pprint(reaction_spec)
+                print("---- sysmgr reaction pathways: ----")
+                sysmgr.print_reaction_stats()
+                print("---- sysmgr_grouped reaction pathways: ----")
+                sysmgr_grouped.print_reaction_stats()
+                c_j_g, is_hybridizing_g = sysmgr_grouped.possible_hybridization_reactions[reaction_spec[0]]
                 print("c_j, is_hybridizing:", c_j, is_hybridizing)
                 print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
-                raise e
+                assert np.isclose(c_j_g, c_j) and is_hybridizing_g == is_hybridizing
+                print("React and process using reaction_spec %s:" % (reaction_spec,))
+                d1_g, d2_g = sysmgr_grouped.react_and_process(reaction_spec[0], is_hybridizing)
+                # the grouped sysmgr might select different domains for hybridizing, but they should
+                # have the same state, and the domspec distribution should be equivalent.
+                try:
+                    assert (d1_g.domain_state_fingerprint() == d1.domain_state_fingerprint() and \
+                            d2_g.domain_state_fingerprint() == d2.domain_state_fingerprint()) or \
+                           (d1_g.domain_state_fingerprint() == d2.domain_state_fingerprint() and \
+                            d2_g.domain_state_fingerprint() == d1.domain_state_fingerprint())
+                except AssertionError as e:
+                    print("\nReacted domain species for grouped system does not match that for ungrouped:")
+                    print("d1.domain_state_fingerprint():", d1.domain_state_fingerprint())
+                    print("d1_g.domain_state_fingerprint():", d1_g.domain_state_fingerprint())
+                    print("d2.domain_state_fingerprint():", d2.domain_state_fingerprint())
+                    print("d2_g.domain_state_fingerprint():", d2_g.domain_state_fingerprint())
+                    print("c_j, is_hybridizing:", c_j, is_hybridizing)
+                    print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
+                    raise e
 
 
             ## Post-hybridization (and processing) assertions:

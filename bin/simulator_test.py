@@ -89,19 +89,27 @@ def test(simulator, usepdb=False):
         # To enter debug while you have a current exception or traceback, use pdb.post_morten
         # pdb.set_trace()
         # simulator.systemmgr.draw_and_save_graphs(n=1)
-        try:
-            # n_done = simulator.simulate(T=330, n_steps_max=10, systime_max=200)
-            n_done = simulator.simulate(T=325, n_steps_max=20, systime_max=200) # Stable complex
-            # n_done = simulator.simulate(T=320, n_steps_max=20, systime_max=200) # Stable complex
-            # simulator.simulate(T=310, n_steps_max=10, systime_max=100) # Staple, irreversible.
-        except Exception as e:
-            n_done = "failed"
-            print("Exception:", type(e), e)
-            #traceback.print_last()
-            traceback.print_exc()
-            enter_pdb = prompt_yes_no("Enter debugger?")
-            if enter_pdb in ('y', True):
-                pdb.set_trace()
+
+        # Or just run with python -m pdb <script>  (and press 'c' to continue until next error or breakpoint).
+        # (Does not work if the exception is catched, of course...!)
+        n_done = simulator.simulate(T=328, n_steps_max=20, systime_max=200) #
+        # try:
+        #     # n_done = simulator.simulate(T=330, n_steps_max=10, systime_max=200)
+        #     n_done = simulator.simulate(T=328, n_steps_max=20, systime_max=200) #
+        #     # n_done = simulator.simulate(T=325, n_steps_max=20, systime_max=200) # Stable complex
+        #     # n_done = simulator.simulate(T=320, n_steps_max=20, systime_max=200) # Stable complex
+        #     # simulator.simulate(T=310, n_steps_max=10, systime_max=100) # Staple, irreversible.
+        # except Exception as e:
+        #     n_done = "failed"
+        #     print("Exception:", type(e), e)
+        #     #traceback.print_last()
+        #     traceback.print_exc()
+        #     enter_pdb = prompt_yes_no("Enter debugger?")
+        #     if enter_pdb in ('y', True):
+        #         # pdb.set_trace()
+        #         exc_type, exc_value, tb = sys.exc_info() # get exception info
+        #         traceback.print_exc()
+        #         pdb.post_mortem(tb)
         print("\n\nTEST RUN COMPLETE. n_done =", n_done)
         answer = input(("Type 'd' to enter debugger; "
                         "'g' to save plot to file; any other key to continue..."))
