@@ -184,11 +184,14 @@ class DM_Simulator(Simulator):
 
             # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_hybridizing)}
             # sysmgr.propensity_functions is dict with              {domspec_pair: a_j}
+            print(" ---- sysmgr.print_reaction_stats(): ----")
+            pprint(sysmgr.print_reaction_stats())
 
             # Step 1. (I expect that propensity_functions is up-to-date)
             if not sysmgr.propensity_functions:
                 print("\n\nERROR: sysmgr.propensity_functions is:",
                       sysmgr.propensity_functions, " - ABORTING SIMULATION.\n\n")
+                return
             reaction_specs, propensity_functions = zip(*sysmgr.propensity_functions.items())
             assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
             # reaction_specs: list of possible reaction_specs
@@ -228,24 +231,43 @@ class DM_Simulator(Simulator):
             self.sim_system_time += dt
 
             # 3b: Hybridize/dehybridize:
-            c_j, is_hybridizing = sysmgr.possible_hybridization_reactions[reaction_spec]
-            d1, d2 = sysmgr.react_and_process(*reaction_spec)
+            c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
+            d1, d2 = tuple(reaction_spec)
+            domspec_pair = frozenset((d1.domain_state_fingerprint(), d2.domain_state_fingerprint()))
+            if isinstance(reaction_spec, tuple):
+                is_hybridizing = reaction_spec[1]
+            else:
+                # Non-grouped, should be frozenset((domain1, domain2))
+                if d1.partner == d2:
+                    is_hybridizing = False  # already hybridized; must can only undergo de-hybridization reaction
+                    is_intra = True
+                    assert d2.partner == d1
+                else:
+                    is_hybridizing = True
+                    is_intra = (d1.strand == d2.strand) or \
+                               (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex)
+                    assert d1.partner is None and d2.partner is None
+            grouped_reaction_spec = (domspec_pair, is_hybridizing, is_intra)
+            dom1, dom2 = sysmgr.react_and_process(reaction_spec, is_hybridizing)  # reverted to reaction_spec = domain_pair
+            assert (d1, d2) == (dom1, dom2)
 
             # Repeat for grouped system mgr:
-            mirror_grouped_system = True
+            mirror_grouped_system = False
             if mirror_grouped_system:
                 print("\nRepeating reaction for grouped sysmgr; reaction_spec is:")
                 pprint(reaction_spec)
+                print("grouped_reaction_spec is:")
+                pprint(grouped_reaction_spec)
                 print("---- sysmgr reaction pathways: ----")
                 sysmgr.print_reaction_stats()
                 print("---- sysmgr_grouped reaction pathways: ----")
                 sysmgr_grouped.print_reaction_stats()
-                c_j_g, is_hybridizing_g = sysmgr_grouped.possible_hybridization_reactions[reaction_spec]
+                c_j_g = sysmgr_grouped.possible_hybridization_reactions[grouped_reaction_spec]
                 print("c_j, is_hybridizing:", c_j, is_hybridizing)
-                print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
-                assert np.isclose(c_j_g, c_j) and is_hybridizing_g == is_hybridizing
-                print("React and process using reaction_spec %s:" % (reaction_spec,))
-                d1_g, d2_g = sysmgr_grouped.react_and_process(*reaction_spec)
+                print("c_j_g:", c_j_g)
+                assert np.isclose(c_j_g, c_j)
+                print("React and process using grouped_reaction_spec %s:" % (grouped_reaction_spec,))
+                d1_g, d2_g = sysmgr_grouped.react_and_process(*grouped_reaction_spec)
                 # the grouped sysmgr might select different domains for hybridizing, but they should
                 # have the same state, and the domspec distribution should be equivalent.
                 try:
@@ -260,7 +282,7 @@ class DM_Simulator(Simulator):
                     print("d2.domain_state_fingerprint():", d2.domain_state_fingerprint())
                     print("d2_g.domain_state_fingerprint():", d2_g.domain_state_fingerprint())
                     print("c_j, is_hybridizing:", c_j, is_hybridizing)
-                    print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
+                    print("c_j_g:", c_j_g)
                     raise e
 
 
@@ -304,7 +326,8 @@ class DM_Simulator(Simulator):
                                    "any other key to continue... "))
             if 'g' in answer:
                 sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
-                sysmgr_grouped.draw_and_save_graphs(prefix="grouped", n="%s_%0.03fs" % (n_done, self.sim_system_time))
+                if mirror_grouped_system:
+                    sysmgr_grouped.draw_and_save_graphs(prefix="grouped", n="%s_%0.03fs" % (n_done, self.sim_system_time))
 
             if 'd' in answer:
                 pdb.set_trace()

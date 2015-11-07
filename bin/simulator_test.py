@@ -206,7 +206,7 @@ def main():
                                  "Nascent",
                                  "simdata",
                                  structure,
-                                 datetime.now().strftime("%Y-%m-%d %H%M"))
+                                 datetime.now().strftime("%Y-%m-%d %H%M%S"))
     if os.path.isdir(run_directory):
         clean = prompt_yes_no("Directory '" + run_directory + "' already exists. Remove this before proceeding? ")
         if clean == 'y':

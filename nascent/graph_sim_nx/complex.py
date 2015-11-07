@@ -162,6 +162,7 @@ class Complex(nx.MultiGraph):
 
     def add_strand(self, strand, update_graph=False):
         """ We keep track of strands for use with fingerprinting, etc. """
+        print("%r: Adding strand %r..." % (self, strand))
         self.strands.add(strand)
         self.strands_by_name[strand.name].add(strand)
         strand.complex = self
@@ -174,6 +175,7 @@ class Complex(nx.MultiGraph):
 
     def remove_strand(self, strand, update_graph=False):
         """ We keep track of strands for use with fingerprinting, etc. """
+        print("%r: Removing strand %r..." % (self, strand))
         self.strands.remove(strand)
         self.strands_by_name[strand.name].add(strand)
         if strand.complex == self:
@@ -186,6 +188,7 @@ class Complex(nx.MultiGraph):
 
     def add_strands(self, strands, update_graph=False):
         """ Strands must be a set. """
+        print("%r: Adding strands %s..." % (self, strands))
         for strand in strands:
             self.strands_by_name[strand.name].add(strand)
             strand.complex = self
@@ -200,6 +203,7 @@ class Complex(nx.MultiGraph):
 
     def remove_strands(self, strands, update_graph=False):
         """ Strands must be a set. """
+        print("%r: Removing strands %s..." % (self, strands))
         for strand in strands:
             self.strands_by_name[strand.name].remove(strand)
             if strand.complex == self:
