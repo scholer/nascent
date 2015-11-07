@@ -28,7 +28,6 @@ import sys
 import random
 #from collections import defaultdict
 from collections import deque
-import copy
 #import math
 from math import log as ln # exp
 from datetime import datetime
@@ -40,14 +39,14 @@ if sys.platform == "win32":
 else:
     timer = time.time
 
+
 #import networkx as nx
-import numpy as np
+#import numpy as np
 
 
 #from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
 #from .thermodynamic_utils import thermodynamic_meltingcurve
 from .simulator import Simulator
-from .systemmgr_grouped import SystemMgrGrouped
 # N_AVOGADRO in /mol,
 # Universal Gas constant in cal/mol/K
 from .constants import (N_AVOGADRO, R,
@@ -55,14 +54,38 @@ from .constants import (N_AVOGADRO, R,
                         PHOSPHATEBACKBONE_INTERACTION,
                         STACKING_INTERACTION)
 
+from .simulator_dm import DM_Simulator
+
 # Module-level constants and variables
 VERBOSE = 0
 
 
 
 
-class DM_Simulator(Simulator):
+class DM_SimulatorUngrouped(DM_Simulator):
     """
+
+    This is an "ungrouped" varian of the DM simulator; it still uses domain species (domspec fingerprints)
+    for caching, but it does not try to keep track of pairs of reacting domain species (doms_specs "groups"),
+    and domspecs are not used for the "direct method" reaction path selection.
+    Instead, all reactions are between a particular pair of domain *instances*.
+    Thus, if we have 5 domain "A" and 4 domain "a", which can hybridize, instead of having just a single
+    "reaction spec" = ({domspec1, domspec2}, is_hyb=True, is_intra=False)
+    we have 5*4 = 20 reaction specs, each like:
+        ({<domain "A#1" at ...>, <domain "a#1" at ...>}, True, False),
+        ({<domain "A#1" at ...>, <domain "a#2" at ...>}, True, False),
+        ...
+        ({<domain "A#2" at ...>, <domain "a#1" at ...>}, True, False),
+        ...
+        ({<domain "A#5" at ...>, <domain "a#4" at ...>}, True, False),
+    For an 8000 nt origami, we typically have 500 domains on the scaffold.
+    The domains on the scaffold are unique and do not cross-react. We have 5 times excess of staple strands,
+    so for every of the 500 scaffold domains, we have 2500 staple strand domains, and 2500 reaction paths.
+    Now, if we simulate with 10 scaffolds and 50 of each staple, we have 10*50 = 500 reaction paths for each domain,
+    so 250'000 reaction pathways. Not impossible, but it certainly increases fast.
+    For 100 scaffolds (and 500 instances of each staple), we have 2.5e9 reaction paths. Now we start to have
+    memory limitations!
+
 
     I generally use a "domain state subspecies" hash to identify subpopulations in the same state.
     This "domspec" hash is composed of:
@@ -127,14 +150,7 @@ class DM_Simulator(Simulator):
 
     def __init__(self, params, **kwargs):
         #super().__init__(**kwargs)
-
         Simulator.__init__(self, params=params, **kwargs)
-        # Set up a "grouped" system manager for testing:
-        # Make sure the strands, etc are all copied before you make a new system:
-        strands = kwargs.pop('strands')
-        if strands is not None:
-            strands = copy.deepcopy(strands)
-        self.systemmgr_grouped = SystemMgrGrouped(params=params, strands=strands, **kwargs)
         self.time_per_T = params.get('time_per_T', 10) # seconds
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)
@@ -166,12 +182,10 @@ class DM_Simulator(Simulator):
             systime_max = self.sim_system_time + simulation_time
 
         sysmgr = self.systemmgr
-        sysmgr_grouped = self.systemmgr_grouped
         if T is None:
             T = sysmgr.temperature
         else:
             sysmgr.temperature = T
-        sysmgr_grouped.temperature = T
 
         n_done = 0
 
@@ -231,38 +245,7 @@ class DM_Simulator(Simulator):
             c_j, is_hybridizing = sysmgr.possible_hybridization_reactions[reaction_spec]
             d1, d2 = sysmgr.react_and_process(reaction_spec, is_hybridizing)
 
-            # Repeat for grouped system mgr:
-            print("\nRepeating reaction for grouped sysmgr; reaction_spec is:")
-            pprint(reaction_spec)
-            print("---- sysmgr reaction pathways: ----")
-            sysmgr.print_reaction_stats()
-            print("---- sysmgr_grouped reaction pathways: ----")
-            sysmgr_grouped.print_reaction_stats()
-            c_j_g, is_hybridizing_g = sysmgr_grouped.possible_hybridization_reactions[reaction_spec]
-            print("c_j, is_hybridizing:", c_j, is_hybridizing)
-            print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
-            assert np.isclose(c_j_g, c_j) and is_hybridizing_g == is_hybridizing
-            print("React and process using reaction_spec %s:" % reaction_spec)
-            d1_g, d2_g = sysmgr_grouped.react_and_process(reaction_spec, is_hybridizing)
-            # the grouped sysmgr might select different domains for hybridizing, but they should
-            # have the same state, and the domspec distribution should be equivalent.
-            try:
-                assert (d1_g.domain_state_fingerprint() == d1.domain_state_fingerprint() and \
-                        d2_g.domain_state_fingerprint() == d2.domain_state_fingerprint()) or \
-                       (d1_g.domain_state_fingerprint() == d2.domain_state_fingerprint() and \
-                        d2_g.domain_state_fingerprint() == d1.domain_state_fingerprint())
-            except AssertionError as e:
-                print("\nReacted domain species for grouped system does not match that for ungrouped:")
-                print("d1.domain_state_fingerprint():", d1.domain_state_fingerprint())
-                print("d1_g.domain_state_fingerprint():", d1_g.domain_state_fingerprint())
-                print("d2.domain_state_fingerprint():", d2.domain_state_fingerprint())
-                print("d2_g.domain_state_fingerprint():", d2_g.domain_state_fingerprint())
-                print("c_j, is_hybridizing:", c_j, is_hybridizing)
-                print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
-                raise e
-
-
-            ## Post-hybridization (and processing) assertions:
+            ## Post-hybridization assertions:
             try:
                 # assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
                 # After processing, we do not expect the old reaction_specs to be the same as the new...
@@ -302,8 +285,6 @@ class DM_Simulator(Simulator):
                                    "any other key to continue... "))
             if 'g' in answer:
                 sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
-                sysmgr_grouped.draw_and_save_graphs(prefix="grouped", n="%s_%0.03fs" % (n_done, self.sim_system_time))
-
             if 'd' in answer:
                 pdb.set_trace()
 

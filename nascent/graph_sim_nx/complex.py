@@ -257,11 +257,12 @@ class Complex(nx.MultiGraph):
         """
         if not self._state_fingerprint:
             ## TODO: Re-enable hashing when I'm done debugging
-            self._state_fingerprint = (str(self), hash((
+            ## Must not include anything unique to this complex instance such as str(self)
+            self._state_fingerprint = hash((
                 self.strands_fingerprint(),
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()
-                )) % 10000)  # TODO: Modulus only while debugging
+                )) % 10000  # TODO: Remove modulus when done debugging.
         return self._state_fingerprint
 
     def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False):

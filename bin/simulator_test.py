@@ -62,6 +62,7 @@ def test(simulator, usepdb=False):
     #local = {'simulator': simulator}
     #ns = locals()
     sysmgr = simulator.systemmgr
+    sysmgr_grouped = simulator.systemmgr_grouped
     domA = next(d for d in sysmgr.domains if d.name == 'A')
     domB = next(d for d in sysmgr.domains if d.name == 'B')
     domC = next(d for d in sysmgr.domains if d.name == 'C')
@@ -94,6 +95,7 @@ def test(simulator, usepdb=False):
             # n_done = simulator.simulate(T=320, n_steps_max=20, systime_max=200) # Stable complex
             # simulator.simulate(T=310, n_steps_max=10, systime_max=100) # Staple, irreversible.
         except Exception as e:
+            n_done = "failed"
             print("Exception:", type(e), e)
             #traceback.print_last()
             traceback.print_exc()
