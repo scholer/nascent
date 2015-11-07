@@ -140,7 +140,8 @@ class Domain():
             c_state = self.strand.complex.state_fingerprint() \
                       if self.strand.complex is not None else 0
             # self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
-            self._specie_state_fingerprint = (dspecie, c_state, self.in_complex_identifier())
+            ## TODO: I'm currently including hybridization state in fingerprint; this should not be needed, but...
+            self._specie_state_fingerprint = (dspecie, self.partner is not None, c_state, self.in_complex_identifier())
             # print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
         return self._specie_state_fingerprint
 

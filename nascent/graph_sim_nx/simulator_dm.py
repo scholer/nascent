@@ -240,12 +240,12 @@ class DM_Simulator(Simulator):
                 sysmgr.print_reaction_stats()
                 print("---- sysmgr_grouped reaction pathways: ----")
                 sysmgr_grouped.print_reaction_stats()
-                c_j_g, is_hybridizing_g = sysmgr_grouped.possible_hybridization_reactions[reaction_spec[0]]
+                c_j_g, is_hybridizing_g = sysmgr_grouped.possible_hybridization_reactions[reaction_spec]
                 print("c_j, is_hybridizing:", c_j, is_hybridizing)
                 print("c_j_g, is_hybridizing_g:", c_j_g, is_hybridizing_g)
                 assert np.isclose(c_j_g, c_j) and is_hybridizing_g == is_hybridizing
                 print("React and process using reaction_spec %s:" % (reaction_spec,))
-                d1_g, d2_g = sysmgr_grouped.react_and_process(reaction_spec[0], is_hybridizing)
+                d1_g, d2_g = sysmgr_grouped.react_and_process(*reaction_spec)
                 # the grouped sysmgr might select different domains for hybridizing, but they should
                 # have the same state, and the domspec distribution should be equivalent.
                 try:
