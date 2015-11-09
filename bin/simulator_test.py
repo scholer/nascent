@@ -31,6 +31,7 @@ import glob
 from datetime import datetime
 from code import interact
 import traceback
+from pprint import pprint
 
 try:
     import rlcompleter
@@ -68,6 +69,7 @@ def test(simulator, usepdb=False):
     domC = next(d for d in sysmgr.domains if d.name == 'C')
     domb = next(d for d in sysmgr.domains if d.name == 'b')
     domD = next(d for d in sysmgr.domains if d.name == 'D')
+    dome = next(d for d in sysmgr.domains if d.name == 'e')
     domE = next(d for d in sysmgr.domains if d.name == 'E')
     domF = next(d for d in sysmgr.domains if d.name == 'F')
     domc = next(d for d in sysmgr.domains if d.name == 'c')
@@ -76,9 +78,37 @@ def test(simulator, usepdb=False):
     domg = next(d for d in sysmgr.domains if d.name == 'g')
     domK = next(d for d in sysmgr.domains if d.name == 'K')
     domi = next(d for d in sysmgr.domains if d.name == 'i')
+    domI = next(d for d in sysmgr.domains if d.name == 'I')
     domL = next(d for d in sysmgr.domains if d.name == 'L')
 
-    if usepdb:
+    testcase = 1
+
+    if testcase == 1:
+        sysmgr.hybridize(domB, domb)
+        print("\n  - sysmgr.unhybridized_domains_by_name -")
+        pprint(sysmgr.unhybridized_domains_by_name)
+        sysmgr.hybridize(domc, domC)
+        print("\n  - sysmgr.unhybridized_domains_by_name -")
+        pprint(sysmgr.unhybridized_domains_by_name)
+        sysmgr.hybridize(domi, domI)
+        print("\n  - sysmgr.unhybridized_domains_by_name -")
+        pprint(sysmgr.unhybridized_domains_by_name)
+        sysmgr.dehybridize(domi, domI)
+        print("\n  - sysmgr.unhybridized_domains_by_name -")
+        pprint(sysmgr.unhybridized_domains_by_name)
+        sysmgr.hybridize(domE, dome)
+        print("\n  - sysmgr.unhybridized_domains_by_name -")
+        pprint(sysmgr.unhybridized_domains_by_name)
+        sysmgr.dehybridize(domB, domb)
+        print("\n  - sysmgr.unhybridized_domains_by_name -")
+        pprint(sysmgr.unhybridized_domains_by_name)
+        sysmgr.hybridize(domG, domg)
+        # --> KeyError in File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\graph_sim_nx\systemmgr.py", line 380, in update_possible_reactions:
+        #    self.unhybridized_domains_by_name[d1.name].remove(d1)
+
+
+
+    elif usepdb:
         # Use the python debugger (includes readline since 3.3):
         import pdb
         #pdb.run('simulator.simulate(T=350, n_steps_max=1, systime_max=1)', locals=locals())
@@ -280,7 +310,7 @@ def main():
 
     ## Hook up dispatcher
     dispatcher_config = {'dispatcher_state_changes_fn': outputfn(uid=uid, statstype="changes", ext="txt"),
-                         'dispatcher_keep_file_open': False,
+                         'dispatcher_keep_file_open': True, # False,
                          'dispatcher_cache_size': 100, # If output file is not kept open
                          # File output formatting:
                          # 'dispatcher_state_changes_line_fields': ['T', 'time', 'tau', 'change_type', 'forming', 'interaction']

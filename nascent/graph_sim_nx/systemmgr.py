@@ -49,7 +49,8 @@ Reactions: (this could be a separate object, but for now system state and reacti
 
 import os
 #import random
-from collections import defaultdict
+from collections import defaultdict, namedtuple
+ReactionAttrs = namedtuple('ReactionAttrs', ['is_hybridizing', 'is_intra'])
 #import math
 from math import exp #, log as ln
 #from datetime import datetime
@@ -197,7 +198,8 @@ class SystemMgr(StructureAnalyzer):
         # I think this was for hybridization that required e.g. bending or zippering...
         self._statedependent_dH_dS = {}  # indexed as {Fᵢ}
 
-        self.possible_hybridization_reactions = {}  # Rj, j=0..M - however, I index by reaction_spec
+        self.possible_hybridization_reactions = {}  # {d1, d2} => c_j
+        self.reaction_attrs = {}                    # {d1, d2} => (is_hybridizing, is_intra)
         # When we are not grouping reactions by domain state species, then propensity functions are just the same
         # as propensity constants... (X₁==X₂==X₁₂==1)
         self.propensity_functions = self.possible_hybridization_reactions
@@ -302,9 +304,8 @@ class SystemMgr(StructureAnalyzer):
                 # d2_domspec = d2.domain_state_fingerprint()
                 domain_pair = frozenset((d1, d2))
                 #reaction_spec = (domspec_pair, is_hyb, is_intra)
-                if domain_pair not in Rxs:
-                    # tuple values are (propensity constant c_j, is_hybridizing)
-                    Rxs[domain_pair] = self.calculate_c_j(d1, d2, is_hybridizing=is_hyb, is_intra=is_intra)
+                Rxs[domain_pair] = self.calculate_c_j(d1, d2, is_hybridizing=is_hyb, is_intra=is_intra)
+                self.reaction_attrs = (is_hyb, is_intra)
                 # self.hybridization_reactions_by_domspec[d1_domspec].add(reaction_spec)
                 # self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
             else:
@@ -394,12 +395,15 @@ class SystemMgr(StructureAnalyzer):
                                   if d1 in domain_pair or d2 in domain_pair]
             for domain_pair in obsolete_reactions:
                 del self.possible_hybridization_reactions[domain_pair]
+                del self.reaction_attrs[domain_pair]
             # You can keep track of domain hybridization reactions, but then
             # please note that the reaction can have become obsolete by the other domain being hybridized.
             # It is thus only a set of possible reactions that can be deleted.
             # Add de-hybridization reaction for d1, d2: (will be skipped when processing all changed domains)
-            self.possible_hybridization_reactions[frozenset((d1, d2))] = \
+            domain_pair = frozenset((d1, d2))
+            self.possible_hybridization_reactions[domain_pair] = \
                 self.calculate_c_j(d1, d2, is_hybridizing=False, is_intra=True)
+            self.reaction_attrs[domain_pair] = ReactionAttrs(is_hybridizing=False, is_intra=True)
         else:
             # d1 and d2 have just been de-hybridized;
             # Find new possible partners for d1 and d2:
@@ -438,9 +442,9 @@ class SystemMgr(StructureAnalyzer):
                                         or (domain.strand == domain2.strand)  # intra-complex OR intra-strand reaction
                             self.possible_hybridization_reactions[domain_pair] = \
                                 self.calculate_c_j(domain, domain2, is_hybridizing=True, is_intra=is_intra)
+                            self.reaction_attrs[domain_pair] = ReactionAttrs(is_hybridizing=True, is_intra=is_intra)
                             if domain_pair not in updated_reactions:
                                 updated_reactions.add(domain_pair)
-
 
 
     def print_reaction_stats(self):
@@ -476,8 +480,6 @@ class SystemMgr(StructureAnalyzer):
         return {reaction_spec: v
                 for reaction_spec, v in self.possible_hybridization_reactions.items()
                 if domspec in reaction_spec[0]}
-
-
 
 
     def calculate_c_j(self, d1, d2, is_hybridizing, is_intra=None):
@@ -544,7 +546,11 @@ class SystemMgr(StructureAnalyzer):
             [3]: http://www.async.ece.utah.edu/BioBook/lec4.pdf
         """
         if is_hybridizing:
-            if d1.strand.complex == d2.strand.complex != None:
+            # if d1.strand.complex == d2.strand.complex != None:
+            # Edit: We might have a single strand interacting with itself
+            if is_intra:
+                assert d1.strand.complex == d2.strand.complex
+                assert d1.strand.complex is not None or d1.strand == d2.strand
                 # Intra-complex reaction:
                 try:
                     stochastic_activity = self.intracomplex_activity(d1, d2)
@@ -766,7 +772,7 @@ class SystemMgr(StructureAnalyzer):
         Where changed_complexes includes new_complexes but not obsolete_complexes.
         Edit: changed_complexes DOES NOT include new_complexes.
         """
-
+        print("SystemMgr.hybridize(%s, %s)" % (domain1, domain2))
         assert domain1 != domain2
         assert domain1.partner is None
         assert domain2.partner is None
@@ -875,6 +881,7 @@ class SystemMgr(StructureAnalyzer):
             changed_complexes, new_complexes, obsolete_complexes, free_strands
         """
 
+        print("SystemMgr.dehybridize(%s, %s)" % (domain1, domain2))
         assert domain1 != domain2
         assert domain1.partner == domain2 != None
         assert domain2.partner == domain1 != None
