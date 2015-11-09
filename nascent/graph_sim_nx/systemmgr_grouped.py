@@ -42,7 +42,7 @@ Reactions: (this could be a separate object, but for now system state and reacti
  * Possible hybridization reactions
  * Energies, energy model
  * Hybridization and dehybridization rates
- * Propencity functions
+ * Propensity functions
  *
 
 """
@@ -63,18 +63,17 @@ from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
 from .constants import R, N_AVOGADRO, AVOGADRO_VOLUME_NM3 #, R # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K
 from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION
 from .complex import Complex
-from .structure_analyzer import StructureAnalyzer
 from .nx_utils import draw_graph_and_save
-from .systemmgr import SystemMgr
+from .systemmgr import ReactionMgr
 
 
 
 
 
 
-class SystemMgrGrouped(SystemMgr):
+class ReactionMgrGrouped(ReactionMgr):
     """
-    This sub-class of SystemMgr will do about the same as systemmgr (same interfaces, etc),
+    This sub-class of ReactionMgr will do about the same as systemmgr (same interfaces, etc),
     but it will group the domains by state specie.
 
     This enables the "molecule count" dependent propensity functions used by Gillepsie DM:
@@ -109,6 +108,16 @@ class SystemMgrGrouped(SystemMgr):
         # {domspec for k in possible_hybridization_reactions if domspec in k}
         self.hybridization_reactions_by_domspec = defaultdict(set)
 
+        # Keep track of domain state depletions.
+        # If the (grouped) domain species count occilates between 0 and 1, then the grouped approach might be
+        # disadvantageous. Instead, propensities should be evaluated for each domain instance.
+        # Or you can have a mixed model where hybridized/duplexed domains and domains on free strands are grouped
+        # while unhybridized domains within a complex are considered individually.
+        # Or you could consider intra-complex reactions individually while group other reactions.
+        self.N_state_depletions = 0
+        self.N_state_repletions = 0
+
+
         # This class has some attributes with same name as the non-grouped class, but
         # with different content. This includes:
         # - possible_hybridization_reactions[reaction_spec] => c_j  ('is_hybridizing' is now part of reaction_spec)
@@ -136,7 +145,7 @@ class SystemMgrGrouped(SystemMgr):
         for domain in self.domains_list:
             self.domain_state_subspecies[domain.domain_state_fingerprint()].add(domain)
 
-        # Propencity functions:  aj(x)
+        # Propensity functions:  aj(x)
         # {(domain1, cstate), (domain2, cstate)} => a
         self.propensity_functions = {} # Indexed by indexed by {domain1, domain2}
         if strands:

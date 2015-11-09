@@ -81,7 +81,7 @@ def test(simulator, usepdb=False):
     domI = next(d for d in sysmgr.domains if d.name == 'I')
     domL = next(d for d in sysmgr.domains if d.name == 'L')
 
-    testcase = 1
+    testcase = 2
 
     if testcase == 1:
         sysmgr.hybridize(domB, domb)

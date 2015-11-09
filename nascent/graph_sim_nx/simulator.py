@@ -40,7 +40,7 @@ from nascent.energymodels.biopython import Tm_NN
 #from nascent.energymodels.biopython import energy_tables_in_units_of_R
 #DNA_NN4 = energy_tables_in_units_of_R["DNA_NN4"]
 from .thermodynamic_utils import thermodynamic_meltingcurve
-from .systemmgr import SystemMgr
+from .systemmgr import ReactionMgr
 
 # Module-level constants and variables
 N_AVOGADRO = 6.022e23   # /mol
@@ -77,7 +77,7 @@ class Simulator():
         outputstatsfiles : A dict of <stat type>: <outputfilename>
         """
         self.params = params
-        self.systemmgr = SystemMgr(volume=volume, strands=strands, params=params, domain_pairs=domain_pairs)
+        self.systemmgr = ReactionMgr(volume=volume, strands=strands, params=params, domain_pairs=domain_pairs)
         self.sim_system_time = 0  # System time within the simulator, typically measured in micro-seconds.
 
         ## Simulation stats, counts:

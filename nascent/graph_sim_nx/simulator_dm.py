@@ -47,7 +47,7 @@ import numpy as np
 #from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
 #from .thermodynamic_utils import thermodynamic_meltingcurve
 from .simulator import Simulator
-from .systemmgr_grouped import SystemMgrGrouped
+from .systemmgr_grouped import ReactionMgrGrouped
 # N_AVOGADRO in /mol,
 # Universal Gas constant in cal/mol/K
 from .constants import (N_AVOGADRO, R,
@@ -134,7 +134,7 @@ class DM_Simulator(Simulator):
         strands = kwargs.pop('strands')
         if strands is not None:
             strands = copy.deepcopy(strands)
-        self.systemmgr_grouped = SystemMgrGrouped(params=params, strands=strands, **kwargs)
+        self.systemmgr_grouped = ReactionMgrGrouped(params=params, strands=strands, **kwargs)
         self.time_per_T = params.get('time_per_T', 10) # seconds
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)

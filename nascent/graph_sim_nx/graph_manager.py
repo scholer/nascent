@@ -23,6 +23,8 @@ import numpy as np
 import math
 import itertools
 
+
+from .nx_utils import draw_graph_and_save
 from .structural_elements.strand import SingleStrand
 from .structural_elements.helix import DsHelix
 from .structural_elements.bundle import HelixBundle
@@ -32,7 +34,7 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         N_AVOGADRO, AVOGADRO_VOLUME_NM3)
 
 
-class StructureAnalyzer():
+class GraphManager():
 
     def __init__(self, strands=None, ends5p3p_graph=None, domain_graph=None, strand_graph=None):
         ### System graphs ###
@@ -57,6 +59,10 @@ class StructureAnalyzer():
                 self.domain_graph.add_edges_from(strand.edges(keys=True, data=True))
                 self.ends5p3p_graph.add_nodes_from(strand.ends5p3p_graph.nodes(data=True))
                 self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph.edges(keys=True, data=True))
+
+        ### Other attributes: ###
+        self.fnprefix = ""
+
 
 
     def domain_path_elements(self, path):
@@ -520,3 +526,58 @@ class StructureAnalyzer():
         # TODO: Currently not accounting for bending or zipping energy.
         # TODO: Account for secondary (and tertiary?) loops
         return activity
+
+
+
+    def draw_and_save_graphs(self, directory=None, fnfmt="{prefix}{graph}_{n}.png",
+                             n=1, prefix=None,
+                             layout="graphviz", apply_attrs=True):
+        # sysgraphs = {"strand_graph": self.strand_graph,
+        #              "domain_graph": self.domain_graph,
+        #              "ends5p3p_graph": self.ends5p3p_graph}
+        # sysgraphs.update({"cmplx-%s" % c.cuid: c for c in self.complexes})
+        sysgraphs = {"domain_graph": self.domain_graph}
+        prefix = prefix if prefix is not None else self.fnprefix
+        ## As of python 3.5 you can do:
+        ## allgraphs = {**sysgraphs, **cmplxgraphs}
+        if directory is None:
+            directory = self.params.get("working_directory", ".")
+        for graph_name, graph in sysgraphs.items():
+            if len(graph) < 1:
+                print("Graph %s contains %s nodes, skipping..." % (graph_name, len(graph)))
+                continue
+            print("Plotting graph %s ..." % graph_name)
+            fn = os.path.join(directory, fnfmt.format(graph=graph_name, n=n, prefix=prefix))
+            if apply_attrs:
+                nodes, node_attrs = list(zip(*graph.nodes(data=True)))
+                ## For some reason, nx_pylab will not allow mixed tuples and strings as colors:
+                node_colors = [at.get('_color', (1.0, 0.0, 0.0)) for at in node_attrs]
+                if len(graph.edges()) > 0:
+                    edges, edge_attrs = list(zip(*[((u, v), data) for u, v, data in graph.edges(data=True)]))
+                    edge_colors = [at.get('_color', (0.0, 0.0, 0.0)) for at in edge_attrs]
+                else:
+                    edges = graph.edges()
+                    edge_attrs = None
+                    edge_colors = None
+                node_labels = {node: node.name for node in graph.nodes()}
+                # print("node_attrs:")
+                # pprint(node_attrs)
+                # print("edge_attrs:")
+                # pprint(edge_attrs)
+                # print("node colors:")
+                # pprint(node_colors)
+                # print("edge colors:")
+                # pprint(edge_colors)
+                ## NOTE: GraphViz doesn't play nice with unknown colors.
+                ## If a node/edge has an unknown color, execution will fail.
+                ## (which is why I've switched to '_color' for now...)
+                draw_graph_and_save(graph, outputfn=fn, layout=layout,
+                                    labels=node_labels,
+                                    nodes=nodes,
+                                    edges=edges,
+                                    node_color=node_colors,
+                                    edge_color=edge_colors,
+                                    alpha=0.7)
+            else:
+                draw_graph_and_save(graph, outputfn=fn, layout=layout,
+                                    labels=node_labels, alpha=0.7)
