@@ -64,7 +64,7 @@ from .constants import R, N_AVOGADRO, AVOGADRO_VOLUME_NM3 #, R # N_AVOGADRO in /
 from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION
 from .complex import Complex
 from .nx_utils import draw_graph_and_save
-from .systemmgr import ReactionMgr
+from .reactionmgr import ReactionMgr
 
 
 
@@ -73,7 +73,7 @@ from .systemmgr import ReactionMgr
 
 class ReactionMgrGrouped(ReactionMgr):
     """
-    This sub-class of ReactionMgr will do about the same as systemmgr (same interfaces, etc),
+    This sub-class of ReactionMgr will do about the same as reactionmgr (same interfaces, etc),
     but it will group the domains by state specie.
 
     This enables the "molecule count" dependent propensity functions used by Gillepsie DM:

@@ -40,7 +40,7 @@ from nascent.energymodels.biopython import Tm_NN
 #from nascent.energymodels.biopython import energy_tables_in_units_of_R
 #DNA_NN4 = energy_tables_in_units_of_R["DNA_NN4"]
 from .thermodynamic_utils import thermodynamic_meltingcurve
-from .systemmgr import ReactionMgr
+from .reactionmgr import ReactionMgr
 
 # Module-level constants and variables
 N_AVOGADRO = 6.022e23   # /mol
@@ -77,7 +77,7 @@ class Simulator():
         outputstatsfiles : A dict of <stat type>: <outputfilename>
         """
         self.params = params
-        self.systemmgr = ReactionMgr(volume=volume, strands=strands, params=params, domain_pairs=domain_pairs)
+        self.reactionmgr = ReactionMgr(volume=volume, strands=strands, params=params, domain_pairs=domain_pairs)
         self.sim_system_time = 0  # System time within the simulator, typically measured in micro-seconds.
 
         ## Simulation stats, counts:
@@ -113,7 +113,7 @@ class Simulator():
 
     def print_setup(self, fp=None):
         """ Print the simulator setup. """
-        sysmgr = self.systemmgr
+        sysmgr = self.reactionmgr
         # concentration:
         c = 1/N_AVOGADRO/sysmgr.volume
         print("Simulator setup / parameters:", file=fp)
@@ -135,7 +135,7 @@ class Simulator():
 
     def print_domain_stats(self, fp=None, Tm_params=None):
         """ Print domain statistics (for each domain in each strand). """
-        sysmgr = self.systemmgr
+        sysmgr = self.reactionmgr
         if Tm_params is None:
             Tm_params = {}
         #statdict = {}
@@ -186,7 +186,7 @@ class Simulator():
         """
         Simulate at most n_steps number of rounds at temperature T.
         """
-        sysmgr = self.systemmgr
+        sysmgr = self.reactionmgr
         assert sysmgr.n_hybridized_domains() == sysmgr.N_domains_hybridized
         n_done = 0
         sysmgr.temperature = T
@@ -237,7 +237,7 @@ class Simulator():
 
     def save_stats_cache(self, outputfilenames=None):
         """ Save stats cache to outputfn. """
-        sysmgr = self.systemmgr
+        sysmgr = self.reactionmgr
         if self.print_statsline_when_saving:
             print("| Total domain hybridization percentage: {:.0%} ({} of {})".format(
                 sysmgr.N_domains_hybridized/sysmgr.N_domains,
@@ -272,7 +272,7 @@ class Simulator():
 
     def record_stats_snapshot(self, T, statstype="changesampling"):
         """ Save stats snapshot to stats cache. """
-        sysmgr = self.systemmgr
+        sysmgr = self.reactionmgr
         self.Stats_cache[statstype].append((T,
                                             sysmgr.N_domains_hybridized,
                                             sysmgr.N_domains_hybridized/sysmgr.N_domains,
@@ -292,7 +292,7 @@ class Simulator():
         - self.domain_pairs
         - self.domain_dHdS
         """
-        sysmgr = self.systemmgr
+        sysmgr = self.reactionmgr
         if delta_T is None:
             delta_T = -0.5 if T_start > T_finish else +0.5
         if volume is None:

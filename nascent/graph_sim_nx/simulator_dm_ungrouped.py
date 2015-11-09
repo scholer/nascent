@@ -181,7 +181,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
         if systime_max is None:
             systime_max = self.sim_system_time + simulation_time
 
-        sysmgr = self.systemmgr
+        sysmgr = self.reactionmgr
         if T is None:
             T = sysmgr.temperature
         else:
@@ -298,7 +298,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
             self.timings['step_time'] = self.timings['step_start_time'] - self.timings['step_end_time']
 
             print(self.print_post_step_fmt.format(
-                self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.systemmgr),
+                self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr),
                   end="")
 
             if n_done % 10000 == 0:

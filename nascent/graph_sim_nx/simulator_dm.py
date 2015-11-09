@@ -47,7 +47,7 @@ import numpy as np
 #from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
 #from .thermodynamic_utils import thermodynamic_meltingcurve
 from .simulator import Simulator
-from .systemmgr_grouped import ReactionMgrGrouped
+from .reactionmgr_grouped import ReactionMgrGrouped
 # N_AVOGADRO in /mol,
 # Universal Gas constant in cal/mol/K
 from .constants import (N_AVOGADRO, R,
@@ -134,7 +134,7 @@ class DM_Simulator(Simulator):
         strands = kwargs.pop('strands')
         if strands is not None:
             strands = copy.deepcopy(strands)
-        self.systemmgr_grouped = ReactionMgrGrouped(params=params, strands=strands, **kwargs)
+        self.reactionmgr_grouped = ReactionMgrGrouped(params=params, strands=strands, **kwargs)
         self.time_per_T = params.get('time_per_T', 10) # seconds
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)
@@ -165,8 +165,8 @@ class DM_Simulator(Simulator):
         if systime_max is None:
             systime_max = self.sim_system_time + simulation_time
 
-        sysmgr = self.systemmgr
-        sysmgr_grouped = self.systemmgr_grouped
+        sysmgr = self.reactionmgr
+        sysmgr_grouped = self.reactionmgr_grouped
         if T is None:
             T = sysmgr.temperature
         else:
@@ -342,7 +342,7 @@ class DM_Simulator(Simulator):
             self.timings['step_time'] = self.timings['step_start_time'] - self.timings['step_end_time']
 
             print(self.print_post_step_fmt.format(
-                self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.systemmgr),
+                self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr),
                   end="")
 
             if n_done % 10000 == 0:
