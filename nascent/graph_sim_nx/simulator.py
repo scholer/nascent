@@ -41,6 +41,7 @@ from nascent.energymodels.biopython import Tm_NN
 #DNA_NN4 = energy_tables_in_units_of_R["DNA_NN4"]
 from .thermodynamic_utils import thermodynamic_meltingcurve
 from .reactionmgr import ReactionMgr
+from .debug import printd, pprintd
 
 # Module-level constants and variables
 N_AVOGADRO = 6.022e23   # /mol

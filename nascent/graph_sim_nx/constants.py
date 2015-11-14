@@ -30,11 +30,18 @@ PHOSPHATEBACKBONE_INTERACTION = 'b'     # 1, b, pb, p, backbone,
 HYBRIDIZATION_INTERACTION = 'h'         # 2, h, hh, hyb, hybridization, hybridized
 STACKING_INTERACTION = 's'              # 3, s, ss, bs, stacked, stacking, basestacking
 
-BACKBONE_INTERACTION_ALTERNATIVES = (1, 'pb', 'p', 'backbone')
-HYBRIDIZATION_INTERACTION_ALTERNATIVES = (2, 'hh', 'h', 'hyb', 'hybridization', 'hybridized')
-STACKING_INTERACTION_ALTERNATIVES = (3, 's', 'ss', 'bs', 'stacked', 'stacking', 'basestacking')
+BACKBONE_INTERACTION_ALTERNATIVES = {1, 'pb', 'p', 'backbone'}
+HYBRIDIZATION_INTERACTION_ALTERNATIVES = {2, 'hh', 'h', 'hyb', 'hybridization', 'hybridized'}
+STACKING_INTERACTION_ALTERNATIVES = {3, 's', 'ss', 'bs', 'stacked', 'stacking', 'basestacking'}
 
-interactions = [PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION]
+
+interactions = [None, PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION]
+valid_interactions = set(interactions)
+interactions_dict = {}
+for i, interaction in enumerate(interactions):
+    interactions_dict[i] = interaction
+    interactions_dict[interaction] = interaction
+
 
 N_AVOGADRO = 6.022e23   # /mol
 R = 1.987  # universal gas constant in cal/mol/K

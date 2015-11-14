@@ -17,6 +17,7 @@
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 
+import os
 import networkx as nx
 from networkx.algorithms.shortest_paths import shortest_path
 import numpy as np
@@ -32,6 +33,7 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
                         N_AVOGADRO, AVOGADRO_VOLUME_NM3)
+from .debug import printd, pprintd
 
 
 class GraphManager():
@@ -53,6 +55,8 @@ class GraphManager():
         self.domain_graph = domain_graph or nx.MultiGraph()
         self.strand_graph = strand_graph or nx.MultiGraph()
         if strands:
+            # TODO: Add strand-node attrs to strand-graph:
+            # TODO: Add "Label" attr to all nodes (for Gephi)
             self.strand_graph.add_nodes_from(strands)
             for strand in strands:
                 self.domain_graph.add_nodes_from(strand.nodes(data=True))
@@ -206,8 +210,8 @@ class GraphManager():
         # Append the last interaction group to path_edges:
         path_edges.append((interaction, interaction_group))
 
-        print("Path edges: %s" % path_edges)
-        #print("Interaction groups: %s" % interaction_group)
+        printd("Path edges: %s" % path_edges)
+        #printd("Interaction groups: %s" % interaction_group)
 
         if summarize and length_only:
             if length_only == 'both':
@@ -385,11 +389,11 @@ class GraphManager():
 
         ## 5p3p-level shortest path:
         path = self.ends5p3p_shortest_path(domain1, domain2)
-        print("5p3p graph shortest path from %s to %s:" % (domain1, domain2))
-        print(path)
+        printd("5p3p graph shortest path from %s to %s:" % (domain1, domain2))
+        pprintd(path)
         path_elements = self.ends5p3p_path_partial_elements(path, length_only='both', summarize=True)
-        print("5p3p graph path elements:")
-        print(path_elements)
+        printd("5p3p graph path elements:")
+        pprintd(path_elements)
 
         ## TODO: Check for secondary loops!
 

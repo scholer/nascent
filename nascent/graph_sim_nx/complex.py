@@ -34,9 +34,24 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
                         N_AVOGADRO, AVOGADRO_VOLUME_NM3)
+from .debug import printd, pprintd
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
+
+
+class SuperComplex(nx.MultiGraph):
+    """
+    Each node is a complex.
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Use this or self.nodes() ??
+        self.complexes = set()
+        # Use this or self.edges() ??
+        self.stacking_pairs = set()
+        # Edge could be:
+        # c1, c2, key=bluntend_pair
 
 
 
@@ -117,6 +132,11 @@ class Complex(nx.MultiGraph):
         self._hybridization_fingerprint = None
         self._stacking_fingerprint = None
 
+        ## DEBUG attributes: ##
+        self._historic_strands = []
+        self._historic_fingerprints = []
+        self.N_strand_changes = 0
+
         ### Graphs: ###
 
         # TODO: If you have a strand_graph, then strands set is not needed
@@ -162,7 +182,7 @@ class Complex(nx.MultiGraph):
 
     def add_strand(self, strand, update_graph=False):
         """ We keep track of strands for use with fingerprinting, etc. """
-        print("%r: Adding strand %r..." % (self, strand))
+        printd("%r: Adding strand %r..." % (self, strand))
         self.strands.add(strand)
         self.strands_by_name[strand.name].add(strand)
         strand.complex = self
@@ -172,12 +192,14 @@ class Complex(nx.MultiGraph):
             self.add_edges_from(strand.edges(data=True, keys=True))
             # self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph)
             # self.strand_graph.add_node(strand)
+        self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
+        self.N_strand_changes += 1
 
     def remove_strand(self, strand, update_graph=False):
         """ We keep track of strands for use with fingerprinting, etc. """
-        print("%r: Removing strand %r..." % (self, strand))
+        printd("%r: Removing strand %r..." % (self, strand))
         self.strands.remove(strand)
-        self.strands_by_name[strand.name].add(strand)
+        self.strands_by_name[strand.name].remove(strand)
         if strand.complex == self:
             strand.complex = None
         if update_graph:
@@ -185,10 +207,12 @@ class Complex(nx.MultiGraph):
             self.remove_nodes_from(strand)
             # self.ends5p3p_graph.add_nodes_from(strand.ends5p3p_graph)
             # self.strand_graph.remove_node(strand)
+        self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
+        self.N_strand_changes += 1
 
     def add_strands(self, strands, update_graph=False):
         """ Strands must be a set. """
-        print("%r: Adding strands %s..." % (self, strands))
+        printd("%r: Adding strands %s..." % (self, strands))
         for strand in strands:
             self.strands_by_name[strand.name].add(strand)
             strand.complex = self
@@ -200,10 +224,12 @@ class Complex(nx.MultiGraph):
         if not isinstance(strands, set):
             strands = set(strands)
         self.strands |= strands
+        self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
+        self.N_strand_changes += 1
 
     def remove_strands(self, strands, update_graph=False):
         """ Strands must be a set. """
-        print("%r: Removing strands %s..." % (self, strands))
+        printd("%r: Removing strands %s..." % (self, strands))
         for strand in strands:
             self.strands_by_name[strand.name].remove(strand)
             if strand.complex == self:
@@ -216,7 +242,8 @@ class Complex(nx.MultiGraph):
         if not isinstance(strands, set):
             strands = set(strands)
         self.strands -= strands
-
+        self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
+        self.N_strand_changes += 1
 
 
     def state_fingerprint(self):
@@ -267,7 +294,9 @@ class Complex(nx.MultiGraph):
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()
                 )) % 10000  # TODO: Remove modulus when done debugging.
+            self._historic_fingerprints.append((self._state_fingerprint,))
         return self._state_fingerprint
+
 
     def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False):
         self._state_fingerprint = None

@@ -27,8 +27,6 @@ Module for
 import itertools
 import networkx as nx
 import numpy as np
-import colorsys
-from random import random
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
@@ -36,66 +34,14 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
                         interactions)
+from .strandcolor import StrandColor
+
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
-
-
-class StrandColor():
-    def __init__(self):
-        self.st_spec_colors = {}
-        self.last_hue = 0
-        self.hue_delta = 1.0
-        self.used = []
-
-    def strand_color(self, strand):
-        """ Return a specie-specific strand color. """
-        N_MAX_ABORT = 100
-        n_tries = 0
-        if strand.name not in self.st_spec_colors:
-            hue = (self.last_hue + self.hue_delta) % 1
-            while any(abs(hue-h2) < 0.01 for h2 in self.used):
-                n_tries += 1
-                hue = (hue + self.hue_delta) % 1
-                self.hue_delta /= 2
-                if n_tries > N_MAX_ABORT:
-                    hue = random()
-                    print("UNABLE TO FIND NEW HUE, RETURNING RANDOM HUE: %s" % hue)
-                    break
-            self.st_spec_colors[strand.name] = hue
-            self.used.append(hue)
-            print("Hue for strand %s: %s" % (strand, hue))
-            # For 0 < frac < 0.5, use frac*2 as value, max out at 1.
-            # e.g. frac=1/4 (3 domains), val=0.5; frac=1/8 (7 domains), val=1/4, etc.
-        else:
-            hue = self.st_spec_colors[strand.name]
-        return hue
-
-    def domain_hsv(self, strand, frac):
-        """
-        Frac is (domain_idx+1)/(len(strand.domains)+1)
-        So that for strand with 1 domain, frac=0.5,
-        strand with 2 domains, frac=1/3 or 2/3.
-        3 domains: frac = 1/4, 2/4, 3/4,
-        etc.
-        """
-        assert 0 < frac < 1
-        hue = self.strand_color(strand)
-        val = min((frac*2, 1.0))
-        sat = min((2-frac*2, 1.0))
-        print("Strand %s with frac %s yields hsv = %s" % (strand, frac, (hue, sat, val)))
-        return hue, sat, val
-
-    def domain_rgb(self, strand, frac):
-        """
-        """
-        hsv = self.domain_hsv(strand, frac)
-        rgb = colorsys.hsv_to_rgb(*hsv)
-        print("Strand %s with frac %s yields rgb = %s" % (strand, frac, rgb))
-        return rgb
-
-
 colormgr = StrandColor()
+#colormgr = StrandColorRandom()
+
 
 
 class Strand(nx.MultiGraph):
@@ -138,7 +84,9 @@ class Strand(nx.MultiGraph):
         n_domains = len(domains)
         # for idx, domain in domains:
         # connect nodes from the 5p end to the 3p end:
+        # edge colors: backbone=blue, hyb=red, stack=green/cyan,
         edge_attrs = {'interaction': PHOSPHATEBACKBONE_INTERACTION,
+                      'R': 0, 'G': 0, 'B': 1,  # pygephi colors
                       #'type': PHOSPHATEBACKBONE_INTERACTION,
                       #'direction': None
                      }
@@ -148,13 +96,20 @@ class Strand(nx.MultiGraph):
         for idx, (domain, domain2) in enumerate(zip_longest(self.domains, self.domains[1:])):
             ## Add domain nodes:
             frac = (idx+1)/(n_domains+1)
-            #hsv = colormgr.domain_hsv(self, frac)
-            #domain_color = "%0.03f %0.03f %0.03f" % hsv
-            domain_color = colormgr.domain_rgb(self, frac)
+            hsv = colormgr.domain_hsv(self, frac)
+            hsv_str = "%0.03f %0.03f %0.03f" % hsv
             # Edit: The above works for graphviz, but we generally don't plot with graphviz...
             # networkx.draw* uses matplotlib, which takes rgb tuples:
-            node_attrs = {'_color': domain_color,
-                          'size': 20*len(domain)}
+            # TODO: This should probably be visualizer-specific properties
+            rgb_tup = colormgr.domain_rgb(self, frac)
+            node_attrs = {'color_rgb': rgb_tup,
+                          'color_hsv': hsv_str,
+                          'size': len(domain), # pygephi: 200 is a reasonable size.
+                          'Label': domain.name,
+                          'R': rgb_tup[0],
+                          'G': rgb_tup[1],
+                          'B': rgb_tup[2],
+                         }
             self.add_node(domain, attr_dict=node_attrs)
 
             ## Add edge between domain and domain2:
@@ -175,7 +130,7 @@ class Strand(nx.MultiGraph):
 
             # The "long" edge from 5p of d to 3p of domain:
             long_edge_attrs = dict(edge_attrs, weight=10/len(domain), len=len(domain),
-                                   _color=domain_color, style='bold')
+                                   _color=rgb_tup, style='bold')
             self.ends5p3p_graph.add_edge(domain.end5p, domain.end3p, key=PHOSPHATEBACKBONE_INTERACTION,
                                          attr_dict=long_edge_attrs)
             # The "short" edge connecting 3p of one domain to 5p of the next domain:

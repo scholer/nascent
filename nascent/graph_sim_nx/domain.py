@@ -28,6 +28,7 @@ TODO: Change all mentions of "strand" to "oligo" to conform with cadnano's nomen
 
 #import random
 import math
+import pdb
 #from collections import deque, OrderedDict
 #from itertools import zip_longest, chain#, accumulate
 # import itertools
@@ -40,6 +41,7 @@ from .constants import STACKING_INTERACTION #, PHOSPHATEBACKBONE_INTERACTION, HY
 # from .constants import N_AVOGADRO
 from .constants import ss_kuhn_length, ss_rise_per_nt, ds_rise_per_bp
 from .algorithms import connectivity_rings
+from .debug import printd, pprintd
 
 
 # Module-level constants and variables:
@@ -119,10 +121,13 @@ class Domain():
                 # Note: Using hybridization graph, because no reason to vary based on stacking here
                 # TODO: It is very important that the in-complex-identifier is unique.
                 #       Fortunately, you have the option to VERIFY that it actually is.
-                neighbor_rings = connectivity_rings(c, self.strand, 5,
+                neighbor_rings = connectivity_rings(c, self, 5,   # use self, not self.strand; we have domains.
                                                     edge_filter=dont_follow_stacking_interactions)
-                # TODO: THe hash should probably include the strand specie as well
-                self._in_complex_identifier = hash(tuple(d.domain_strand_specie for d in neighbor_rings))
+                # Done: The hash should probably include the strand specie as well
+                #       - d.domain_strand_specie vs d.name
+                # pdb.set_trace()
+                self._in_complex_identifier = hash(tuple(frozenset(d.domain_strand_specie for d in ring)
+                                                         for ring in neighbor_rings))
                 #specie_instances = c.domains_by_name[self.name]
         return self._in_complex_identifier
 
@@ -135,6 +140,7 @@ class Domain():
         TODO: Consider not making duplexes state-dependent but rather just depend on their local stacking state.
         """
         if self._specie_state_fingerprint is None:
+            printd("(re-)calculating state fingerprint for domain %r" % (self, ))
             dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
             # the complex's state:
             c_state = self.strand.complex.state_fingerprint() \
@@ -195,6 +201,8 @@ class DomainEnd():
         self.domain = domain
         self.end = end
         self.name = domain.name+end
+        self.instance_name = domain.instance_name+end
+        self.base = domain.sequence[0 if end == "5p" else -1] if domain.sequence is not None else None
         self.hyb_partner = None
         self.pb_upstream = None     # end connected by phosphate backbone on same strand
         self.pb_downstream = None   # end connected by phosphate backbone on same strand
@@ -216,7 +224,13 @@ class Domain5pEnd(DomainEnd):
         return self.stack_partner
 
     def stacked_downstream(self, ):
-        """ If a domain is hybridized, we assume it is the domain's ends are stacked. """
+        """
+        Convention: If a domain is hybridized, we the domain's ends are stacked.
+        This is usually true, unless the duplex is buckled.
+        This just makes it easier to test if a helix is rigid all the way from one end to the other.
+        I.e. if all 5p3p domain ends are stacked in the path between the 5p end and 3p end, then
+        the helix is assumed to be a fully-stacked, rigid/semi-rigid helix all the way.
+        """
         if self.hyb_partner is not None:
             return self.pb_downstream
 

@@ -24,14 +24,15 @@ Main dispatcher module.
 
 
 The dispatcher is resposible for:
- (1) Receiving state changes.
- (2) Writing state changes to file.
- (3) Propagating the state change to the live graph, by:
+ (1) Receiving state changes (described by domain objects).
+ (2) Translating "domain" object instance nodes to string representation.
+ (3) Writing state changes to file.
+ (4) Propagating the state change to the live graph, by:
     (a) Translating the state change directive to a graph event,
         according to the live graph view (domain-level vs 5p3p-level).
     (b) Invoking the correct graph-updating methods for the events.
 
-Regarding (3): The graph_visualization objects are agnostic to "domains", "strands", etc.
+Regarding (4): The graph_visualization objects are agnostic to "domains", "strands", etc.
 They only know about how to create graphs and add/remove nodes and edges on their respective
 output tool. It is the dispatchers job to re-format graph initiation and state change directives
 according to the current graph representation and style.
@@ -56,10 +57,12 @@ logger = logging.getLogger(__name__)
 # Nascent imports:
 from nascent.graph_sim_nx.domain import Domain
 from nascent.graph_visualization.graph_utils import directed_for_all_edges
-from .graph_translators import (translate_domain_graph_to_5p3p_graph,
-                                translate_domain_change_to_5p3p_graph_events,
-                                translate_domain_change_to_domain_graph_event,
-                                translate_domain_change_to_strand_graph_event)
+from .graph_translators import (translate_domain_graph_to_5p3p_str_graph,
+                                translate_domain_graph_to_domain_str_graph,
+                                translate_domain_graph_to_strand_str_graph,
+                                translate_domain_change_to_5p3p_str_graph_event,
+                                translate_domain_change_to_domain_str_graph_event,
+                                translate_domain_change_to_strand_str_graph_event)
 
 try:
     from ..graph_visualization.cytoscape import CytoscapeStreamer
@@ -67,19 +70,24 @@ except ImportError as e:
     print(e, "(Streaming to Cytoscape will not be available)")
     CytoscapeStreamer = None
 try:
+    # Use gephi_ws for websocket communication
     from ..graph_visualization.gephi import GephiGraphStreamer
+    from ..graph_visualization.gephi_ws import GephiGraphStreamerWs
 except ImportError as e:
     print(e, "(Streaming to Gephi (graph-streaming plugin) will not be available)")
     GephiGraphStreamer = None
 
 
 STREAMERS = {'cytoscape': CytoscapeStreamer,
-             'gephi': GephiGraphStreamer}
+             'gephi': GephiGraphStreamer,
+             'gephi_ws': GephiGraphStreamerWs}
 
 
 class StateChangeDispatcher():
     """
     State change dispatcher class.
+    Receives domain-instance graph events, translates them to model-agnostic (str repr) events,
+    and forwards them to a file and/or a live graph streamer.
 
     The usual use-case for a single state_change directive is:
 
@@ -91,9 +99,13 @@ class StateChangeDispatcher():
         --> method_idx = event['change_type']*2 + event['forming']
             (group graph events, if needed)
             .graph_event_methods[method_idx] => method (or *_group_methods if multiple events)
-            method(event), e.g.
-            add_node(event):
-            -->
+            method(event), e.g. self.add_node(event):
+            --> self.live_streamer.add_node(node_name, event.get('attributes'))
+
+    live_streamer.add/delete_node/edge():
+    live_streamer.add_node(node_name, attributes=None), add_nodes(node_names_list, attributes=None)
+    live_streamer.add_edge(self, source, target, directed=True, interaction=None, bidirectional=None, attributes=None)
+        --> client.add_node(...)
 
     The state_change received by dispatch() is either a dict with keys:
         - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
@@ -129,10 +141,12 @@ class StateChangeDispatcher():
         ## State change directies and graph visualization ##
         self.multi_directive_support = config.get('dispatcher_multi_directive_support')
         self.graph_translation = config.get('dispatcher_graph_translation', "domain-to-5p3p")
-        self.live_graph_repr = config.get('livestreamer_graph_representation', '5p3p')
+        # 'livestreamer_graph_representation' is replaced by 'dispatcher_graph_translation' above.
+        # The "graph visualization adaptors" should be agnostic to the DNA/strand/domain model
+        # self.live_graph_repr = config.get('livestreamer_graph_representation', '5p3p')
         self.auto_apply_layout = config.get('livestreamer_auto_apply_layout', 0)
         self.live_graph_layout = config.get('livestreamer_graph_layout_method', 'force-directed')
-        streamer = config.get('dispatcher_livestreamer', 'cytoscape')
+        streamer = config.get('dispatcher_livestreamer', 'gephi')
 
         ## Init file output stream: ##
         if self.keep_file_open:
@@ -150,7 +164,7 @@ class StateChangeDispatcher():
             try:
                 streamer_cls = STREAMERS[streamer]
                 if streamer_cls is None:
-                    print("Sorry, the requested '%s' streamer is not available" % streamer,
+                    print("\n[Dispatcher] Sorry, the requested '%s' streamer is not available" % streamer,
                           "(error during module import)")
                 else:
                     self.live_streamer = streamer_cls(config)
@@ -166,24 +180,28 @@ class StateChangeDispatcher():
 
     def init_graph(self, graph, reset=True):
         """
-        Initialize the graph visualization and prepare it for streaming.
+        Initialize the live streamer graph visualization and prepare it for streaming.
+        Input argument :graph: is a domain-object networkx graph.
+        If :reset: is True, the live streamer's current graph/workspace is reset
+        before initializing the new graph.
         TODO: Implement this!
         """
         #if self.live_graph_repr == 'strand':
         if self.graph_translation == 'domain-to-strand':
             print("Initialization of Stand graphs not implemented.")
-            translated_graph = graph
+            translated_graph = translate_domain_graph_to_strand_str_graph(graph)
         #elif self.live_graph_repr == 'domain':
-        elif self.graph_translation == None:
-            translated_graph = graph
+        elif self.graph_translation is None or self.graph_translation == 'domain-to-domain':
+            # Still need to convert domain objects to domain strings?
+            # Or do we rely on string casting in the livestreamer?
+            translated_graph = translate_domain_graph_to_domain_str_graph(graph)
         #elif self.live_graph_repr == '5p3p':
         elif self.graph_translation == 'domain-to-5p3p':
-            translated_graph = translate_domain_graph_to_5p3p_graph(graph)
+            translated_graph = translate_domain_graph_to_5p3p_str_graph(graph)
         else:
             raise ValueError("self.graph_translation '%s' is not a recognized representation." %
                              self.graph_translation)
-        print("Initializing streamer using graph with nodes:",
-              sorted(translated_graph.nodes()))
+        print("Initializing streamer using graph with nodes:", sorted(translated_graph.nodes()))
         self.live_streamer.initialize_graph(translated_graph, reset=reset)
 
 
@@ -262,7 +280,7 @@ class StateChangeDispatcher():
 
         ## Propagate the graph state change directive to live graph streamer, if one is configured:
         if self.live_streamer:
-            # Translate the state_changes list-of-dicts to a list of "pure, domain-agnostic" graph events:
+            # Translate the state_changes list-of-dicts to a list of "pure, domain-agnostic" str-repr graph events:
             graph_events = self.state_changes_to_graph_events(state_changes)
             if len(graph_events) == 0:
                 print("Dispatcher: NO GRAPH EVENTS!")
@@ -356,7 +374,9 @@ class StateChangeDispatcher():
 
     def state_changes_to_graph_events(self, state_changes):
         """
-        Will translate domain nodes state changes to 5p3p graph representation.
+        Will
+            1) translate domain nodes state changes to 5p3p graph representation.
+            2) translate "strand/domain/end" objects to str representation.
         Note that the lenght of the translated events list might be different
         from the input state_changes list. For instance, translating a domain
         hybridization to 5p3p format produces two "add edge" graph events,
@@ -376,16 +396,16 @@ class StateChangeDispatcher():
         if self.graph_translation == "domain-to-5p3p":
             print("Translating domain change to 5p3p graph change...")
             events = [trans_change for state_change in state_changes
-                      for trans_change in translate_domain_change_to_5p3p_graph_events(state_change)]
+                      for trans_change in translate_domain_change_to_5p3p_str_graph_event(state_change)]
         elif self.graph_translation == "domain-to-strand":
             # Requires multi-graph support, in case two strands hybridize with more than one domain,
             # or we have intra-strand hybridization, stacking, etc.
             print("Translating domain change to strand graph change...")
-            events = [translate_domain_change_to_strand_graph_event(state_change)
+            events = [translate_domain_change_to_strand_str_graph_event(state_change)
                       for state_change in state_changes]
         else:
-            print("Translating domain change to domain graph change...")
-            events = [translate_domain_change_to_domain_graph_event(state_change)
+            print("Translating domain change to domain graph change (str repr)...")
+            events = [translate_domain_change_to_domain_str_graph_event(state_change)
                       for state_change in state_changes]
         return events
 

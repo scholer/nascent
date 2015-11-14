@@ -55,15 +55,22 @@ def touch(filepath):
         os.utime(filepath)
 
 
-def test(simulator, usepdb=False):
+def test(simulator, usepdb=False, testcase=None, execfile=None):
     """
     Perform ad-hoc testing of simulator system.
     """
 
     #local = {'simulator': simulator}
     #ns = locals()
-    sysmgr = simulator.systemmgr
-    sysmgr_grouped = simulator.systemmgr_grouped
+    n_done = 0
+    sysmgr = simulator.reactionmgr
+    sysmgr_grouped = simulator.reactionmgr_grouped
+
+    domains_by_duid = {}  # domain unique id => domain
+    for domain in sysmgr.domains:
+        assert domain.duid not in domains_by_duid
+        domains_by_duid[domain.duid] = domain
+
     domA = next(d for d in sysmgr.domains if d.name == 'A')
     domB = next(d for d in sysmgr.domains if d.name == 'B')
     domC = next(d for d in sysmgr.domains if d.name == 'C')
@@ -81,32 +88,48 @@ def test(simulator, usepdb=False):
     domI = next(d for d in sysmgr.domains if d.name == 'I')
     domL = next(d for d in sysmgr.domains if d.name == 'L')
 
-    testcase = 2
+    #execfile = r"C:\Users\scholer\Nascent\simdata\DistTest1\2015-11-10 120035\invoked_reactions.py"
+    # testcase = None # None, 1, ...
 
-    if testcase == 1:
-        sysmgr.hybridize(domB, domb)
+    if execfile:
+        # Execute the contents of file <execfile>, e.g. hyb_dehyb.py or invoked_reactions.py
+        with open(execfile) as fp:
+            code = compile(fp.read(), execfile, "exec") # exec or eval
+        exec(code, globals(), {'sysmgr': sysmgr, 'domains_by_duid': domains_by_duid})
+
+    elif testcase == 1:
+        # sysmgr.hybridize(domB, domb)
+        sysmgr.react_and_process(frozenset((domB, domb)), is_hybridizing=True, is_intra=False)
         print("\n  - sysmgr.unhybridized_domains_by_name -")
         pprint(sysmgr.unhybridized_domains_by_name)
-        sysmgr.hybridize(domc, domC)
+
+        # sysmgr.hybridize(domc, domC)
+        sysmgr.react_and_process(frozenset((domc, domC)), is_hybridizing=True, is_intra=None)
         print("\n  - sysmgr.unhybridized_domains_by_name -")
         pprint(sysmgr.unhybridized_domains_by_name)
-        sysmgr.hybridize(domi, domI)
+
+        # sysmgr.hybridize(domi, domI)
+        sysmgr.react_and_process(frozenset((domi, domI)), is_hybridizing=True, is_intra=None)
         print("\n  - sysmgr.unhybridized_domains_by_name -")
         pprint(sysmgr.unhybridized_domains_by_name)
-        sysmgr.dehybridize(domi, domI)
+
+        # sysmgr.dehybridize(domi, domI)
+        sysmgr.react_and_process(frozenset((domi, domI)), is_hybridizing=False, is_intra=None)
         print("\n  - sysmgr.unhybridized_domains_by_name -")
         pprint(sysmgr.unhybridized_domains_by_name)
-        sysmgr.hybridize(domE, dome)
+        # sysmgr.hybridize(domE, dome)
+
+        sysmgr.react_and_process(frozenset((domE, dome)), is_hybridizing=True, is_intra=None)
         print("\n  - sysmgr.unhybridized_domains_by_name -")
         pprint(sysmgr.unhybridized_domains_by_name)
-        sysmgr.dehybridize(domB, domb)
+
+        # sysmgr.dehybridize(domB, domb)
+        sysmgr.react_and_process(frozenset((domB, domb)), is_hybridizing=False, is_intra=None)
         print("\n  - sysmgr.unhybridized_domains_by_name -")
         pprint(sysmgr.unhybridized_domains_by_name)
         sysmgr.hybridize(domG, domg)
         # --> KeyError in File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\graph_sim_nx\systemmgr.py", line 380, in update_possible_reactions:
         #    self.unhybridized_domains_by_name[d1.name].remove(d1)
-
-
 
     elif usepdb:
         # Use the python debugger (includes readline since 3.3):
@@ -119,10 +142,9 @@ def test(simulator, usepdb=False):
         # To enter debug while you have a current exception or traceback, use pdb.post_morten
         # pdb.set_trace()
         # simulator.systemmgr.draw_and_save_graphs(n=1)
-
         # Or just run with python -m pdb <script>  (and press 'c' to continue until next error or breakpoint).
         # (Does not work if the exception is catched, of course...!)
-        n_done = simulator.simulate(T=328, n_steps_max=20, systime_max=200) #
+        n_done = simulator.simulate(T=328, n_steps_max=300, systime_max=1000) #
         # try:
         #     # n_done = simulator.simulate(T=330, n_steps_max=10, systime_max=200)
         #     n_done = simulator.simulate(T=328, n_steps_max=20, systime_max=200) #
@@ -140,13 +162,6 @@ def test(simulator, usepdb=False):
         #         exc_type, exc_value, tb = sys.exc_info() # get exception info
         #         traceback.print_exc()
         #         pdb.post_mortem(tb)
-        print("\n\nTEST RUN COMPLETE. n_done =", n_done)
-        answer = input(("Type 'd' to enter debugger; "
-                        "'g' to save plot to file; any other key to continue..."))
-        if 'g' in answer:
-            sysmgr.draw_and_save_graphs(n="end")
-        if 'd' in answer:
-            pdb.set_trace()
         # try:
         #     simulator.simulate(T=350, n_steps_max=10, systime_max=100)
         # except TypeError:
@@ -158,9 +173,47 @@ def test(simulator, usepdb=False):
         from importlib import reload
         #newc, oldc = moves.hybridize(domb, domB)
         # Simulate a single step:
-        simulator.simulate(T=350, n_steps_max=10, systime_max=100)
-
+        n_done = simulator.simulate(T=350, n_steps_max=10, systime_max=100)
         interact(local=locals())
+
+    print("\n\nTEST RUN COMPLETE. n_done =", n_done)
+    answer = input(("Type 'd' to enter debugger; "
+                    "'g' to save plot to file; any other key to continue..."))
+    if 'g' in answer:
+        sysmgr.draw_and_save_graphs(n="end")
+    if 'd' in answer:
+        pdb.set_trace()
+
+
+def run_repeatedly(simulator):
+    sysmgr = simulator.reactionmgr
+    answer = 'r'
+    systime_max = 0
+    T = 360
+    n_steps_max = 100
+    print("Starting simulation...")
+    while 'q' not in answer:
+        systime_max += 1000
+        answer = input(("Type 'd' to enter debugger; " +
+                        "'g' to save plot to file; " +
+                        "'q' to quit; " +
+                        "Type <temperature> [<max steps>] to change simulation parameters " +
+                        ("(currently %s %s). " % (T, n_steps_max)) +
+                        "Press any other key to run simulation again..."))
+        if answer:
+            if 'q' in answer:
+                break
+            try:
+                vals = answer.strip().split()
+                T = int(vals[0])
+                n_steps_max = int(vals[1])
+            except TypeError:
+                pass
+            except IndexError:
+                pass
+        n_done = simulator.simulate(T=T, n_steps_max=n_steps_max, systime_max=systime_max)
+        print("\nCompleted %s steps..." % n_done)
+
 
 
 
@@ -204,6 +257,7 @@ def main():
     # adhoc_testing = False
     adhoc_testing = True
     usepdb = True
+    do_run_repeatedly = True
     strand_defs_folder = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(nascent.__file__))), "testfiles")
     #structure = "duplex1"
@@ -223,7 +277,7 @@ def main():
 
     if adhoc_testing:
         structure = "DistTest1"
-        n_strand_copies_default = 1
+        n_strand_copies_default = 4
 
     # Load strand def and check the strands:
     strand_defs_file = os.path.join(strand_defs_folder, "strand_defs_{}.txt".format(structure))
@@ -304,9 +358,11 @@ def main():
     adhoc_params = {'time_per_T': time_per_T,
                     'n_steps_per_T': n_steps_per_T,
                     "working_directory": run_directory,
+                    "simulator_step_sleep_factor": 1, # Sleep factor*tau after each DM simulation step
                    }
     simulator = Simulator(volume=volume, strands=input_oligos, params=adhoc_params,
                           outputstatsfiles=outputstatsfile)
+    sysmgr = simulator.reactionmgr
 
     ## Hook up dispatcher
     dispatcher_config = {'dispatcher_state_changes_fn': outputfn(uid=uid, statstype="changes", ext="txt"),
@@ -317,17 +373,27 @@ def main():
                          #'dispatcher_state_changes_unpack_nodes': True,
                          #'dispatcher_state_changes_line_fmt': None,
                          'dispatcher_multi_directive_support': False,
-                         'dispatcher_graph_translation': 'domain-to-5p3p',
-                         'livestreamer_graph_representation': '5p3p',
+                         'dispatcher_graph_translation': None, #'domain-to-5p3p', # None, 'domain-to-5p3p', 'domain-to-strand'
+                         #'livestreamer_graph_representation': '5p3p' # Not used.
                          'livestreamer_auto_apply_layout': 0,
                          'livestreamer_graph_layout_method': 'force-directed',
-                         'dispatcher_livestreamer': None, # 'gephi', 'cytoscape'
+                         'dispatcher_livestreamer': 'gephi_ws', #None, # 'gephi', 'gephi_ws', 'cytoscape'
+                         'visualization_use_websocket': False,
+                         'visualization_workspace': 'workspace0',
                          'dispatcher_debug_print': True, # print debug statements in dispatcher
                         }
     dispatcher = StateChangeDispatcher(dispatcher_config)
     simulator.dispatcher = dispatcher
+    dispatcher.init_graph(sysmgr.domain_graph)
+
+    answer = input("Gephi initialized, press any key to continue (or 'q' to quit)...")
+    if answer and answer[0] == 'q':
+        return
 
     # Perform calculations and start simulation
+    if do_run_repeatedly:
+        run_repeatedly(simulator)
+        return
     if adhoc_testing:
         test(simulator, usepdb=usepdb)
         return
@@ -392,7 +458,7 @@ def main():
 
     Tm_filename = os.path.splitext(outputstatsfile)[0] + ".energies.yaml"
     with open(Tm_filename, 'w') as fp:
-        yaml.dump(simulator.systemmgr.domain_dHdS, fp)
+        yaml.dump(simulator.reactionmgr.domain_dHdS, fp)
 
     reportfilename = os.path.splitext(outputstatsfile)[0] + ".domainstats.txt"
     simulator.save_domain_stats(reportfilename)

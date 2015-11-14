@@ -22,62 +22,17 @@
 
 Module for interacting with Gephi through the graph-streaming plugin.
 
-This module uses websocket protocol to communicate with Gephi.
-The Gephi graph-streaming plugin supports two communication protocols:
- 1. Standard HTTP requests with JSON-encoded data.
- 2. Communication via the websocket protocol using Graph-Stream encoded data.
-
-The websocket-based option has the following advantages:
-* Websocket connections are kept alive, unlike standard HTTP requests.
-* There is no overhead after the hand-shake is made (which is done with HTTP).
-
-This means that for continious data communication of small events,
-websocket is 1-2 orders of magnitude faster than standard HTTP requests.
-
-However, using websocket has two draw-backs:
- 1. We don't have any standard python libraries, such as pygephi_graphstreaming.
- 2. I'm unfamiliar with using websocket modules
- 3. We have to encode the data in graph-strem format rather than just
-    making a dict and encoding it to json.
-    Edit: It seems it the Gephi graph-streaming plugin actually does
-    communicate in JSON-encoded format rather than the condensed GraphStream format.
-    In fact, I can probably just modify the existing python libraries to support
-    websocket communication.
+Gephi graph-streaming python libraries:
+* https://github.com/panisson/pygephi_graphstreaming
+* https://github.com/totetmatt/GephiStreamer
+** Very ugly code, but uses requests. Also imports urllib but doesn't use it...
+    - urllib.open(...) was replaced by requests.post(...))
+* https://github.com/jsundram/pygephi (Jython)
+** This is for making use of the gephi libraries from within Python using Jython
 
 
-Blog posts:
-* http://matthieu-totet.fr/Koumin/2013/09/16/gephi-and-the-streaming-module/
-* http://matthieu-totet.fr/Koumin/2014/06/15/lets-play-gephi-streaming-api-the-hidden-websocket/
-
-Python websocket libraries:
-* AutoBahn - https://github.com/tavendo/AutobahnPython
-    https://pypi.python.org/pypi/autobahn/
-    Twisted and asyncio, CPython, PyPy and Jython
-* ws4py - https://github.com/Lawouach/WebSocket-for-Python
-    https://pypi.python.org/pypi/ws4py/ - pypi entry not updated since 2014 (all others updated at least summer 2015)
-    Uses the CherryPy framework, can also use gevent greenlets or Tornado.iostream
-    Lots of examples!
-* Websocket-Client - https://github.com/liris/websocket-client
-    https://pypi.python.org/pypi/websocket-client/
-    Python 2.7 and 3.x
-    Has a WebSocketApp for easy setup.
-    "This version support only hybi-13" (but I think this is just the standard Websocket RFC specification)
-    Uses the standard socket library
-    Uses threading module for pinging server (not important)
-* Websockets - https://github.com/aaugustin/websockets
-    https://pypi.python.org/pypi/websockets/
-    Uses asyncio - requires python 3.4 or 3.3 with asyncio module.
-
-Graph-stream protocol data-encoding libraries:
-
-
-
-Other Gephi graph-streaming python libraries:
-* https://github.com/totetmatt/gephi.stream.graph.websocket (JavaScript)
-* https://github.com/totetmatt/graphStreamServer (Not websocket)
-** Messages still seems to be in JSON format?
-
-About the graph-stream protocol:
+About the HTTP requests communication with Gephi graph-streaming plugin:
+* Uses the JSONStream HTTP request interface.
 * See pygephi_graphstreaming/pygephi/client.py
 * Very similar to Cytoscape's REST interface:
 * Send GET (or maybe POST) requests to URI in the format of
@@ -130,18 +85,22 @@ General-purpose NetStream libs:
 
 """
 
+import math
 import logging
 logger = logging.getLogger(__name__)
 
-import pygephi
+from pygephi import client
 
 # Local/relative imports
 from .live_visualizer_base import LiveVisualizerBase
+from nascent.graph_sim_nx.constants import (HYBRIDIZATION_INTERACTION, PHOSPHATEBACKBONE_INTERACTION,
+                                            STACKING_INTERACTION)
 
 DEFAULT_NODE_ATTR = {"size": 10, 'r': 1.0, 'g': 0.0, 'b': 0.0, 'x': 1, 'y': 0}
 DEFAULT_EDGE_ATTR = {}
 
-class GephiGraphStreamer(LiveVisualizerBase):
+## TODO: Subclass GephiGraphStreamer instead of LiveVisualizerBase
+class GephiGraphStreamerWs(LiveVisualizerBase):
     """
     Draw graph live using Gephi with graph-streaming plugin.
     """
@@ -149,19 +108,26 @@ class GephiGraphStreamer(LiveVisualizerBase):
     def __init__(self, config):
         super().__init__(config)
         # Client:
+        use_websocket = config.get('visualization_use_websocket', True)
         host = config.get('visualization_host', '127.0.0.1')
         port = config.get('visualization_port', 8080)
-        scheme = config.get('visualization_uri_scheme', 'http')
+        scheme = config.get('visualization_uri_scheme', 'ws' if use_websocket else 'http')
         workspace = config.get('visualization_workspace', 'workspace0')
         url = config.get('visualization_url', "%s://%s:%s/%s" % (scheme, host, port, workspace))
         # If client.autoflush is True, changes are submitted at once.
         # Otherwise they are aggregated in client.data and only submitted when .flush() is invoked.
         autoflush = config.get('visualization_autoflush', True)
-        self.client = pygephi.client.GephiClient(url, autoflush=autoflush)
+        if use_websocket:
+            # Websocket is good if you send a lot of small messages but requires third party library
+            from pygephi import websocket_client
+            self.client = websocket_client.GephiWsClient(url, autoflush=autoflush)
+        else:
+            self.client = client.GephiClient(url, autoflush=autoflush)
         self.network = self.client # For gephi, the network and client is the same
         # Styles:
         self.node_attributes = DEFAULT_NODE_ATTR.copy()
-        self.node_attributes.update(config.get('visualization_node_attributes', {}))
+        self.node_attributes.update(config.get('visualization_node_attributes',
+                                               {'size': 10, 'r': 1.0}))
         self.edge_attributes = DEFAULT_EDGE_ATTR.copy()
         self.edge_attributes.update(config.get('visualization_edge_attributes', {}))
 
@@ -185,10 +151,12 @@ class GephiGraphStreamer(LiveVisualizerBase):
         self.client.autoflush = False # disable auto-flush while we build the graph
         for node, data in graph.nodes(data=True):
             self.add_node(node, attributes=data)
-        directed = graph.is_directed()
+        directed = False # graph.is_directed()
         ## TODO: Add explicit support for multi-graphs!
         for source, target, data in graph.edges(data=True):
-            data.setdefault('interaction', 'b')
+            data.setdefault('interaction', PHOSPHATEBACKBONE_INTERACTION)
+            if 'weight' in data:
+                data['weight'] = math.sqrt(data['weight']) # Gephi is a little too sensitive to edge weight.
             self.add_edge(source, target, directed=directed, attributes=data)
         self.client.flush()
         self.client.autoflush = autoflush
@@ -237,24 +205,32 @@ class GephiGraphStreamer(LiveVisualizerBase):
         self.node_suid_to_name.pop(node_name, None)
 
 
-    def add_edge(self, source, target, directed=True, interaction=None, bidirectional=None, attributes=None):
-        """ Add a single edge. Id is auto-generated as source-target"""
+    def add_edge(self, source, target, directed=True, key=None, interaction=None, bidirectional=None, attributes=None):
+        """ Add a single edge. Id is auto-generated as {source}-{key}-{target}. """
+        ## TODO: ADD SUPPORT FOR MULTI-GRAPHS
         if attributes:
             attrs = self.edge_attributes.copy()
             attrs.update(attributes)
         else:
             attrs = self.edge_attributes
-        if interaction is None:
-            interaction = attrs.get('interaction', '-')
-        interact_str = "--" + interaction + ("->" if directed else "--")
-        edge_id = "".join((source, interact_str, target))
+        if key is None:
+            if interaction is None:
+                interaction = attrs.get('interaction', HYBRIDIZATION_INTERACTION)
+            key = "-" + str(interaction) + ("->" if directed else "--")
+        edge_id = "-".join((source, key, target))
         self.client.add_edge(edge_id, source, target, directed, **attrs)
         # register_new_edges takes a list of dicts or a single dict with
+        if source not in self.node_name_to_suid or target not in self.node_name_to_suid:
+            print("Warning:",
+                  ("source '%s' not in node_name_to_suid" % source) if source not in self.node_name_to_suid else "",
+                  ("target '%s' not in node_name_to_suid" % target) if target not in self.node_name_to_suid else "")
+        if edge_id in self.edge_suid_to_names:
+            print("Note: edge id", edge_id, "already in edge_suid_to_names.")
         self.register_new_edges([{'id': edge_id, 'source': source, 'target': target}], directed=directed)
         return edge_id
 
 
-    def add_edges(self, edges, directed, attributes=None):
+    def add_edges(self, edges, directed, keys=None, attributes=None):
         """
         Takes a list of edges in the form of
             [{'source': <name>, 'target': <name>, 'interaction': <str>, 'directed': <bool>}, ...]
@@ -266,19 +242,16 @@ class GephiGraphStreamer(LiveVisualizerBase):
         else:
             attrs = self.edge_attributes
         print("Attributes:", attrs)
-        default_interaction = attrs.get('interaction', 'h')
+        default_interaction = attrs.get('interaction', HYBRIDIZATION_INTERACTION)
         autoflush = self.client.autoflush
         new_edge_ids = []
         self.client.autoflush = False # disable auto-flush while we build the graph
-
-        for edge in edges():
-            interact_str = ("--%s->" if edge.get('directed', directed) else "--%s--") % \
-                           edge.get('interaction', default_interaction)
-            edge['id'] = edge['source'] + interact_str + edge['target']
-            edge.update(attrs) # add default/global attributes
-            if 'attributes' in edge:
-                edge.update(edge.pop('attributes')) # add edge-specific attributes
-            self.add_edge(**edge) # add_edge(id, source, target, directed=True, **attributes)
+        if keys:
+            for (source, target), key in zip(edges, keys):
+                self.add_edge(source, target, directed=directed, key=key, attributes=attrs)
+        else:
+            for source, target in edges:
+                self.add_edge(source, target, directed=directed, attributes=attrs)
         self.register_new_edges(new_edge_ids)
         self.client.flush()
         self.client.autoflush = autoflush

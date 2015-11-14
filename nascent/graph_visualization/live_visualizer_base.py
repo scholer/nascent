@@ -37,8 +37,10 @@ class LiveVisualizerBase():
 
     def __init__(self, config):
         self.config = config
-        self.graph_type = config.get('visualization_graph_type', '5p3p')
-        self.directed_graph = config.get('visualization_graph_directed', self.graph_type in ('5p3p',))
+        # Graph visualization adaptors should be model agnostic
+        # self.graph_type = config.get('visualization_graph_type', '5p3p')
+        ## TODO: Consolidate visualization_* vs livestreamer_* config keys
+        self.directed_graph = config.get('visualization_graph_directed', False)
         self.default_layout = config.get('livestreamer_graph_layout_method', 'force-directed')
         # Note: For purely visualization, it doesn't matter if the graph is directed or not;
         # we are not using the visualized graph for any analysis or calculation.
@@ -125,6 +127,24 @@ class LiveVisualizerBase():
         self.edge_suid_to_names.update(edge_suid_to_names)
         self.edge_names_to_suid.update(edge_names_to_suid)
 
+    def add_node(self, node_name, attributes=None):
+        """ Add a single node. """
+        raise NotImplementedError("Override in sub-class.")
+
+    def add_nodes(self, node_names_list, attributes=None):
+        """ Add all nodes in node_names_list. """
+        raise NotImplementedError("Override in sub-class.")
+
+    def add_edge(self, source, target, directed=True, key=None, interaction=None, bidirectional=None, attributes=None):
+        """ Add a single edge. Id is auto-generated as source-target"""
+        raise NotImplementedError("Override in sub-class.")
+
+    def add_edges(self, edges, directed, keys=None, attributes=None):
+        """
+        Takes a list of edges in the form of
+            [{'source': <name>, 'target': <name>, 'interaction': <str>, 'directed': <bool>}, ...]
+        """
+        raise NotImplementedError("Override in sub-class.")
 
     def delete_edge(self, source, target, directed=True):
         """ Delete a single node from the graph. """

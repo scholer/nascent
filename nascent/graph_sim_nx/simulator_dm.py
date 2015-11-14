@@ -16,7 +16,7 @@
 ##    You should have received a copy of the GNU Affero General Public License
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# pylint: disable=C0103,W0212
+# pylint: disable=C0103,W0212,W0142,W0141
 
 """
 
@@ -31,6 +31,7 @@ from collections import deque
 import copy
 #import math
 from math import log as ln # exp
+import time
 from datetime import datetime
 from pprint import pprint
 import pdb
@@ -54,6 +55,7 @@ from .constants import (N_AVOGADRO, R,
                         HYBRIDIZATION_INTERACTION,
                         PHOSPHATEBACKBONE_INTERACTION,
                         STACKING_INTERACTION)
+from .debug import printd, pprintd
 
 # Module-level constants and variables
 VERBOSE = 0
@@ -129,15 +131,17 @@ class DM_Simulator(Simulator):
         #super().__init__(**kwargs)
 
         Simulator.__init__(self, params=params, **kwargs)
-        # Set up a "grouped" system manager for testing:
+        ### Set up a "grouped" system manager for testing: ###
         # Make sure the strands, etc are all copied before you make a new system:
         strands = kwargs.pop('strands')
         if strands is not None:
             strands = copy.deepcopy(strands)
         self.reactionmgr_grouped = ReactionMgrGrouped(params=params, strands=strands, **kwargs)
+        ### -- end making grouped reaction mgr --- ###
         self.time_per_T = params.get('time_per_T', 10) # seconds
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)
+        self.step_sleep_factor = self.params.get('simulator_step_sleep_factor', 0)
         self.print_post_step_fmt = ("\r{self.N_steps: 5} "
                                     "[{self.sim_system_time:0.02e}"
                                     " {stats[tau]:0.02e}"
@@ -176,16 +180,18 @@ class DM_Simulator(Simulator):
         n_done = 0
 
         print("sysmgr.domain_pairs:")
-        pprint(sysmgr.domain_pairs)
+        pprintd(sysmgr.domain_pairs)
 
         while n_done < n_steps_max:
 
             print("\n\n------ Step %03s -----------\n" % n_done)
+            sysmgr.check_system()
+            print(" - precheck OK.")
 
             # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_hybridizing)}
             # sysmgr.propensity_functions is dict with              {domspec_pair: a_j}
-            print(" ---- sysmgr.print_reaction_stats(): ----")
-            pprint(sysmgr.print_reaction_stats())
+            printd(" ---- sysmgr.print_reaction_stats(): ----")
+            sysmgr.print_reaction_stats()
 
             # Step 1. (I expect that propensity_functions is up-to-date)
             if not sysmgr.propensity_functions:
@@ -232,12 +238,15 @@ class DM_Simulator(Simulator):
 
             # 3b: Hybridize/dehybridize:
             c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
-            d1, d2 = tuple(reaction_spec)
-            domspec_pair = frozenset((d1.domain_state_fingerprint(), d2.domain_state_fingerprint()))
+            # Determine reaction attributes:
+            # We can currently distinguish grouped vs ungrouped based on whether reaction_spec is a tuple (vs frozenset)
             if isinstance(reaction_spec, tuple):
                 is_hybridizing = reaction_spec[1]
+                domspec_pair = tuple(reaction_spec[0])
             else:
-                # Non-grouped, should be frozenset((domain1, domain2))
+                # Non-grouped, reaction_spec is just a domain_pair = frozenset((domain1, domain2))
+                domain_pair = reaction_spec
+                d1, d2 = tuple(domain_pair)
                 if d1.partner == d2:
                     is_hybridizing = False  # already hybridized; must can only undergo de-hybridization reaction
                     is_intra = True
@@ -247,8 +256,20 @@ class DM_Simulator(Simulator):
                     is_intra = (d1.strand == d2.strand) or \
                                (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex)
                     assert d1.partner is None and d2.partner is None
+
+            reaction_attr = sysmgr.reaction_attrs[domain_pair]
+            if reaction_attr.is_hybridizing != is_hybridizing or reaction_attr.is_intra != is_intra:
+                print("Expected reaction attr", reaction_attr,
+                      "does not match actual reaction attributes is_hybridizing=%s, is_intra=%s" %
+                      (is_hybridizing, is_intra))
+
+            domspec_pair = frozenset((d1.domain_state_fingerprint(), d2.domain_state_fingerprint()))
             grouped_reaction_spec = (domspec_pair, is_hybridizing, is_intra)
-            dom1, dom2 = sysmgr.react_and_process(reaction_spec, is_hybridizing)  # reverted to reaction_spec = domain_pair
+            # reverted to reaction_spec = domain_pair for ungrouped reactions.
+            # A domain instance should only have ONE way (is_hyb?, is_intra?) to react with another domain instance.
+            dom1, dom2 = sysmgr.react_and_process(domain_pair, is_hybridizing, is_intra)
+            sysmgr.check_system()
+            print(" - post reaction_and_process check OK.")
             assert (d1, d2) == (dom1, dom2)
 
             # Repeat for grouped system mgr:
@@ -318,19 +339,10 @@ class DM_Simulator(Simulator):
                 directive['time'] = self.sim_system_time
                 directive['T'] = sysmgr.temperature
                 directive['tau'] = dt
-                directive['nodes'] = (d1, d2)  # Not sure if we have to give str representation here
+                # Dispatcher is responsible for translating domain objects to model-agnostic (str repr) graph events.
+                directive['nodes'] = (d1, d2)
                 self.dispatcher.dispatch(directive, directive_is_list=False)
 
-
-            answer = 'g' or input(("\nReaction complete. Type 'd' to enter debugger; 'g' to save plot to file; "
-                                   "any other key to continue... "))
-            if 'g' in answer:
-                sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
-                if mirror_grouped_system:
-                    sysmgr_grouped.draw_and_save_graphs(prefix="grouped", n="%s_%0.03fs" % (n_done, self.sim_system_time))
-
-            if 'd' in answer:
-                pdb.set_trace()
 
             ## FINISH OF AND LOOP TO STEP (1)
             n_done += 1
@@ -338,7 +350,12 @@ class DM_Simulator(Simulator):
             self.system_stats['tau'] = dt
             self.system_stats['tau_deque'].append(dt)
             self.system_stats['tau_mean'] = sum(self.system_stats['tau_deque'])/len(self.system_stats['tau_deque'])
-            self.timings['step_start_time'], self.timings['step_end_time'] = self.timings['step_end_time'], timer()
+            # step_start_time: Real-world time when step was started.
+            if self.step_sleep_factor:
+                self.timings['step_end_time'] = timer()
+            else:
+                # Only call timer() once.
+                self.timings['step_start_time'], self.timings['step_end_time'] = self.timings['step_end_time'], timer()
             self.timings['step_time'] = self.timings['step_start_time'] - self.timings['step_end_time']
 
             print(self.print_post_step_fmt.format(
@@ -349,6 +366,33 @@ class DM_Simulator(Simulator):
                 print(("Simulated %s of %s steps at T=%s K (%0.0f C). "+
                        "%s state changes with %s selections in %s total steps.") %
                       (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
+
+
+            if self.step_sleep_factor:
+                # Compensate for simulation calculation time:
+                sleep_time = (dt-self.timings['step_time'])*self.step_sleep_factor
+                if sleep_time > 0:
+                    print("Sleeping for %s seconds before next step..." % sleep_time)
+                    time.sleep(sleep_time)
+                else:
+                    print("Simulation step calculation time %s is larger than simulation reaction tau = %s" %
+                          (self.timings['step_time'], dt))
+                self.timings['step_start_time'] = timer()
+            answer = 'c' or input(("\nReaction complete."
+                            "Type 'd' to enter debugger;"
+                            "'g' to save plot to file;"
+                            "'q' to quit;"
+                            "any other key to continue... "))
+            if 'g' in answer:
+                sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
+                if mirror_grouped_system:
+                    sysmgr_grouped.draw_and_save_graphs(prefix="grouped",
+                                                        n="%s_%0.03fs" % (n_done, self.sim_system_time))
+            if 'q' in answer:
+                return
+            if 'd' in answer:
+                pdb.set_trace()
+
 
         # end while loop
         return n_done

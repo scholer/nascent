@@ -147,7 +147,7 @@ class ReactionMgrGrouped(ReactionMgr):
 
         # Propensity functions:  aj(x)
         # {(domain1, cstate), (domain2, cstate)} => a
-        self.propensity_functions = {} # Indexed by indexed by {domain1, domain2}
+        self.propensity_functions = {} # Indexed by indexed by ({domain1, domain2}, is_hyb, is_intra)
         if strands:
             self.init_all_propensity_functions()
 
@@ -561,11 +561,11 @@ class ReactionMgrGrouped(ReactionMgr):
 
     def print_reaction_stats(self):
         """ Print information on reaction pathways. """
-        print("Reaction pathways:")
+        print("Reaction pathways: (grouped reactions)")
         for reaction_spec, c_j in self.possible_hybridization_reactions.items():
             domspec1, domspec2 = tuple(reaction_spec[0])
             is_hybridizing = reaction_spec[1]
-            print("%s %s (%s) %s" % (domspec1[0],
+            print("%20s %s (%s) %20s" % (domspec1[0],
                                      "hybridize" if is_hybridizing else "de-hybrid",
                                      "intra" if reaction_spec[2] else "inter",
                                      domspec2[0]),
@@ -702,9 +702,8 @@ class ReactionMgrGrouped(ReactionMgr):
         Reaction specie consists of:
             ({domspec1, domspec2}, is_hybridizing, is_intracomplex)
         """
-        print("react_and_process invoked with args: is_hybridizing=%s, is_intra=%s, domspec_pair:" %
-              (is_hybridizing, is_intra))
-        pprint(domspec_pair)
+        print("react_and_process invoked with args: is_hybridizing=%s, is_intra=%s, domspec_pair: %s" %
+              (is_hybridizing, is_intra, domspec_pair))
         if not all(domspec in self.domain_state_subspecies for domspec in domspec_pair):
             print("domspec_pair:", domspec_pair)
             print("Not all domspec in domspec_pair are in self.domain_state_subspecies:")
