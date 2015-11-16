@@ -28,6 +28,7 @@ def mute(*args, **kwargs):
     pass
 
 do_print = False
+# do_print = True
 
 if do_print:
     pprintd = pprint

@@ -85,7 +85,7 @@ class Domain():
         self.ss_length_nm = math.sqrt(self.ss_length_sq)
         self.ds_length_nm = self.n_nt * ds_rise_per_bp
         self.ds_length_sq = self.ds_length_nm**2
-        self.partner = partner  # duplex hybridization partner
+        self._partner = partner  # duplex hybridization partner
         self.end5p = Domain5pEnd(self)
         self.end3p = Domain3pEnd(self)
         self.end5p.pb_downstream = self.end3p
@@ -96,6 +96,29 @@ class Domain():
         # Cached values:
         self._in_complex_identifier = None
         self._specie_state_fingerprint = None
+
+    @property
+    def partner(self):
+        """ Making this a property for now to ensure that ends5p3p are properly set. """
+        return self._partner
+    @partner.setter
+    def partner(self, partner):
+        """ Making this a property for now to ensure that ends5p3p are properly set. """
+        if partner is None:
+            if self._partner is not None:
+                self._partner._partner = None # pylint:disable=W0212
+                self._partner.end3p.hyb_partner = None
+                self._partner.end5p.hyb_partner = None
+            self._partner = None
+            self.end5p.hyb_partner = None
+            self.end3p.hyb_partner = None
+        else:
+            self._partner = partner
+            partner._partner = self # pylint:disable=W0212
+            self.end5p.hyb_partner = partner.end3p
+            partner.end3p = self.end5p.hyb_partner
+            self.end3p.hyb_partner = partner.end5p
+            partner.end5p = self.end3p.hyb_partner
 
 
     def set_strand(self, strand):
@@ -132,8 +155,8 @@ class Domain():
         return self._in_complex_identifier
 
 
-    ## TODO: domain_state_fingerprint and _specie_state_fingerprint should be named similarly.
-    def domain_state_fingerprint(self, strandgraph=None):
+    ## TODO: state_fingerprint and _specie_state_fingerprint should be named similarly.
+    def state_fingerprint(self, strandgraph=None):
         """
         This is a hash of:
             (domain_strand_specie, complex-state, in-complex-identifier)
@@ -203,11 +226,16 @@ class DomainEnd():
         self.name = domain.name+end
         self.instance_name = domain.instance_name+end
         self.base = domain.sequence[0 if end == "5p" else -1] if domain.sequence is not None else None
-        self.hyb_partner = None
+        self.hyb_partner = None   # TODO: Set this with domain.set_hyb_partner or equivalent.
         self.pb_upstream = None     # end connected by phosphate backbone on same strand
         self.pb_downstream = None   # end connected by phosphate backbone on same strand
         self.stack_partner = None   # stacking partner
         self.stack_string = None    # Stacking string, e.g. "CA/GT" or maybe frozenset("CG", "AT")
+        ## TODO: Many of these attributes are essentially duplicated in the ends5p3p system graph.
+        ## Consider consolidating these in some way.
+
+    def state_fingerprint(self, ):
+        return (self.domain.state_fingerprint(), self.end)
 
     def __str__(self):
         return str(self.domain)+self.end

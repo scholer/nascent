@@ -141,6 +141,11 @@ class Strand(nx.MultiGraph):
                                        )
                 self.ends5p3p_graph.add_edge(domain.end3p, domain2.end5p, key=PHOSPHATEBACKBONE_INTERACTION,
                                              attr_dict=short_edge_attrs)
+                # Update domain 5p3p ends:
+                # (Yes, this duplicates the info in strand.ends5p3p_graph and system 5p3p graph, which is bad.)
+                domain.end3p.pb_downstream = domain2.end5p
+                domain2.end5p.pb_downstream = domain.end3p
+
 
         # ends_domain_edges = [(d.end5p, d.end3p, PHOSPHATEBACKBONE_INTERACTION,
         #                       dict(edge_attrs, weight=10/len(d), len=len(d)))

@@ -34,6 +34,7 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         STACKING_INTERACTION,
                         N_AVOGADRO, AVOGADRO_VOLUME_NM3)
 from .debug import printd, pprintd
+from .domain import Domain, DomainEnd
 
 
 class GraphManager():
@@ -230,15 +231,16 @@ class GraphManager():
         """
         return shortest_path(self.domain_graph, domain1, domain2)
 
-    def ends5p3p_shortest_path(self, domain1, domain2):
+
+    def ends5p3p_shortest_path(self, end5p3p1, end5p3p2):
         """
         TODO: This should certainly be cached.
         TODO: Verify shortest path for end3p as well?
         """
-        return shortest_path(self.ends5p3p_graph, domain1.end5p, domain2.end5p)
+        return shortest_path(self.ends5p3p_graph, end5p3p1, end5p3p2)
 
 
-    def intracomplex_activity(self, domain1, domain2):
+    def intracomplex_activity(self, elem1, elem2):
         r"""
         Returns
             :intracomplex_activity:
@@ -388,8 +390,16 @@ class GraphManager():
         #LRE_len, LRE = max((elem.length_nm, elem) for elem in path_elements if not isinstance(elem, SingleStrand))
 
         ## 5p3p-level shortest path:
-        path = self.ends5p3p_shortest_path(domain1, domain2)
-        printd("5p3p graph shortest path from %s to %s:" % (domain1, domain2))
+        # domain1, domain2
+        if isinstance(elem1, Domain):
+            domain1, domain2 = elem1, elem2
+            d1end5p, d2end5p = domain1.end5p, domain2.end5p
+            d1end3p, d2end3p = domain1.end3p, domain2.end3p
+        else:
+            d1end5p, d2end5p = elem1, elem2
+            domain1, domain2 = d1end5p.domain, d2end5p.domain
+        path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
+        printd("5p3p graph shortest path from %s to %s:" % (d1end5p, d2end5p))
         pprintd(path)
         path_elements = self.ends5p3p_path_partial_elements(path, length_only='both', summarize=True)
         printd("5p3p graph path elements:")
@@ -412,12 +422,16 @@ class GraphManager():
                                               if interaction in (STACKING_INTERACTION, HYBRIDIZATION_INTERACTION))
         #LRE = path_elements[LRE_idx] # .pop(LRE_idx)
         # Exclude LRE when calculating SRE length:
-        SRE_lengths, SRE_sq_lengths = zip(*[(elem_length, elem_len_sq)
-                                            for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
-                                            for interaction, (elem_length, elem_len_sq) in sub_path])
-        # SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
-        #               for interaction, (elem_length, elem_len_sq) in sub_path)
-        SRE_len, SRE_len_sq = sum(SRE_lengths), sum(SRE_sq_lengths)
+        if len(path_elements) > 1:
+            SRE_lengths, SRE_sq_lengths = zip(*[(elem_length, elem_len_sq)
+                                                for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+                                                for interaction, (elem_length, elem_len_sq) in sub_path])
+            # SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+            #               for interaction, (elem_length, elem_len_sq) in sub_path)
+            SRE_len, SRE_len_sq = sum(SRE_lengths), sum(SRE_sq_lengths)
+        else:
+            SRE_lengths, SRE_sq_lengths = [], []
+            SRE_len, SRE_len_sq = 0, 0
 
         # Comparing mean-end-to-end-squared values vs mean end-to-end lengths vs full contour length?
         # There is a difference that sum of squares does not equal the square of sums, so
@@ -427,6 +441,10 @@ class GraphManager():
         # it is probably better to use domain.ds_length.
 
         if LRE_len > SRE_len:
+            print("LRE_len > SRE_len for path between %r and %r" % (domain1, domain2))
+            from pprint import pprint
+            pprint(path)
+            pprint(path_elements)
             # The domains cannot reach each other.
             # Hybridization requires helical bending; Not implemented yet; just returning 0 meaning "impossible".
             # TODO: Implement hybridization via helical bending.

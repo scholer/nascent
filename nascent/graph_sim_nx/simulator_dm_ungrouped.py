@@ -102,7 +102,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
         doms_specs = frozenset({domspec1, domspec2})
 
     Primary data structures:
-        - possible_hybridization_reactions[doms_specs] = propensity_constant cj, is_hybridizing
+        - possible_hybridization_reactions[doms_specs] = propensity_constant cj, is_forming
             Contains up-to-date hybridization and dehybridization reactions
             dict, keyed by doms_specs = {domain1-state, domain2-state}
             This is "R" and "R_j" in Gillespie's formulas
@@ -196,7 +196,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
 
             print("\n\n------ Step %03s -----------\n" % n_done)
 
-            # sysmgr.possible_hybridization_reactions is dict with  {doms_specs: (c_j, is_hybridizing)}
+            # sysmgr.possible_hybridization_reactions is dict with  {doms_specs: (c_j, is_forming)}
             # sysmgr.propensity_functions is dict with              {doms_specs: a_j}
 
             # Step 1. (I expect that propensity_functions is up-to-date)
@@ -231,7 +231,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
             # Now that we have that, we just have to select an domain pair with doms_specs
             # is a doms_specs = {dom_spec1, dom_spec2} = {F₁, F₂}
             # Edit: If you want to group reactions by domain species, you need:
-            #   reaction spec = ({domspec1, domspec2}, is_hybridizing, is_intracomplex)
+            #   reaction spec = ({domspec1, domspec2}, is_forming, is_intracomplex)
             reaction_spec = reaction_specs[j]
 
             # 3. Effect the next reaction by updating time and counts (replacing t ← t + τ and x̄ ← x̄ + νj).
@@ -242,8 +242,8 @@ class DM_SimulatorUngrouped(DM_Simulator):
             self.sim_system_time += dt
 
             # 3b: Hybridize/dehybridize:
-            c_j, is_hybridizing = sysmgr.possible_hybridization_reactions[reaction_spec]
-            d1, d2 = sysmgr.react_and_process(reaction_spec, is_hybridizing)
+            c_j, is_forming = sysmgr.possible_hybridization_reactions[reaction_spec]
+            d1, d2 = sysmgr.react_and_process(reaction_spec, is_forming)
 
             ## Post-hybridization assertions:
             try:
@@ -273,7 +273,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
                 #                 or (u₁, v₁, u₂, v₂, ...) for EDGE-altering directives.
                 #     - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
                 directive = self.state_change_hybridization_template.copy()
-                directive['forming'] = int(is_hybridizing)
+                directive['forming'] = int(is_forming)
                 directive['time'] = self.sim_system_time
                 directive['T'] = sysmgr.temperature
                 directive['tau'] = dt

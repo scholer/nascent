@@ -144,7 +144,7 @@ def test(simulator, usepdb=False, testcase=None, execfile=None):
         # simulator.systemmgr.draw_and_save_graphs(n=1)
         # Or just run with python -m pdb <script>  (and press 'c' to continue until next error or breakpoint).
         # (Does not work if the exception is catched, of course...!)
-        n_done = simulator.simulate(T=328, n_steps_max=300, systime_max=1000) #
+        n_done = simulator.simulate(T=328, n_steps_max=30, systime_max=1000) #
         # try:
         #     # n_done = simulator.simulate(T=330, n_steps_max=10, systime_max=200)
         #     n_done = simulator.simulate(T=328, n_steps_max=20, systime_max=200) #
@@ -257,7 +257,7 @@ def main():
     # adhoc_testing = False
     adhoc_testing = True
     usepdb = True
-    do_run_repeatedly = True
+    do_run_repeatedly = False
     strand_defs_folder = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(nascent.__file__))), "testfiles")
     #structure = "duplex1"
@@ -358,7 +358,9 @@ def main():
     adhoc_params = {'time_per_T': time_per_T,
                     'n_steps_per_T': n_steps_per_T,
                     "working_directory": run_directory,
-                    "simulator_step_sleep_factor": 1, # Sleep factor*tau after each DM simulation step
+                    "simulator_step_sleep_factor": 0, # 1, # Sleep factor*tau after each DM simulation step
+                    "save_invoked_reactions_to_file": False, # True, # A filename str or True to save to working directory.
+                    "save_hybdehyb_to_file": False, # True, # A filename str or True to save to working directory.
                    }
     simulator = Simulator(volume=volume, strands=input_oligos, params=adhoc_params,
                           outputstatsfiles=outputstatsfile)
@@ -382,13 +384,12 @@ def main():
                          'visualization_workspace': 'workspace0',
                          'dispatcher_debug_print': True, # print debug statements in dispatcher
                         }
-    dispatcher = StateChangeDispatcher(dispatcher_config)
-    simulator.dispatcher = dispatcher
-    dispatcher.init_graph(sysmgr.domain_graph)
-
-    answer = input("Gephi initialized, press any key to continue (or 'q' to quit)...")
-    if answer and answer[0] == 'q':
-        return
+    # dispatcher = StateChangeDispatcher(dispatcher_config)
+    # simulator.dispatcher = dispatcher
+    # dispatcher.init_graph(sysmgr.domain_graph)
+    # answer = input("Gephi initialized, press any key to continue (or 'q' to quit)...")
+    # if answer and answer[0] == 'q':
+    #     return
 
     # Perform calculations and start simulation
     if do_run_repeatedly:

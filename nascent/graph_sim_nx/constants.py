@@ -34,6 +34,14 @@ BACKBONE_INTERACTION_ALTERNATIVES = {1, 'pb', 'p', 'backbone'}
 HYBRIDIZATION_INTERACTION_ALTERNATIVES = {2, 'hh', 'h', 'hyb', 'hybridization', 'hybridized'}
 STACKING_INTERACTION_ALTERNATIVES = {3, 's', 'ss', 'bs', 'stacked', 'stacking', 'basestacking'}
 
+REACTION_NAMES = {}
+# REACTION_NAMES[<is_forming>]
+REACTION_NAMES[True] = {PHOSPHATEBACKBONE_INTERACTION: 'backbone-nicking',
+                        HYBRIDIZATION_INTERACTION: 'hybridization',
+                        STACKING_INTERACTION: 'stacking'}
+REACTION_NAMES[False] = {PHOSPHATEBACKBONE_INTERACTION: 'backbone-ligation',
+                         HYBRIDIZATION_INTERACTION: 'de-hybridization',
+                         STACKING_INTERACTION: 'un-stacking'}
 
 interactions = [None, PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION]
 valid_interactions = set(interactions)

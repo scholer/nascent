@@ -81,7 +81,7 @@ class DM_Simulator(Simulator):
         domspec_pair = frozenset({domspec1, domspec2})
 
     Primary data structures:
-        - possible_hybridization_reactions[domspec_pair] = propensity_constant cj, is_hybridizing
+        - possible_hybridization_reactions[domspec_pair] = propensity_constant cj, is_forming
             Contains up-to-date hybridization and dehybridization reactions
             dict, keyed by domspec_pair = {domain1-state, domain2-state}
             This is "R" and "R_j" in Gillespie's formulas
@@ -188,7 +188,7 @@ class DM_Simulator(Simulator):
             sysmgr.check_system()
             print(" - precheck OK.")
 
-            # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_hybridizing)}
+            # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_forming)}
             # sysmgr.propensity_functions is dict with              {domspec_pair: a_j}
             printd(" ---- sysmgr.print_reaction_stats(): ----")
             sysmgr.print_reaction_stats()
@@ -201,8 +201,14 @@ class DM_Simulator(Simulator):
             reaction_specs, propensity_functions = zip(*sysmgr.propensity_functions.items())
             assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
             # reaction_specs: list of possible reaction_specs
-            a = propensity_functions # propensity_functions[j]: propensity for reaction[j]
-            a0_sum = sum(propensity_functions)
+            a0_hyb = sum(propensity_functions)
+            if len(sysmgr.stacking_propensity_functions) > 0:
+                stacking_pairs, stacking_propensities = zip(*sysmgr.stacking_propensity_functions.items())
+                a0_stacking = sum(stacking_propensities)
+                a0_sum = a0_hyb + a0_stacking
+            else:
+                print("No stacking reactions!")
+                a0_sum = a0_hyb
 
             # Step 2: Generate values for τ and j:  - easy.
             r1, r2 = random.random(), random.random()
@@ -211,23 +217,35 @@ class DM_Simulator(Simulator):
                 self.sim_system_time = systime_max
                 print("\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
                 return n_done
+
             # find j:
             breaking_point = r2*a0_sum
+            # a  0  a_0 a_1+a_2+a_3+a_4
+            #    |---|---|---|---|---||---|---|---|---|---|
+            # j    0   1   2   3   4    0   1   2   3   4
             j = 0 # python 0-based index: a[0] = j_1
-            sum_j = a[j]
+            if breaking_point <= a0_hyb:
+                reaction_type = HYBRIDIZATION_INTERACTION
+                a = propensity_functions # propensity_functions[j]: propensity for reaction[j]
+                Rxs = reaction_specs
+                sum_j = a[j]
+            else:
+                reaction_type = STACKING_INTERACTION
+                a = stacking_propensities # propensity_functions[j]: propensity for reaction[j]
+                Rxs = stacking_pairs
+                sum_j = a0_hyb + a[0]
             while sum_j < breaking_point:
                 j += 1
                 sum_j += a[j]
-            # [0.25, 0.25, 0.25, 0.25]
-            # [0.25, 0.50, 0.75, 1.00]
-            # bp = 0.9
-            # j =
             # Propensity functions are only used to select which reaction path to fire.
-            # Now that we have that, we just have to select an domain pair with domspec_pair
+            # Now that we have that, we just have to select a domain pair with domspec_pair
             # is a domspec_pair = {dom_spec1, dom_spec2} = {F₁, F₂}
             # Edit: If you want to group reactions by domain species, you need:
-            #   reaction spec = ({domspec1, domspec2}, is_hybridizing, is_intracomplex)
-            reaction_spec = reaction_specs[j]
+            #   reaction spec = ({domspec1, domspec2}, is_forming, is_intracomplex)
+            # For ungrouped reactions, this is:
+            #   {domain1, domain2} for hybridization reactions
+            #   {(h1end3p, h1end5p), (h2end3p, h2end5p)} for stacking reactions
+            reaction_spec = Rxs[j]
 
             # 3. Effect the next reaction by updating time and counts (replacing t ← t + τ and x̄ ← x̄ + νj).
             # 3a: Update system time.
@@ -237,44 +255,62 @@ class DM_Simulator(Simulator):
             self.sim_system_time += dt
 
             # 3b: Hybridize/dehybridize:
-            c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
-            # Determine reaction attributes:
-            # We can currently distinguish grouped vs ungrouped based on whether reaction_spec is a tuple (vs frozenset)
-            if isinstance(reaction_spec, tuple):
-                is_hybridizing = reaction_spec[1]
-                domspec_pair = tuple(reaction_spec[0])
-            else:
-                # Non-grouped, reaction_spec is just a domain_pair = frozenset((domain1, domain2))
-                domain_pair = reaction_spec
-                d1, d2 = tuple(domain_pair)
-                if d1.partner == d2:
-                    is_hybridizing = False  # already hybridized; must can only undergo de-hybridization reaction
-                    is_intra = True
-                    assert d2.partner == d1
+            if reaction_type == HYBRIDIZATION_INTERACTION:
+                c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
+                # Determine reaction attributes:
+                # We can currently distinguish grouped vs ungrouped based on whether reaction_spec is a tuple (vs frozenset)
+                if isinstance(reaction_spec, tuple):
+                    # Grouped reactions: (Currently disabled and un-supported)
+                    domspec_pair = tuple(reaction_spec[0])
+                    is_forming = reaction_spec[1]
+                    is_intra = reaction_spec[2]
                 else:
-                    is_hybridizing = True
-                    is_intra = (d1.strand == d2.strand) or \
-                               (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex)
-                    assert d1.partner is None and d2.partner is None
+                    # Non-grouped, reaction_spec is just a domain_pair = frozenset((domain1, domain2))
+                    domain_pair = reaction_spec
+                    d1, d2 = tuple(domain_pair)
+                    if d1.partner == d2:
+                        is_forming = False  # already hybridized; must can only undergo de-hybridization reaction
+                        is_intra = True
+                        assert d2.partner == d1
+                    else:
+                        is_forming = True
+                        is_intra = (d1.strand == d2.strand) or \
+                                   (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex)
+                        assert d1.partner is None and d2.partner is None
 
-            reaction_attr = sysmgr.reaction_attrs[domain_pair]
-            if reaction_attr.is_hybridizing != is_hybridizing or reaction_attr.is_intra != is_intra:
-                print("Expected reaction attr", reaction_attr,
-                      "does not match actual reaction attributes is_hybridizing=%s, is_intra=%s" %
-                      (is_hybridizing, is_intra))
+                reaction_attr = sysmgr.reaction_attrs[domain_pair]
+                if reaction_attr.is_forming != is_forming or reaction_attr.is_intra != is_intra:
+                    print("Expected reaction attr", reaction_attr,
+                          "does not match actual reaction attributes is_forming=%s, is_intra=%s" %
+                          (is_forming, is_intra))
+                # reverted to reaction_spec = domain_pair for ungrouped reactions.
+                # A domain instance should only have ONE way (is_hyb?, is_intra?) to react with another domain instance.
+                reaction_pair, result = sysmgr.react_and_process(domain_pair, reaction_attr)
+                assert (d1, d2) == tuple(reaction_pair) or (d2, d1) == tuple(reaction_pair)
 
-            domspec_pair = frozenset((d1.domain_state_fingerprint(), d2.domain_state_fingerprint()))
-            grouped_reaction_spec = (domspec_pair, is_hybridizing, is_intra)
-            # reverted to reaction_spec = domain_pair for ungrouped reactions.
-            # A domain instance should only have ONE way (is_hyb?, is_intra?) to react with another domain instance.
-            dom1, dom2 = sysmgr.react_and_process(domain_pair, is_hybridizing, is_intra)
+            elif reaction_type == STACKING_INTERACTION:
+                ## TODO: Consolidate stacking and hybridization
+                # reaction_spec == reaction_pair == stacking_pair == {(h1end3p, h2end5p), (h2end3p, h1end5p)}
+                print("Performing stacking reaction:")
+                pprint(reaction_spec)
+                pprint(sysmgr.reaction_attrs[reaction_spec])
+                c_j = sysmgr.possible_stacking_reactions[reaction_spec]
+                reaction_pair, result = sysmgr.stack_and_process(reaction_spec)
+            else:
+                raise ValueError("Unexpected reaction_type value %r" % reaction_type)
+            printd("Result from sysmgr reaction:")
+            pprintd(result)
+
+            ## Check the system (while debugging)
             sysmgr.check_system()
             print(" - post reaction_and_process check OK.")
-            assert (d1, d2) == (dom1, dom2)
+
 
             # Repeat for grouped system mgr:
             mirror_grouped_system = False
             if mirror_grouped_system:
+                domspec_pair = frozenset((d1.state_fingerprint(), d2.state_fingerprint()))
+                grouped_reaction_spec = (domspec_pair, reaction_attr)
                 print("\nRepeating reaction for grouped sysmgr; reaction_spec is:")
                 pprint(reaction_spec)
                 print("grouped_reaction_spec is:")
@@ -284,25 +320,25 @@ class DM_Simulator(Simulator):
                 print("---- sysmgr_grouped reaction pathways: ----")
                 sysmgr_grouped.print_reaction_stats()
                 c_j_g = sysmgr_grouped.possible_hybridization_reactions[grouped_reaction_spec]
-                print("c_j, is_hybridizing:", c_j, is_hybridizing)
+                print("c_j, is_forming:", c_j, is_forming)
                 print("c_j_g:", c_j_g)
                 assert np.isclose(c_j_g, c_j)
                 print("React and process using grouped_reaction_spec %s:" % (grouped_reaction_spec,))
-                d1_g, d2_g = sysmgr_grouped.react_and_process(*grouped_reaction_spec)
+                (d1_g, d2_g), result = sysmgr_grouped.react_and_process(*grouped_reaction_spec)
                 # the grouped sysmgr might select different domains for hybridizing, but they should
                 # have the same state, and the domspec distribution should be equivalent.
                 try:
-                    assert (d1_g.domain_state_fingerprint() == d1.domain_state_fingerprint() and \
-                            d2_g.domain_state_fingerprint() == d2.domain_state_fingerprint()) or \
-                           (d1_g.domain_state_fingerprint() == d2.domain_state_fingerprint() and \
-                            d2_g.domain_state_fingerprint() == d1.domain_state_fingerprint())
+                    assert (d1_g.state_fingerprint() == d1.state_fingerprint() and \
+                            d2_g.state_fingerprint() == d2.state_fingerprint()) or \
+                           (d1_g.state_fingerprint() == d2.state_fingerprint() and \
+                            d2_g.state_fingerprint() == d1.state_fingerprint())
                 except AssertionError as e:
                     print("\nReacted domain species for grouped system does not match that for ungrouped:")
-                    print("d1.domain_state_fingerprint():", d1.domain_state_fingerprint())
-                    print("d1_g.domain_state_fingerprint():", d1_g.domain_state_fingerprint())
-                    print("d2.domain_state_fingerprint():", d2.domain_state_fingerprint())
-                    print("d2_g.domain_state_fingerprint():", d2_g.domain_state_fingerprint())
-                    print("c_j, is_hybridizing:", c_j, is_hybridizing)
+                    print("d1.state_fingerprint():", d1.state_fingerprint())
+                    print("d1_g.state_fingerprint():", d1_g.state_fingerprint())
+                    print("d2.state_fingerprint():", d2.state_fingerprint())
+                    print("d2_g.state_fingerprint():", d2_g.state_fingerprint())
+                    print("c_j, is_forming:", c_j, is_forming)
                     print("c_j_g:", c_j_g)
                     raise e
 
@@ -335,7 +371,7 @@ class DM_Simulator(Simulator):
                 #                 or (u₁, v₁, u₂, v₂, ...) for EDGE-altering directives.
                 #     - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
                 directive = self.state_change_hybridization_template.copy()
-                directive['forming'] = int(is_hybridizing)
+                directive['forming'] = int(is_forming)
                 directive['time'] = self.sim_system_time
                 directive['T'] = sysmgr.temperature
                 directive['tau'] = dt

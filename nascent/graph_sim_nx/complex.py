@@ -20,7 +20,15 @@
 
 """
 
-Module for
+Module for Complexes and SuperComplexes (complex of complexes).
+
+Reminder: Why do we need complexes when we have system-graphs?
+Because we need state fingerprints. And state fingerprints
+requires complexes with a particular state.
+
+Q: Is SuperComplexes a good idea?
+
+
 
 """
 
@@ -29,6 +37,7 @@ from collections import defaultdict #, deque
 import networkx as nx
 
 # Relative imports
+from .connected_multigraph import ConnectedMultiGraph
 from .utils import (sequential_number_generator, sequential_uuid_gen)
 from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
@@ -39,19 +48,39 @@ from .debug import printd, pprintd
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
 
+supercomplex_sequential_id_gen = sequential_number_generator()
 
-class SuperComplex(nx.MultiGraph):
+
+class SuperComplex(ConnectedMultiGraph):
     """
     Each node is a complex.
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.scuid = next(supercomplex_sequential_id_gen)
         # Use this or self.nodes() ??
         self.complexes = set()
+        self.strands = set() # TODO: Add support for non-complexed strands in supercomplex
         # Use this or self.edges() ??
+        # No, each node is a complex, stacking_pairs are pairs of:
+        # {(h1end3p, h1end5p), (h2end3p, h2end5p)}
         self.stacking_pairs = set()
         # Edge could be:
         # c1, c2, key=bluntend_pair
+        self._state_fingerprint = None
+
+    def state_fingerprint(self):
+        if self._state_fingerprint is None:
+            hashes = frozenset(hash((cmplx.strands_fingerprint(),
+                                     cmplx.hybridization_fingerprint(),
+                                     cmplx.stacking_fingerprint()))
+                               for cmplx in self.complexes)
+            self._state_fingerprint = hashes
+        return self._state_fingerprint
+
+    def reset_state_fingerprint(self):
+        self._state_fingerprint = None
+
 
 
 
@@ -88,6 +117,7 @@ class Complex(nx.MultiGraph):
         for strand in strands:
             strand.complex = self
         self.domains = self.nodes  # alias
+        self.supercomplex = None
         # Should strands be a set or list? Set is most natural, but a list might play better with a adjacency matrix.
         # Then, you could just have a dict mapping strand -> index of the matrix
         self.strands = set(strands)
@@ -122,7 +152,7 @@ class Complex(nx.MultiGraph):
             self.domains_by_name[domain.name].add(domain)
 
         self.hybridized_domains = set() # set of frozenset({dom1, dom2}) sets, specifying which domains are hybridized.
-        self.stacked_domains = set()    # set of tuples. (5p-domain, 3p-domain)
+        self.stacked_pairs = set()    # set of tuples. (5p-domain, 3p-domain)
 
         # State fingerprint is used for cache lookup
         # To reduce recalculation overhead, it is separated into three parts:
@@ -292,13 +322,14 @@ class Complex(nx.MultiGraph):
             self._state_fingerprint = hash((
                 self.strands_fingerprint(),
                 self.hybridization_fingerprint(),
-                self.stacking_fingerprint()
+                self.stacking_fingerprint()  ## TODO: Implement stacking
                 )) % 10000  # TODO: Remove modulus when done debugging.
             self._historic_fingerprints.append((self._state_fingerprint,))
         return self._state_fingerprint
 
 
-    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False):
+    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True,
+                                reset_stacking=False, reset_super=True):
         self._state_fingerprint = None
         if reset_strands:
             self._strands_fingerprint = None
@@ -306,6 +337,8 @@ class Complex(nx.MultiGraph):
             self._hybridization_fingerprint = None
         if reset_stacking:
             self._state_fingerprint = None
+        if reset_super and self.supercomplex is not None:
+            self.supercomplex.reset_state_fingerprint()
 
 
     # def domains_gen(self):
@@ -397,28 +430,35 @@ class Complex(nx.MultiGraph):
     def stacking_fingerprint(self):
         """
         Return a stacking fingerprint for use with caching.
-        This is just hash(frozenset(tuple(d.duid for d in edge) for edge in self.stacked_domains))
+        A stacked_pair is: {(h1end3p, h1end5p), (h2end3p, h2end5p)}
         """
         if not self._stacking_fingerprint:
             # This is using (d1, d2) tuple rather than {d1, d2} frozenset, since directionality matters.
-            edgesfs = frozenset(tuple(d.duid for d in edge) for edge in self.stacked_domains)
-            ## TODO: Re-enable hasing when I'm done debugging:
+            edgesfs = frozenset(frozenset((e.domain.domain_strand_specie, e.end) for e in edge)
+                                for edge in self.stacked_pairs)
+            ## TODO: Re-enable hashing when I'm done debugging:
             self._stacking_fingerprint = edgesfs # hash(edgesfs)
         return self._stacking_fingerprint
 
+
     def stacking_edges(self):
         """
+        stacking_edges vs stacking_ends:
+         - stacking_edge is a tuple: (h1end3p, h1end5p)
+         - stacking pair is a pair of stacking edges:
+            {(h1end3p, h1end5p), (h2end3p, h2end5p)}
+
         How to get a list of domain hybridization?
         Note: stacking is directional and cannot be saved within an undirected graph.
         Perhaps I should just switch to using a directed graph?
-
         """
         # you can loop over all edges and filter by type:
         # But need directionality to know which end of the domain is pairing.
         #hyb_edges = [frozenset((d1, d2)) for d1, d2, cnxtype in self.edges(data='type')
                      #if cnxtype == STACKING_INTERACTION]
         # For now, I have to keep a dict with hybridization connections:
-        return self.stacked_domains
+        #return self.stacked_pairs
+        pass
 
 
     def stacked_subgraph(self):
