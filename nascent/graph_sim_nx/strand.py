@@ -209,7 +209,8 @@ class Strand(nx.MultiGraph):
 
     def fqdn(self):
         """ Return Complex:Strand[Domain] """
-        return "%s:%s[%s]" % (self.complex, self.name, self.suid)
+        #return "%s:%s[%s]" % (self.complex, self.name, self.suid)
+        return "%s:%s#%s" % (self.complex, self.name, self.suid)
 
     def __repr__(self):
         return self.fqdn()

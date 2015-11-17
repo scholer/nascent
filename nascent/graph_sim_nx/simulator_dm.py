@@ -288,6 +288,9 @@ class DM_Simulator(Simulator):
                 reaction_pair, result = sysmgr.react_and_process(domain_pair, reaction_attr)
                 assert (d1, d2) == tuple(reaction_pair) or (d2, d1) == tuple(reaction_pair)
 
+                ## TODO: react_and_process dehybridization can have side-effect of unstacking duplex ends.
+                ##          THIS MUST BE PROPAGATED TO THE DISPATCHER!
+
             elif reaction_type == STACKING_INTERACTION:
                 ## TODO: Consolidate stacking and hybridization
                 # reaction_spec == reaction_pair == stacking_pair == {(h1end3p, h2end5p), (h2end3p, h1end5p)}

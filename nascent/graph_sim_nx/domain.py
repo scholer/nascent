@@ -183,7 +183,8 @@ class Domain():
 
     def fqdn(self):
         """ Return a "fully qualified" name, typically [complex][strand][domains]. """
-        return "%s:%s[%s]" % (self.strand.fqdn(), self.name, self.duid)
+        # return "%s:%s[%s]" % (self.strand.fqdn(), self.name, self.duid)
+        return "%s:%s#%s" % (self.strand.fqdn(), self.name, self.duid)
 
     def __repr__(self):
         return self.fqdn()
@@ -226,7 +227,7 @@ class DomainEnd():
         self.name = domain.name+end
         self.instance_name = domain.instance_name+end
         self.base = domain.sequence[0 if end == "5p" else -1] if domain.sequence is not None else None
-        self.hyb_partner = None   # TODO: Set this with domain.set_hyb_partner or equivalent.
+        self.hyb_partner = None     # TODO: Set this with domain.set_hyb_partner or equivalent.
         self.pb_upstream = None     # end connected by phosphate backbone on same strand
         self.pb_downstream = None   # end connected by phosphate backbone on same strand
         self.stack_partner = None   # stacking partner
@@ -238,10 +239,10 @@ class DomainEnd():
         return (self.domain.state_fingerprint(), self.end)
 
     def __str__(self):
-        return str(self.domain)+self.end
+        return str(self.domain)+":"+self.end
 
     def __repr__(self):
-        return repr(self.domain)+self.end # + " at " id(self)
+        return repr(self.domain)+":"+self.end # + " at " id(self)
 
 class Domain5pEnd(DomainEnd):
     def __init__(self, domain):

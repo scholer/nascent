@@ -26,7 +26,7 @@ Module docstring.
 
 import networkx as nx
 
-class ConnectedMultigraph(nx.MultiGraph):
+class ConnectedMultiGraph(nx.MultiGraph):
     """
     A NetworkX multigraph that makes it easy to break and merge
     connected component graphs.
@@ -58,5 +58,3 @@ class ConnectedMultigraph(nx.MultiGraph):
         else:
             assert len(subgraphs) == 2
             return 1, subgraphs, None
-
-

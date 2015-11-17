@@ -27,8 +27,8 @@ def print_debug(*args, origin=None, **kwargs):
 def mute(*args, **kwargs):
     pass
 
-do_print = False
-# do_print = True
+# do_print = False
+do_print = True
 
 if do_print:
     pprintd = pprint

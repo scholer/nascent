@@ -27,7 +27,15 @@ Because we need state fingerprints. And state fingerprints
 requires complexes with a particular state.
 
 Q: Is SuperComplexes a good idea?
-
+The idea was that stacking interactions are often very brief,
+whereas hybridization interaction will eventually "solidify",
+thus making hybridized complexes more stable.
+Using super-complexes would prevent having to merge and break
+complexes continuously.
+However, at least for now, this seems much too advanced a solution,
+and I will revert back to just having a single "Complex" class,
+which can be held together by either hybridization OR STACKING
+interactions.
 
 
 """
@@ -50,36 +58,6 @@ make_sequential_id = sequential_number_generator()
 
 supercomplex_sequential_id_gen = sequential_number_generator()
 
-
-class SuperComplex(ConnectedMultiGraph):
-    """
-    Each node is a complex.
-    """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.scuid = next(supercomplex_sequential_id_gen)
-        # Use this or self.nodes() ??
-        self.complexes = set()
-        self.strands = set() # TODO: Add support for non-complexed strands in supercomplex
-        # Use this or self.edges() ??
-        # No, each node is a complex, stacking_pairs are pairs of:
-        # {(h1end3p, h1end5p), (h2end3p, h2end5p)}
-        self.stacking_pairs = set()
-        # Edge could be:
-        # c1, c2, key=bluntend_pair
-        self._state_fingerprint = None
-
-    def state_fingerprint(self):
-        if self._state_fingerprint is None:
-            hashes = frozenset(hash((cmplx.strands_fingerprint(),
-                                     cmplx.hybridization_fingerprint(),
-                                     cmplx.stacking_fingerprint()))
-                               for cmplx in self.complexes)
-            self._state_fingerprint = hashes
-        return self._state_fingerprint
-
-    def reset_state_fingerprint(self):
-        self._state_fingerprint = None
 
 
 
@@ -328,17 +306,14 @@ class Complex(nx.MultiGraph):
         return self._state_fingerprint
 
 
-    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True,
-                                reset_stacking=False, reset_super=True):
+    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False):
         self._state_fingerprint = None
         if reset_strands:
             self._strands_fingerprint = None
         if reset_hybridizations:
             self._hybridization_fingerprint = None
         if reset_stacking:
-            self._state_fingerprint = None
-        if reset_super and self.supercomplex is not None:
-            self.supercomplex.reset_state_fingerprint()
+            self._stacking_fingerprint = None
 
 
     # def domains_gen(self):
@@ -484,6 +459,7 @@ class Complex(nx.MultiGraph):
     def fqdn(self):
         """ Return a fully-qualified name. """
         return "C[%s]" % (self.cuid)
+        # return "[C#%s]" % (self.cuid)
 
     def __repr__(self):
         # return "%s[%s]" % (self.name, self.ruid % 100)
@@ -493,3 +469,37 @@ class Complex(nx.MultiGraph):
         # return "%s[%s]" % (self.name, self.ruid % 100)
         # String representation should be invariant through the life-time of an object:
         return "C[%s]" % (self.cuid)
+        #return "[C#%s]" % (self.cuid)
+
+
+
+class SuperComplex(ConnectedMultiGraph):
+    """
+    Each node is a complex.
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.scuid = next(supercomplex_sequential_id_gen)
+        # Use this or self.nodes() ??
+        self.complexes = set()
+        self.strands = set() # TODO: Add support for non-complexed strands in supercomplex
+        # Use this or self.edges() ??
+        # No, each node is a complex, stacking_pairs are pairs of:
+        # {(h1end3p, h1end5p), (h2end3p, h2end5p)}
+        self.stacking_pairs = set()
+        # Edge could be:
+        # c1, c2, key=bluntend_pair
+        self._state_fingerprint = None
+
+    def state_fingerprint(self):
+        if self._state_fingerprint is None:
+            hashes = frozenset(hash((cmplx.strands_fingerprint(),
+                                     cmplx.hybridization_fingerprint(),
+                                     cmplx.stacking_fingerprint()))
+                               for cmplx in self.complexes)
+            self._state_fingerprint = hashes
+        return self._state_fingerprint
+
+    def reset_state_fingerprint(self):
+        self._state_fingerprint = None
+

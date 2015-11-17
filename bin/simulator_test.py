@@ -32,6 +32,8 @@ from datetime import datetime
 from code import interact
 import traceback
 from pprint import pprint
+from collections import defaultdict, namedtuple
+import pdb
 
 try:
     import rlcompleter
@@ -46,8 +48,11 @@ import nascent.nascent_sim
 from nascent.graph_sim_nx.simulator_dm import DM_Simulator as Simulator
 from nascent.graph_sim_nx.fileio import parse_strand_domains_file, check_strands
 from nascent.graph_sim_nx.dispatcher import StateChangeDispatcher
+from nascent.graph_sim_nx.constants import N_AVOGADRO #, R
 
-N_AVOGADRO = 6.022e23   # /mol
+ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
+
+#N_AVOGADRO = 6.022e23   # /mol
 
 
 def touch(filepath):
@@ -144,7 +149,7 @@ def test(simulator, usepdb=False, testcase=None, execfile=None):
         # simulator.systemmgr.draw_and_save_graphs(n=1)
         # Or just run with python -m pdb <script>  (and press 'c' to continue until next error or breakpoint).
         # (Does not work if the exception is catched, of course...!)
-        n_done = simulator.simulate(T=328, n_steps_max=30, systime_max=1000) #
+        n_done = simulator.simulate(T=328, n_steps_max=10, systime_max=1000) #
         # try:
         #     # n_done = simulator.simulate(T=330, n_steps_max=10, systime_max=200)
         #     n_done = simulator.simulate(T=328, n_steps_max=20, systime_max=200) #
@@ -203,14 +208,19 @@ def run_repeatedly(simulator):
         if answer:
             if 'q' in answer:
                 break
-            try:
-                vals = answer.strip().split()
-                T = int(vals[0])
-                n_steps_max = int(vals[1])
-            except TypeError:
-                pass
-            except IndexError:
-                pass
+            if 'd' in answer:
+                pdb.set_trace()
+            elif 'g' in answer:
+                sysmgr.draw_and_save_graphs(n="end")
+            else:
+                try:
+                    vals = answer.strip().split()
+                    T = int(vals[0])
+                    n_steps_max = int(vals[1])
+                except TypeError:
+                    pass
+                except IndexError:
+                    pass
         n_done = simulator.simulate(T=T, n_steps_max=n_steps_max, systime_max=systime_max)
         print("\nCompleted %s steps..." % n_done)
 
@@ -257,7 +267,8 @@ def main():
     # adhoc_testing = False
     adhoc_testing = True
     usepdb = True
-    do_run_repeatedly = False
+    do_run_repeatedly = True # False, True
+    enable_gephi_stream = True # False, True
     strand_defs_folder = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(nascent.__file__))), "testfiles")
     #structure = "duplex1"
@@ -358,9 +369,21 @@ def main():
     adhoc_params = {'time_per_T': time_per_T,
                     'n_steps_per_T': n_steps_per_T,
                     "working_directory": run_directory,
-                    "simulator_step_sleep_factor": 0, # 1, # Sleep factor*tau after each DM simulation step
-                    "save_invoked_reactions_to_file": False, # True, # A filename str or True to save to working directory.
-                    "save_hybdehyb_to_file": False, # True, # A filename str or True to save to working directory.
+                    # Sleep factor*tau after each DM simulation step: 0 = Do not wait, Higher = Wait longer.
+                    "simulator_step_sleep_factor": 4, # 0, 1, 0.5, 5...
+                    # A filename str or True to save to working directory.
+                    "save_invoked_reactions_to_file": True, # True or False
+                    # A filename str or True to save to working directory.
+                    "save_hybdehyb_to_file": True, # True or False
+                    # Enable or disable bending of single helices:
+                    "enable_helix_bending": False,
+                    # Merge complexes upon stacking and break if unstacked (if no hybridization interactions):
+                    "stacking_joins_complexes": True,
+                    # Allow ends in one complex to stack against ends in another complex:
+                    "enable_intercomplex_stacking": True,
+                    # Re-calculate changed domain reactions against all other (complementary) domains,
+                    # or only re-calculate for pairs against other changed domains?
+                    "reaction_update_pair_against_all": True,
                    }
     simulator = Simulator(volume=volume, strands=input_oligos, params=adhoc_params,
                           outputstatsfiles=outputstatsfile)
@@ -384,12 +407,13 @@ def main():
                          'visualization_workspace': 'workspace0',
                          'dispatcher_debug_print': True, # print debug statements in dispatcher
                         }
-    # dispatcher = StateChangeDispatcher(dispatcher_config)
-    # simulator.dispatcher = dispatcher
-    # dispatcher.init_graph(sysmgr.domain_graph)
-    # answer = input("Gephi initialized, press any key to continue (or 'q' to quit)...")
-    # if answer and answer[0] == 'q':
-    #     return
+    if enable_gephi_stream:
+        dispatcher = StateChangeDispatcher(dispatcher_config)
+        simulator.dispatcher = dispatcher
+        dispatcher.init_graph(sysmgr.domain_graph)
+        answer = input("Gephi initialized, press any key to continue (or 'q' to quit)...")
+        if answer and answer[0] == 'q':
+            return
 
     # Perform calculations and start simulation
     if do_run_repeatedly:
