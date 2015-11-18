@@ -100,7 +100,7 @@ DEFAULT_NODE_ATTR = {"size": 10, 'r': 1.0, 'g': 0.0, 'b': 0.0, 'x': 1, 'y': 0}
 DEFAULT_EDGE_ATTR = {}
 
 ## TODO: Subclass GephiGraphStreamer instead of LiveVisualizerBase
-class GephiGraphStreamerWs(LiveVisualizerBase):
+class GephiMultiGraphStreamer(LiveVisualizerBase):
     """
     Draw graph live using Gephi with graph-streaming plugin.
     """
@@ -108,7 +108,7 @@ class GephiGraphStreamerWs(LiveVisualizerBase):
     def __init__(self, config):
         super().__init__(config)
         # Client:
-        use_websocket = config.get('visualization_use_websocket', True)
+        use_websocket = config.get('visualization_use_websocket', False)
         host = config.get('visualization_host', '127.0.0.1')
         port = config.get('visualization_port', 8080)
         scheme = config.get('visualization_uri_scheme', 'ws' if use_websocket else 'http')

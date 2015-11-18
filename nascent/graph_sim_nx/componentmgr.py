@@ -252,7 +252,7 @@ class ComponentMgr(GraphManager):
             domain1, domain2 = domain_pair
             #h1end3p = h1end5p = (h2end3p, h2end5p) = ()
         else:
-            (h1end3p, h1end5p), (h2end3p, h2end5p) = stacking_pair
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
             domain1, domain2 = h1end3p.domain, h2end3p.domain
         ## Variable unpacking:
         strand1 = domain1.strand
@@ -415,8 +415,8 @@ class ComponentMgr(GraphManager):
                 assert h2end5p is h1end3p.hyb_partner
                 # With break_complex=False, unstack() will update system-graphs and complex domain graph,
                 # but not check if complex is broken apart.
-                unstacking_results[(h1end3p, h1end5p, h2end3p, h2end5p)] = \
-                    self.unstack(h1end3p, h1end5p, h2end3p, h2end5p, break_complex=False)
+                unstacking_results[frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))] = \
+                    self.unstack(h1end3p, h2end5p, h2end3p, h1end5p, break_complex=False)
                 printd("Unstack result for domain %r:" % (d,))
                 pprintd(unstacking_results[-1][1])
             else:
@@ -452,7 +452,7 @@ class ComponentMgr(GraphManager):
         if domain_pair is not None and stacking_pair is not None:
             raise NotImplementedError("Providing both domain_pair and stacking_pair is not yet implemented!")
         if stacking_pair:
-            (h1end3p, h1end5p), (h2end3p, h2end5p) = stacking_pair
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
         if domain_pair:
             domain1, domain2 = domain_pair
             if interaction is None:
@@ -599,12 +599,12 @@ class ComponentMgr(GraphManager):
             assert domain1.partner is None
             assert domain2.partner is None
         if stacking_pair:
-            assert all(end.stack_partner is None for end in (h1end3p, h1end5p, h2end3p, h2end5p))
+            assert all(end.stack_partner is None for end in (h1end3p, h2end5p, h2end3p, h1end5p))
 
         return result
 
 
-    def stack(self, h1end3p, h1end5p, h2end3p, h2end5p, join_complex=True):
+    def stack(self, h1end3p, h2end5p, h2end3p, h1end5p, join_complex=True):
         """
         Form a stacking interaction.
                     h1end3p         h1end5p
@@ -617,7 +617,7 @@ class ComponentMgr(GraphManager):
         This is probably the most common case, e.g. in N-way junctions.
         """
         if self.hyb_dehyb_file:
-            print("h1end3p, h1end5p, h2end3p, h2end5p =",
+            print("h1end3p, h2end5p, h2end3p, h1end5p =",
                   "getattr(domains_by_duid[%s], 'end%s')," % (h1end3p.domain.duid, h1end3p.end),
                   "getattr(domains_by_duid[%s], 'end%s')," % (h1end5p.domain.duid, h1end5p.end),
                   "getattr(domains_by_duid[%s], 'end%s')," % (h2end3p.domain.duid, h2end3p.end),
@@ -632,7 +632,7 @@ class ComponentMgr(GraphManager):
             print("assert h2end5p.domain.domain_strand_specie == ", h2end5p.domain.domain_strand_specie,
                   file=self.hyb_dehyb_file)
             print("sysmgr.hybridize(domain1, domain2)", file=self.hyb_dehyb_file)
-        stacking_tuple = ((h1end3p, h1end5p), (h2end3p, h2end5p))
+        stacking_tuple = ((h1end3p, h2end5p), (h2end3p, h1end5p))
         stacking_pair = frozenset(stacking_tuple)
         ## Variable unpacking:
         h1domain1 = h1end3p.domain
@@ -709,7 +709,7 @@ class ComponentMgr(GraphManager):
         return result
 
 
-    def unstack(self, h1end3p, h1end5p, h2end3p, h2end5p, break_complex=True):
+    def unstack(self, h1end3p, h2end5p, h2end3p, h1end5p, break_complex=True):
         """
         Break a stacking interaction.
                     h1end3p         h1end5p
@@ -718,7 +718,7 @@ class ComponentMgr(GraphManager):
                     h2end5p         h2end3p
         """
         if self.hyb_dehyb_file:
-            print("h1end3p, h1end5p, h2end3p, h2end5p =",
+            print("h1end3p, h2end5p, h2end3p, h1end5p =",
                   "getattr(domains_by_duid[%s], 'end%s')," % (h1end3p.domain.duid, h1end3p.end),
                   "getattr(domains_by_duid[%s], 'end%s')," % (h1end5p.domain.duid, h1end5p.end),
                   "getattr(domains_by_duid[%s], 'end%s')," % (h2end3p.domain.duid, h2end3p.end),
@@ -734,7 +734,7 @@ class ComponentMgr(GraphManager):
                   file=self.hyb_dehyb_file)
             print("sysmgr.hybridize(domain1, domain2)", file=self.hyb_dehyb_file)
 
-        stacking_tuple = ((h1end3p, h1end5p), (h2end3p, h2end5p))
+        stacking_tuple = ((h1end3p, h2end5p), (h2end3p, h1end5p))
         stacking_pair = frozenset(stacking_tuple)
 
         ## Variable unpacking:

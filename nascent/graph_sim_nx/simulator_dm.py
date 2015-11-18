@@ -150,7 +150,7 @@ class DM_Simulator(Simulator):
                                     #"[{timings[step_time]:0.02e}] "
                                    )
         # Must specify: time, tau, T, nodes
-        self.state_change_hybridization_template = {'change_type': 1,
+        self.state_change_hybridization_template = {'change_type': 1,  # 0=Nodes, 1=Edges
                                                     'forming': 1,
                                                     'interaction': HYBRIDIZATION_INTERACTION,
                                                     'multi': False}
@@ -244,8 +244,11 @@ class DM_Simulator(Simulator):
             #   reaction spec = ({domspec1, domspec2}, is_forming, is_intracomplex)
             # For ungrouped reactions, this is:
             #   {domain1, domain2} for hybridization reactions
-            #   {(h1end3p, h1end5p), (h2end3p, h2end5p)} for stacking reactions
+            #   {(h1end3p, h2end5p), (h2end3p, h1end5p)} for stacking reactions
             reaction_spec = Rxs[j]
+
+            # For ungrouped reactions, reaction_spec is just the reaction pair.
+            reaction_attr = sysmgr.reaction_attrs[reaction_spec]
 
             # 3. Effect the next reaction by updating time and counts (replacing t ← t + τ and x̄ ← x̄ + νj).
             # 3a: Update system time.
@@ -278,13 +281,12 @@ class DM_Simulator(Simulator):
                                    (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex)
                         assert d1.partner is None and d2.partner is None
 
-                reaction_attr = sysmgr.reaction_attrs[domain_pair]
                 if reaction_attr.is_forming != is_forming or reaction_attr.is_intra != is_intra:
                     print("Expected reaction attr", reaction_attr,
                           "does not match actual reaction attributes is_forming=%s, is_intra=%s" %
                           (is_forming, is_intra))
-                # reverted to reaction_spec = domain_pair for ungrouped reactions.
-                # A domain instance should only have ONE way (is_hyb?, is_intra?) to react with another domain instance.
+                # reverted to reaction_spec = domain_pair for ungrouped reactions. A domain instance should only
+                # have ONE way (is_forming?, is_intra?) to react with another domain instance.
                 reaction_pair, result = sysmgr.react_and_process(domain_pair, reaction_attr)
                 assert (d1, d2) == tuple(reaction_pair) or (d2, d1) == tuple(reaction_pair)
 
@@ -373,6 +375,11 @@ class DM_Simulator(Simulator):
                 #     - multi: If True, interpret "nodes" as a list of pairs (u₁, u₂, ...) for NODE-altering directives,
                 #                 or (u₁, v₁, u₂, v₂, ...) for EDGE-altering directives.
                 #     - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
+                #               Nodes must currently be domains (which are forwarded to a suitable translator).
+                # The state-change directive can also be a list of state changes (use directive_is_list=True).
+                # TODO: Consider a model that ONLY uses DomainEnds and not domains. Hybridization domain_pairs
+                #       Are replaced with a domain ends tuple pair similar to stacking_pair (but obviously differnt):
+                #       {(d1end5p, d1end3p), (d2end5p, d2end3p)}
                 directive = self.state_change_hybridization_template.copy()
                 directive['forming'] = int(is_forming)
                 directive['time'] = self.sim_system_time
@@ -380,8 +387,26 @@ class DM_Simulator(Simulator):
                 directive['tau'] = dt
                 # Dispatcher is responsible for translating domain objects to model-agnostic (str repr) graph events.
                 directive['nodes'] = (d1, d2)
-                self.dispatcher.dispatch(directive, directive_is_list=False)
-
+                if 'unstacking_results' in result:
+                    assert is_forming is False
+                    directive = [directive]
+                    directive_is_list = True
+                    for (h1end3p, h2end5p), (h2end3p, h1end5p) in result['unstacking_results']:
+                        # IMPORTANT: For stacking interactions, domains must be given in the order of the stack:
+                        #            nodes = (dom1, dom2) means that dom1.end3p stacks with dom2.end5p !
+                        state_change = {'forming': int(is_forming),
+                                        'time': self.sim_system_time,
+                                        'T': sysmgr.temperature,
+                                        'tau': 0,
+                                        #'nodes': zip(duplexend1, duplexend2[::-1]),
+                                        #'nodes': (h1end3p, h1end5p, h2end3p, h2end5p),
+                                        'nodes': (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain),
+                                        'multi': True
+                                       }
+                        directive.append(state_change)
+                else:
+                    directive_is_list = False
+                self.dispatcher.dispatch(directive, directive_is_list=directive_is_list)
 
             ## FINISH OF AND LOOP TO STEP (1)
             n_done += 1

@@ -42,6 +42,7 @@ class LiveVisualizerBase():
         ## TODO: Consolidate visualization_* vs livestreamer_* config keys
         self.directed_graph = config.get('visualization_graph_directed', False)
         self.default_layout = config.get('livestreamer_graph_layout_method', 'force-directed')
+        self.is_multigraph = config.get('livestreamer_graph_is_multigraph', True)
         # Note: For purely visualization, it doesn't matter if the graph is directed or not;
         # we are not using the visualized graph for any analysis or calculation.
 
@@ -113,16 +114,29 @@ class LiveVisualizerBase():
         #if isinstance(new_edge_ids, DataFrame):
         #    edge_suid_to_names = edge_suid_to_names_mapper(new_edge_ids, directed=self.directed_graph)
         #else:
-        if directed is True:
-            edge_suid_to_names = {d[self.id_key]: (d['source'], d['target']) for d in new_edge_ids}
-        elif directed is False:
-            edge_suid_to_names = {d[self.id_key]: frozenset((d['source'], d['target']))
-                                  for d in new_edge_ids}
+        if self.is_multigraph:
+            if directed is True:
+                edge_suid_to_names = {d[self.id_key]: (d['source'], d['target'], d.get('key')) for d in new_edge_ids}
+            elif directed is False:
+                edge_suid_to_names = {d[self.id_key]: (frozenset((d['source'], d['target'])), d.get('key'))
+                                      for d in new_edge_ids}
+            else:
+                # directed might be a list of different directed values, one for each node
+                edge_suid_to_names = {d[self.id_key]: (d['source'], d['target'], d.get('key')) if node_directed
+                                                      else (frozenset((d['source'], d['target'])), d.get('key'))
+                                      for d, node_directed in zip(new_edge_ids, directed)}
         else:
-            # directed might be a list of different directed values, one for each node
-            edge_suid_to_names = {d[self.id_key]: (d['source'], d['target']) if node_directed
-                                                  else frozenset((d['source'], d['target']))
-                                  for d, node_directed in zip(new_edge_ids, directed)}
+            # regular graph (not multi-graph):
+            if directed is True:
+                edge_suid_to_names = {d[self.id_key]: (d['source'], d['target']) for d in new_edge_ids}
+            elif directed is False:
+                edge_suid_to_names = {d[self.id_key]: frozenset((d['source'], d['target']))
+                                      for d in new_edge_ids}
+            else:
+                # directed might be a list of different directed values, one for each node
+                edge_suid_to_names = {d[self.id_key]: (d['source'], d['target']) if node_directed
+                                                      else frozenset((d['source'], d['target']))
+                                      for d, node_directed in zip(new_edge_ids, directed)}
         edge_names_to_suid = {v: k for k, v in edge_suid_to_names.items()}
         self.edge_suid_to_names.update(edge_suid_to_names)
         self.edge_names_to_suid.update(edge_names_to_suid)
@@ -141,37 +155,49 @@ class LiveVisualizerBase():
 
     def add_edges(self, edges, directed, keys=None, attributes=None):
         """
-        Takes a list of edges in the form of
+        Takes a list of edges dicts with the form of
             [{'source': <name>, 'target': <name>, 'interaction': <str>, 'directed': <bool>}, ...]
         """
         raise NotImplementedError("Override in sub-class.")
 
-    def delete_edge(self, source, target, directed=True):
-        """ Delete a single node from the graph. """
-        if directed:
-            key, fallback = ((source, target), frozenset((source, target)))
+    def delete_edge(self, source, target, directed=None, key=None, interaction=None):
+        """
+        Delete a single node from the graph.
+        Key vs id:
+         - Key is used *in conjunction with source and target* to identify an edge. E.g. (source, target, key=1).
+            Key can be the same for edges connecting different source, target:
+                (source1, target1, key='h') and (source2, target2, key='h') are valid.
+         - ID is unique within the entire graph. No two edges or nodes have the same id.
+        """
+        if directed is None:
+            directed = self.directed_graph
+        if self.is_multigraph:
+            # key_directed, key_undirected = (source, target, key), (frozenset((source, target)), key)
+            edge_lookup = (source, target, key) if directed else (frozenset((source, target)), key)
         else:
-            fallback, key = ((source, target), frozenset((source, target)))
-        try:
-            edge_id = self.edge_names_to_suid.pop(key)
-        except KeyError:
-            print("Unable to find expected edge key %s in node_name_to_suid map." % key)
-            try:
-                edge_id = self.edge_names_to_suid.pop(fallback)
-                key = fallback
-            except KeyError:
-                print("- Also unable to find fallback key %s in node_name_to_suid map." % fallback)
-                return
+            # key_directed, key_undirected = (source, target), frozenset((source, target))
+            edge_lookup = (source, target) if directed else frozenset((source, target))
+        # key, fallback = (key_directed, key_undirected) (key_undirected, key_directed)
+        # try:
+        edge_id = self.edge_names_to_suid.pop(edge_lookup)
+        # except KeyError:
+        #     print("Unable to find expected edge key %s in node_name_to_suid map." % key)
+        #     try:
+        #         edge_id = self.edge_names_to_suid.pop(fallback)
+        #         key = fallback
+        #     except KeyError as e:
+        #         print("- Also unable to find fallback key %s in node_name_to_suid map." % (fallback,))
+        #         raise e
         try:
             print("Deleting edge %s" % edge_id)
             self.network.delete_edge(edge_id)
-        except Exception as e:
+        except Exception as e: # pylint: disable=W0703
             print("Error deleting node %s: %s" % (edge_id, e))
             # Re-insert node_name => node_id entry
-            self.edge_names_to_suid[key] = edge_id
+            self.edge_names_to_suid[edge_lookup] = edge_id
         else:
-            test_name = self.edge_suid_to_names.pop(edge_id)
+            lookup_test = self.edge_suid_to_names.pop(edge_id)
             self.deleted_name_to_suid.append({key: edge_id})
             self.deleted_suid_to_name.append({edge_id: key})
-            if test_name != key:
+            if lookup_test != key:
                 print("WARNING: Mapping issue: node_suid_to_name[node_id] != node_name")

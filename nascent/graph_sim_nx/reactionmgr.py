@@ -812,8 +812,8 @@ class ReactionMgr(ComponentMgr):
 
         d1, d2 = tuple(domain_pair)
         is_forming = reaction_attr.is_forming
-        is_intra = reaction_attr.is_intra
-        #is_forming = reaction_attr.is_forming
+        # is_intra = reaction_attr.is_intra
+        is_forming = reaction_attr.is_forming
         #is_intra = reaction_attr.is_intra
         if is_forming:
             assert d1.partner is None and d2.partner is None
@@ -907,14 +907,14 @@ class ReactionMgr(ComponentMgr):
         # Actually, it won't fail until it tries to stack the ends that have just been de-hybridized.
         # if 'unstacking_results' in result:
         #     reacted_stacking_pairs = result['unstacking_results']
-        #     # unstacking_results is a dict of: {(h1end3p, h1end5p, h2end3p, h2end5p): result), ....}
+        #     # unstacking_results is a dict of: {(h1end3p, h2end5p, h2end3p, h1end5p): result), ....}
         # else:
         #     reacted_stacking_pairs = None
         # Using dehybridized_duplex_ends is much better than trying to pretend that a (stacking) reaction has occoured:
-        dehybridized_ends = [d1.end5p, d1.end3p, d2.end5p, d2.end3p]
+        dehybridized_ends = [d1.end5p, d1.end3p, d2.end5p, d2.end3p] if not is_forming else None
         self.update_possible_stacking_reactions(for_domains=changed_domains,
                                                 dehybridized_ends=dehybridized_ends)
-
+        # Note: We still use 'unstacking_results' for forwarding these side-effect unstacking reactions to dispatcher.
 
         # DEBUGGING: Resetting complex fingerprint.
         # TODO: Move this hybridization/dehybridization methods and apply conditionally.
@@ -1038,12 +1038,12 @@ class ReactionMgr(ComponentMgr):
             assert STACKING_INTERACTION in self.ends5p3p_graph[h2end5p][h2end3p]
             assert STACKING_INTERACTION in self.ends5p3p_graph[h2end3p][h2end5p]
 
-            stacking_pair = frozenset(((h1end3p, h1end5p), (h2end3p, h2end5p)))
+            stacking_pair = frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))
             # For currently-stacked ends, we only need to update if its not in possible_stacking_reactions;
             # Once a stacking_pair is in possible_stacking_reactions, it doesn't change except when unstacked.
             if stacking_pair not in self.possible_stacking_reactions: #updated_reactions: #:
                 self.possible_stacking_reactions[stacking_pair] = \
-                    self.calculate_stacking_c_j(h1end3p, h1end5p, h2end3p, h2end5p,
+                    self.calculate_stacking_c_j(h1end3p, h2end5p, h2end3p, h1end5p,
                                                 is_forming=False, is_intra=True)
                 self.reaction_attrs[stacking_pair] = ReactionAttrs(reaction_type=STACKING_INTERACTION,
                                                                    is_forming=False, is_intra=True)
@@ -1082,7 +1082,7 @@ class ReactionMgr(ComponentMgr):
                 if h2end5p in self.ends5p3p_graph[h2end3p]:
                     assert STACKING_INTERACTION not in self.ends5p3p_graph[h2end3p][h2end5p]
 
-                stacking_pair = frozenset(((h1end3p, h1end5p), (h2end3p, h2end5p)))
+                stacking_pair = frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))
                 if stacking_pair not in updated_reactions: # self.possible_stacking_reactions:
                     h1s2 = h1end5p.domain.strand
                     h1c2 = h1s2.complex
@@ -1092,7 +1092,7 @@ class ReactionMgr(ComponentMgr):
                     elif h1s1 is h1s2:
                         is_intra = 'strand'
                     self.possible_stacking_reactions[stacking_pair] = \
-                        self.calculate_stacking_c_j(h1end3p, h1end5p, h2end3p, h2end5p,
+                        self.calculate_stacking_c_j(h1end3p, h2end5p, h2end3p, h1end5p,
                                                     is_forming=True, is_intra=is_intra)
                     self.reaction_attrs[stacking_pair] = ReactionAttrs(reaction_type=STACKING_INTERACTION,
                                                                        is_forming=True, is_intra=is_intra)
@@ -1104,7 +1104,7 @@ class ReactionMgr(ComponentMgr):
         The stacking equivalent to react_and_process.
         Perform a stacking reaction, determine which domains have changed,
         and forward that info to reaction updater method.
-        stacking_pair = frozenset((h1end3p, h1end5p), (h2end3p, h2end5p))
+        stacking_pair = frozenset((h1end3p, h2end5p), (h2end3p, h1end5p))
         Ends annotation:
                     h1end3p         h1end5p
         Helix 1   ----------3' : 5'----------
@@ -1114,7 +1114,7 @@ class ReactionMgr(ComponentMgr):
         """
         print("stack_and_process invoked with stacking_pair:")
         pprint(stacking_pair)
-        (h1end3p, h1end5p), (h2end3p, h2end5p) = tuple(stacking_pair)
+        (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(stacking_pair)
         if self.invoked_reactions_file:
             print(("stacking_pair = frozenset(("
                    "(getattr(domains_by_duid[%s], 'end%s'), getattr(domains_by_duid[%s], 'end%s'))"
@@ -1144,14 +1144,14 @@ class ReactionMgr(ComponentMgr):
             assert h2end3p == h2end5p.stack_partner
             # assert d1.partner == d2 and d2.partner == d1
 
-        printd("%s h1end3p, h1end5p, h2end3p, h2end5p - %s %s and %s %s..." %
-               (reaction_str, h1end3p, h1end5p, h2end3p, h2end5p))
+        printd("%s h1end3p, h2end5p, h2end3p, h1end5p - %s %s and %s %s..." %
+               (reaction_str, h1end3p, h2end5p, h2end3p, h1end5p))
         if reaction_attr.is_forming:
-            result = self.stack(h1end3p, h1end5p, h2end3p, h2end5p)
+            result = self.stack(h1end3p, h2end5p, h2end3p, h1end5p)
         else:
-            result = self.unstack(h1end3p, h1end5p, h2end3p, h2end5p)
-        printd("Completed %s of h1end3p, h1end5p, h2end3p, h2end5p - %s %s and %s %s" %
-               (reaction_str, h1end3p, h1end5p, h2end3p, h2end5p))
+            result = self.unstack(h1end3p, h2end5p, h2end3p, h1end5p)
+        printd("Completed %s of h1end3p, h2end5p, h2end3p, h1end5p - %s %s and %s %s" %
+               (reaction_str, h1end3p, h2end5p, h2end3p, h1end5p))
 
         printd("%s result:" % reaction_str)
         pprintd(result)
@@ -1205,7 +1205,7 @@ class ReactionMgr(ComponentMgr):
         return k_off
 
 
-    def calculate_stacking_c_j(self, h1end3p, h1end5p, h2end3p, h2end5p, is_forming, is_intra,
+    def calculate_stacking_c_j(self, h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra,
                                reaction_type=STACKING_INTERACTION, reaction_pair_fingerprint=None):
         """
         Calculate stochastic rate constant c_j for forming/breaking a stacking interaction.
@@ -1226,8 +1226,8 @@ class ReactionMgr(ComponentMgr):
         assert h1end3p == h2end5p.hyb_partner
         assert h2end3p.hyb_partner == h1end5p
         assert h2end3p == h1end5p.hyb_partner
-        print("calculate_stacking_c_j invoked with h1end3p, h1end5p, h2end3p, h2end5p, is_forming, is_intra:")
-        print(", ".join(str(p) for p in (h1end3p, h1end5p, h2end3p, h2end5p, is_forming, is_intra)))
+        print("calculate_stacking_c_j invoked with h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra:")
+        print(", ".join(str(p) for p in (h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra)))
         if is_forming:
             # if d1.strand.complex == d2.strand.complex != None:
             # Edit: We might have a single strand interacting with itself

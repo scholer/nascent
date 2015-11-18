@@ -125,6 +125,8 @@ class Domain():
         """ (re-)set domain's strand. """
         self.strand = strand
         self.domain_strand_specie = (strand.name, self.name)
+        ## Concern: If you add support for strand nicking/ligation, then you cannot use strand to specify
+        ## domain universal name (which must be invariant throughout the simulation).
         self.universal_name = "%s:%s" % (self.strand.instance_name, self.instance_name)
 
 

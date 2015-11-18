@@ -194,8 +194,8 @@ def run_repeatedly(simulator):
     sysmgr = simulator.reactionmgr
     answer = 'r'
     systime_max = 0
-    T = 360
-    n_steps_max = 100
+    T = 350
+    n_steps_max = 10
     print("Starting simulation...")
     while 'q' not in answer:
         systime_max += 1000
@@ -370,7 +370,7 @@ def main():
                     'n_steps_per_T': n_steps_per_T,
                     "working_directory": run_directory,
                     # Sleep factor*tau after each DM simulation step: 0 = Do not wait, Higher = Wait longer.
-                    "simulator_step_sleep_factor": 4, # 0, 1, 0.5, 5...
+                    "simulator_step_sleep_factor": 2, # 0, 1, 0.5, 5...
                     # A filename str or True to save to working directory.
                     "save_invoked_reactions_to_file": True, # True or False
                     # A filename str or True to save to working directory.
@@ -397,7 +397,9 @@ def main():
                          # 'dispatcher_state_changes_line_fields': ['T', 'time', 'tau', 'change_type', 'forming', 'interaction']
                          #'dispatcher_state_changes_unpack_nodes': True,
                          #'dispatcher_state_changes_line_fmt': None,
-                         'dispatcher_multi_directive_support': False,
+                         # multi-directives are state change dicts with multiple nodes or multiple pairs, e.g.
+                         # change['nodes'] = (node1, node2, ...) or (source1, target1, source2, target2, ...)
+                         'dispatcher_multi_directive_support': True, # True, False
                          'dispatcher_graph_translation': None, #'domain-to-5p3p', # None, 'domain-to-5p3p', 'domain-to-strand'
                          #'livestreamer_graph_representation': '5p3p' # Not used.
                          'livestreamer_auto_apply_layout': 0,

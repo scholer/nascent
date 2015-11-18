@@ -24,6 +24,8 @@ Contains two types of functions:
     1) Convert graphs within the model domain, e.g. domain-level to 5p3p-level (nodes are still objects).
     2) Convert graphs from the model domain to string representation, e.g. Domain(nae="A", duid=5) -> "A#5".
 
+
+
 """
 
 
@@ -111,7 +113,7 @@ def translate_domain_graph_to_strand_str_graph(graph, directed=None, node_attrs=
     # Don't worry too much about multiple occurences.
     if is_multi:
         edges = [(str(domain1.strand), str(domain2.strand),
-                  "-".join((domain1.instance_name, domain2.instance_name, key)),
+                  "-".join((domain1.instance_name, key, domain2.instance_name)),
                   attrs)
                  for domain1, domain2, key, attrs in graph.edges(data=True, keys=True)
                  if domain1.strand != domain2.strand # don't include loops (src, tgt connected to the same node)
@@ -127,6 +129,42 @@ def translate_domain_graph_to_strand_str_graph(graph, directed=None, node_attrs=
 
     return trans_graph
 
+
+def make_edge_key(source, target, interaction, level="domain"):
+    """
+    """
+    if level == "5p3p":
+        key = interaction
+    elif level == "domain":
+        key = make_domain_edge_key(source, target, interaction)
+    elif level == "strand":
+        key = make_domain_edge_key(source, target, interaction)
+    return key
+
+def make_5p3p_edge_key(source, target, interaction):
+    return interaction
+
+def make_domain_edge_key(source, target, interaction):
+    if interaction == HYBRIDIZATION_INTERACTION:
+        return interaction
+    else:
+        # Stacking or backbone interaction:
+        # For undirected graphs we need to distinguish
+        # ({A, B}, "A3p-s-B5p") from ({A, B}, "B3p-s-A5p")
+        # Although this distinction is only needed for circular constructs, which are rather rare.
+        # You could also use domain1.instance_name, domain2.instance_name, key
+        #return "%s:3p-%s-%s5p" % (source, interaction, target)
+        return interaction
+
+def make_strand_edge_key(source, target, interaction):
+    """
+    Alternatives:
+     key = "-".join((domain1.instance_name, domain2.instance_name, key))
+    """
+    if interaction == HYBRIDIZATION_INTERACTION:
+        return "%s-%s-%s" % (source, interaction, target)
+    else:
+        return "%s:3p-%s-%s5p" % (source, interaction, target)
 
 
 def translate_domain_change_to_domain_str_graph_event(change):
@@ -147,6 +185,18 @@ def translate_domain_change_to_domain_str_graph_event(change):
                 change['interaction'] = interaction_idx_to_str[interaction]
             elif interaction not in valid_interactions:
                 print("Weird: Unexpected interaction %s for change %s" % (interaction, change))
+        # Suggested key: Specifying the ends is not strictly necessary. Actually, since a key only has to be
+        # valid/unique together with a pair of (source, target), specifying the ends would be enough.
+        # However, for undirected graphs, we need to distinguish
+        # ({A, B}, "A3p-s-B5p") from ({A, B}, "B3p-s-A5p")
+        # Although we really only need this distinction for circular constructs, which are rather rare.
+        # if interaction == HYBRIDIZATION_INTERACTION:
+        #     change['key'] = interaction
+        # else:
+        #     # stacking and backbone can connect in two ways, so we need to specify what ends are interacting:
+        #     # change['key'] = "%s-%s-%s" % (dom1.end3p, interaction, dom2.end5p)
+        #     change['key'] = "3p-%s-5p" % (interaction,)
+        change['key'] = make_domain_edge_key(dom1, dom2, interaction)
     else:
         raise ValueError("Change type %s not recognized for change %s" % (change['change_type'], change))
     return change
@@ -164,7 +214,7 @@ def translate_domain_change_to_5p3p_str_graph_event(change):
         # Make a single "add_nodes/delete_nodes" event?
         # Or expand to many add_node/delete_nodes events, one for each node?
         event['nodes'] = [nname for nname in
-                          [(str(domain)+":5p", str(domain)+":3p")
+                          [(str(domain.end5p), str(domain.end3p))
                            for domain in change['nodes']]]
         return [event]
         # Add style to event?
@@ -172,9 +222,11 @@ def translate_domain_change_to_5p3p_str_graph_event(change):
         dom1, dom2 = change['nodes']
         if change['interaction']:
             change['interaction'] = interaction_idx_to_str[change['interaction']]
+        # Suggested key: For ends5p3p, the interaction should be sufficient.
+        change['key'] = change['interaction']
         if change['interaction'] in (1, 'pb', 'p', 'backbone', 3, 'bs', 's', 'stacking'):
             # The 3p of the first (5p-most) domain connects to the 5p end of the second (3p-most) domain
-            event['nodes'] = [str(dom1)+":3p", str(dom2)+":5p"]
+            event['nodes'] = [str(dom1.end3p), str(dom2.end5p)]
             return [event]
         else:
             print("Unrecognized interaction for change %s" % change)
@@ -183,8 +235,8 @@ def translate_domain_change_to_5p3p_str_graph_event(change):
             # AND connect the 5p end of the first to the 3p of the second.
             # We have already done the former above, only do the latter:
             event2 = change.copy()
-            event['nodes'] = [str(dom1)+":3p", str(dom2)+":5p"]
-            event2['nodes'] = [str(dom1)+":5p", str(dom2)+":3p"]
+            event['nodes'] = [str(dom1.end3p), str(dom2.end5p)]
+            event2['nodes'] = [str(dom1.end5p), str(dom2.end3p)]
             return [event, event2]
 
 

@@ -141,7 +141,7 @@ from .live_visualizer_base import LiveVisualizerBase
 DEFAULT_NODE_ATTR = {"size": 10, 'r': 1.0, 'g': 0.0, 'b': 0.0, 'x': 1, 'y': 0}
 DEFAULT_EDGE_ATTR = {}
 
-class GephiGraphStreamer(LiveVisualizerBase):
+class GephiGraphStreamerOld(LiveVisualizerBase):
     """
     Draw graph live using Gephi with graph-streaming plugin.
     """
@@ -237,7 +237,7 @@ class GephiGraphStreamer(LiveVisualizerBase):
         self.node_suid_to_name.pop(node_name, None)
 
 
-    def add_edge(self, source, target, directed=True, interaction=None, bidirectional=None, attributes=None):
+    def add_edge(self, source, target, directed=True, key=None, interaction=None, bidirectional=None, attributes=None):
         """ Add a single edge. Id is auto-generated as source-target"""
         if attributes:
             attrs = self.edge_attributes.copy()
@@ -246,15 +246,20 @@ class GephiGraphStreamer(LiveVisualizerBase):
             attrs = self.edge_attributes
         if interaction is None:
             interaction = attrs.get('interaction', '-')
-        interact_str = "--" + interaction + ("->" if directed else "--")
-        edge_id = "".join((source, interact_str, target))
+        if key is None:
+            key = interaction
+        # ID vs KEY: An ID identifies a node/edge uniquely within the entire graph.
+        # Key is used in multi-graphs to identify one of several edges connecting the same nodes:
+        # (source1, target1, key=1) vs (source1, target1, key=2).
+        edge_id = source + "--" + key + ("->" if directed else "--") + target
+        # e.g. A--h--a or B--s->b
         self.client.add_edge(edge_id, source, target, directed, **attrs)
         # register_new_edges takes a list of dicts or a single dict with
-        self.register_new_edges([{'id': edge_id, 'source': source, 'target': target}], directed=directed)
+        self.register_new_edges([{self.id_key: edge_id, 'source': source, 'target': target}], directed=directed)
         return edge_id
 
 
-    def add_edges(self, edges, directed, attributes=None):
+    def add_edges(self, edges, directed, keys=None, attributes=None):
         """
         Takes a list of edges in the form of
             [{'source': <name>, 'target': <name>, 'interaction': <str>, 'directed': <bool>}, ...]
@@ -274,7 +279,7 @@ class GephiGraphStreamer(LiveVisualizerBase):
         for edge in edges():
             interact_str = ("--%s->" if edge.get('directed', directed) else "--%s--") % \
                            edge.get('interaction', default_interaction)
-            edge['id'] = edge['source'] + interact_str + edge['target']
+            edge[self.id_key] = edge['source'] + interact_str + edge['target']
             edge.update(attrs) # add default/global attributes
             if 'attributes' in edge:
                 edge.update(edge.pop('attributes')) # add edge-specific attributes

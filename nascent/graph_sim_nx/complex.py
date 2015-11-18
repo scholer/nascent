@@ -405,7 +405,7 @@ class Complex(nx.MultiGraph):
     def stacking_fingerprint(self):
         """
         Return a stacking fingerprint for use with caching.
-        A stacked_pair is: {(h1end3p, h1end5p), (h2end3p, h2end5p)}
+        A stacked_pair is: {(h1end3p, h2end5p), (h2end3p, h1end5p)}
         """
         if not self._stacking_fingerprint:
             # This is using (d1, d2) tuple rather than {d1, d2} frozenset, since directionality matters.
@@ -421,7 +421,7 @@ class Complex(nx.MultiGraph):
         stacking_edges vs stacking_ends:
          - stacking_edge is a tuple: (h1end3p, h1end5p)
          - stacking pair is a pair of stacking edges:
-            {(h1end3p, h1end5p), (h2end3p, h2end5p)}
+            {(h1end3p, h2end5p), (h2end3p, h1end5p)}
 
         How to get a list of domain hybridization?
         Note: stacking is directional and cannot be saved within an undirected graph.
@@ -485,7 +485,7 @@ class SuperComplex(ConnectedMultiGraph):
         self.strands = set() # TODO: Add support for non-complexed strands in supercomplex
         # Use this or self.edges() ??
         # No, each node is a complex, stacking_pairs are pairs of:
-        # {(h1end3p, h1end5p), (h2end3p, h2end5p)}
+        # {(h1end3p, h2end5p), (h2end3p, h1end5p)}
         self.stacking_pairs = set()
         # Edge could be:
         # c1, c2, key=bluntend_pair

@@ -48,6 +48,11 @@ What this means is that:
         add_undirected_edge
 
 
+NOTE: Gephi doesn't support multi-graphs until v0.9 (TBR Dec 20th, 2015)
+What to do until then?
+Can we use regular graphs?
+ - We could, but it requires a lot of extra work.
+
 """
 
 from itertools import chain
@@ -57,6 +62,8 @@ logger = logging.getLogger(__name__)
 # Nascent imports:
 from nascent.graph_sim_nx.domain import Domain
 from nascent.graph_visualization.graph_utils import directed_for_all_edges
+from nascent.graph_sim_nx.constants import (HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
+                                            PHOSPHATEBACKBONE_INTERACTION)
 from .graph_translators import (translate_domain_graph_to_5p3p_str_graph,
                                 translate_domain_graph_to_domain_str_graph,
                                 translate_domain_graph_to_strand_str_graph,
@@ -64,23 +71,23 @@ from .graph_translators import (translate_domain_graph_to_5p3p_str_graph,
                                 translate_domain_change_to_domain_str_graph_event,
                                 translate_domain_change_to_strand_str_graph_event)
 
+STREAMERS = {}
 try:
-    from ..graph_visualization.cytoscape import CytoscapeStreamer
+    from nascent.graph_visualization.cytoscape import CytoscapeStreamer
+    STREAMERS['cytoscape'] = CytoscapeStreamer
 except ImportError as e:
     print(e, "(Streaming to Cytoscape will not be available)")
     CytoscapeStreamer = None
 try:
+    # Make sure pygephi is available on your python path
     # Use gephi_ws for websocket communication
-    from ..graph_visualization.gephi import GephiGraphStreamer
-    from ..graph_visualization.gephi_ws import GephiGraphStreamerWs
+    from nascent.graph_visualization.gephi import GephiGraphStreamer
+    from nascent.graph_visualization.gephi_ws import GephiGraphStreamerWs
+    STREAMERS['gephi_old'] = GephiGraphStreamer
+    STREAMERS['gephi_ws'] = GephiGraphStreamerWs
 except ImportError as e:
     print(e, "(Streaming to Gephi (graph-streaming plugin) will not be available)")
     GephiGraphStreamer = None
-
-
-STREAMERS = {'cytoscape': CytoscapeStreamer,
-             'gephi': GephiGraphStreamer,
-             'gephi_ws': GephiGraphStreamerWs}
 
 
 class StateChangeDispatcher():
@@ -139,7 +146,7 @@ class StateChangeDispatcher():
         # If supporting multi node/edge directive, a single state_change can have multiple nodes/edes
 
         ## State change directies and graph visualization ##
-        self.multi_directive_support = config.get('dispatcher_multi_directive_support')
+        self.multi_directive_support = config.get('dispatcher_multi_directive_support', True)
         self.graph_translation = config.get('dispatcher_graph_translation', "domain-to-5p3p")
         # 'livestreamer_graph_representation' is replaced by 'dispatcher_graph_translation' above.
         # The "graph visualization adaptors" should be agnostic to the DNA/strand/domain model
@@ -233,12 +240,12 @@ class StateChangeDispatcher():
 
     def dispatch(self, state_change, directive_is_list=False):
         """
-        Forward the dispatch.
+        Forward (dispatch) a state change directive to files or live-streamers.
         Propagate a single state change. A state change directive is a single dict with keys:
         - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
         - forming: 1=forming, 0=eliminating
         - interaction: (only for edge types)
-            1=backbone, 2=hybridization, 3=stacking
+            1=backbone, 2=hybridization, 3=stacking - or use the standard INTERACTION constants.
         - time
         - tau (or should we use 'dt'?)
         - T   (the current system temperature)
@@ -248,8 +255,13 @@ class StateChangeDispatcher():
             Note: This is not the same as the 'directive_is_list' argument given to this method, which
             is whether state_change is a single state-change dict or a list of state-change dicts.
         - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
-        Note: Unlike a state_change dict, a graph event should not have a 'multi' directive.
-        A graph event only relates to things that the graph software can understand.
+            IMPORTANT: For stacking interactions, domains must be given in the order of the stack:
+                       nodes = (dom1, dom2) means that dom1.end3p stacks with dom2.end5p !
+
+        "State change" vs "graph event": Unlike a state_change dict, a graph event should not have a 'multi' directive.
+         - A graph event only relates to things that the graph software can understand.
+        Q: Should the state change nodes be exclusively Domain objects, or can they be e.g. DomainEnd instances?
+        A: For now, it can only be Domain instances.
         """
         if directive_is_list is None:
             directive_is_list = isinstance(state_change, (list, tuple))
@@ -374,9 +386,8 @@ class StateChangeDispatcher():
 
     def state_changes_to_graph_events(self, state_changes):
         """
-        Will
-            1) translate domain nodes state changes to 5p3p graph representation.
-            2) translate "strand/domain/end" objects to str representation.
+        Will translate domain nodes state changes to "strand/domain/end" objects to str representation.
+
         Note that the lenght of the translated events list might be different
         from the input state_changes list. For instance, translating a domain
         hybridization to 5p3p format produces two "add edge" graph events,
@@ -444,28 +455,35 @@ class StateChangeDispatcher():
     def add_edge(self, event, attributes=None):
         """ Add a single edge to the live streamer's graph. """
         interaction = event['interaction'] # backbone, hybridization or stacking
-        directed = event.get('directed', True if interaction == 'stacking' else False)
+        directed = event.get('directed', interaction == STACKING_INTERACTION)
         source, target = event['nodes']
         return self.live_streamer.add_edge(source=source, target=target,
                                            directed=directed,
+                                           key=event.get('key', event.get('interaction')),
                                            interaction=interaction,
                                            attributes=attributes)
 
     def add_edges(self, events, attributes=None):
-        """ Add multiple edges to the live streamer's graph. """
+        """
+        Add multiple edges to the live streamer's graph.
+        :events: is a list of graph-event dicts, each dict describing a single node or a single edge.
+        """
         edges = [{'source': event['nodes'][0], 'target': event['nodes'][1],
+                  'key': event.get('key'),
                   'interaction': event['interaction'],
-                  'directed':  event.get('directed', True if event['interaction'] == 'stacking' else False)}
+                  'directed':  event.get('directed', event['interaction'] == STACKING_INTERACTION)}
                  for event in events]
         directed = directed_for_all_edges(edges)
-        return self.live_streamer.add_edges(edges, directed, attributes)
+        # Edges is a dict with 'source', 'target', etc keys.
+        return self.live_streamer.add_edges(edges, directed=directed, attributes=attributes)
 
     def delete_edge(self, event):
         """ Delete a single node from the live streamer's graph. """
-        directed = event.get('directed', event['interaction'] == 'stacking')
+        directed = event.get('directed', event['interaction'] == STACKING_INTERACTION)
         source, target = event['nodes']
         return self.live_streamer.delete_edge(source=source, target=target,
-                                              directed=directed)
+                                              directed=directed,
+                                              key=event.get('key', event.get('interaction')))
 
     def delete_edges(self, events):
         """ Delete multiple edges from the live streamer's graph. """
