@@ -30,6 +30,13 @@ Module for representing system-level graphs (where each complex form it's own su
 
 import networkx as nx
 
+from nascent.graph_sim_nx.constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION,
+                                            STACKING_INTERACTION)
+
+
+
+raise NotImplementedError("Module not implemented.")
+
 
 class Domain5p3pGraph(nx.Graph):
     """
@@ -74,7 +81,7 @@ class Domain5p3pGraph(nx.Graph):
             self.add_nodes_from([node for d in domains for node in (d.model5p, d.model3p)])
             # Add a5p->a3p connections:
             for d in domains:
-                self.add_edge(d.model5p, d.model3p, interaction='pb', weight=d.length, type="5p3p")
+                self.add_edge(d.model5p, d.model3p, interaction=PHOSPHATEBACKBONE_INTERACTION, type="5p3p")
             if len(domains) > 1:
                 for upstream, downstream in zip(domains[:-1], domains[1:]): # source, target
                     self.add_edge(upstream.model3p, downstream.model5p, interaction='pb', weight=1, upstream=upstream)
@@ -100,10 +107,10 @@ class Domain5p3pDiGraph(nx.DiGraph):
             self.add_nodes_from([node for d in domains for node in (d.model5p, d.model3p)])
             # Add a5p->a3p connections:
             for d in domains:
-                self.add_edge(d.model5p, d.model3p, interaction='pb', weight=d.length, type="5p3p")
+                self.add_edge(d.model5p, d.model3p, interaction=PHOSPHATEBACKBONE_INTERACTION, type="5p3p")
             if len(domains) > 1:
                 for upstream, downstream in zip(domains[:-1], domains[1:]): # source, target
-                    self.add_edge(upstream.model3p, downstream.model5p, interaction='pb', weight=1)
+                    self.add_edge(upstream.model3p, downstream.model5p, interaction=PHOSPHATEBACKBONE_INTERACTION)
 
     def hybridize(self, dom1, dom2):
         self.add_edge(dom1.model5p, dom2.model3p)

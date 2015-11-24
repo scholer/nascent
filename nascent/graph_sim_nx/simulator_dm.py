@@ -148,6 +148,7 @@ class DM_Simulator(Simulator):
                                     " {stats[tau_mean]:0.02e}] "
                                     "[{timings[step_time]:0.02e}] "
                                     #"[{timings[step_time]:0.02e}] "
+                                    "[sleeping: {sleep_time:0.02e}]"
                                    )
         # Must specify: time, tau, T, nodes
         self.state_change_hybridization_template = {'change_type': 1,  # 0=Nodes, 1=Edges
@@ -158,6 +159,10 @@ class DM_Simulator(Simulator):
                                                       'forming': 0,
                                                       'interaction': HYBRIDIZATION_INTERACTION,
                                                       'multi': False}
+        self.state_change_stacking_template = {'change_type': 1,
+                                               'forming': 1,
+                                               'interaction': STACKING_INTERACTION,
+                                               'multi': False}
 
 
     def simulate(self, T=None, n_steps_max=100000, simulation_time=None, systime_max=None):
@@ -174,8 +179,11 @@ class DM_Simulator(Simulator):
         if T is None:
             T = sysmgr.temperature
         else:
-            sysmgr.temperature = T
+            if T != sysmgr.temperature:
+                print("Re-setting temperature (and temperature-dependent caches)...")
+                sysmgr.reset_temperature(T)
         sysmgr_grouped.temperature = T
+        sleep_time = 0
 
         n_done = 0
 
@@ -190,8 +198,9 @@ class DM_Simulator(Simulator):
 
             # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_forming)}
             # sysmgr.propensity_functions is dict with              {domspec_pair: a_j}
-            printd(" ---- sysmgr.print_reaction_stats(): ----")
-            sysmgr.print_reaction_stats()
+            printd(" ---- Reaction stats: ----")
+            #sysmgr.print_reaction_stats()
+            printd("\n".join(sysmgr.reaction_stats_strs()))
 
             # Step 1. (I expect that propensity_functions is up-to-date)
             if not sysmgr.propensity_functions:
@@ -301,6 +310,7 @@ class DM_Simulator(Simulator):
                 pprint(sysmgr.reaction_attrs[reaction_spec])
                 c_j = sysmgr.possible_stacking_reactions[reaction_spec]
                 reaction_pair, result = sysmgr.stack_and_process(reaction_spec)
+                (h1end3p, h2end5p), (h2end3p, h1end5p) = reaction_pair
             else:
                 raise ValueError("Unexpected reaction_type value %r" % reaction_type)
             printd("Result from sysmgr reaction:")
@@ -343,7 +353,7 @@ class DM_Simulator(Simulator):
                     print("d1_g.state_fingerprint():", d1_g.state_fingerprint())
                     print("d2.state_fingerprint():", d2.state_fingerprint())
                     print("d2_g.state_fingerprint():", d2_g.state_fingerprint())
-                    print("c_j, is_forming:", c_j, is_forming)
+                    print("c_j, is_forming:", c_j, reaction_attr.is_forming)
                     print("c_j_g:", c_j_g)
                     raise e
 
@@ -381,27 +391,37 @@ class DM_Simulator(Simulator):
                 #       Are replaced with a domain ends tuple pair similar to stacking_pair (but obviously differnt):
                 #       {(d1end5p, d1end3p), (d2end5p, d2end3p)}
                 directive = self.state_change_hybridization_template.copy()
-                directive['forming'] = int(is_forming)
-                directive['time'] = self.sim_system_time
                 directive['T'] = sysmgr.temperature
+                directive['time'] = self.sim_system_time
                 directive['tau'] = dt
+                directive['forming'] = int(reaction_attr.is_forming)
+                directive['interaction'] = reaction_attr.reaction_type
                 # Dispatcher is responsible for translating domain objects to model-agnostic (str repr) graph events.
-                directive['nodes'] = (d1, d2)
+                if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+                    directive['nodes'] = (d1, d2)
+                elif reaction_attr.reaction_type is STACKING_INTERACTION:
+                    # Note: This is different from the order of stacking_pair, (h1end3p, h2end5p), (h2end3p, h1end5p)
+                    # This specifies (source1, target1, source2, target2),
+                    # and implies connecting 3p of source1 with 5p of target1, etc.
+                    directive['nodes'] = (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain)
+                    # Tell the dispatcher that we have multiple pairs of edges in 'nodes':
+                    # self.multi_directive_support = config['dispatcher_multi_directive_support'] must be set to True:
+                    directive['multi_directive'] = True
                 if 'unstacking_results' in result:
-                    assert is_forming is False
+                    assert reaction_attr.is_forming is False
                     directive = [directive]
                     directive_is_list = True
                     for (h1end3p, h2end5p), (h2end3p, h1end5p) in result['unstacking_results']:
                         # IMPORTANT: For stacking interactions, domains must be given in the order of the stack:
                         #            nodes = (dom1, dom2) means that dom1.end3p stacks with dom2.end5p !
-                        state_change = {'forming': int(is_forming),
+                        state_change = {'forming': int(reaction_attr.is_forming),
                                         'time': self.sim_system_time,
                                         'T': sysmgr.temperature,
                                         'tau': 0,
                                         #'nodes': zip(duplexend1, duplexend2[::-1]),
                                         #'nodes': (h1end3p, h1end5p, h2end3p, h2end5p),
                                         'nodes': (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain),
-                                        'multi': True
+                                        'multi_directive': True
                                        }
                         directive.append(state_change)
                 else:
@@ -422,8 +442,13 @@ class DM_Simulator(Simulator):
                 self.timings['step_start_time'], self.timings['step_end_time'] = self.timings['step_end_time'], timer()
             self.timings['step_time'] = self.timings['step_start_time'] - self.timings['step_end_time']
 
+            if self.step_sleep_factor:
+                # Compensate for simulation calculation time:
+                sleep_time = (dt-self.timings['step_time'])*self.step_sleep_factor
+
             print(self.print_post_step_fmt.format(
-                self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr),
+                self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr,
+                sleep_time=sleep_time),
                   end="")
 
             if n_done % 10000 == 0:
@@ -432,15 +457,10 @@ class DM_Simulator(Simulator):
                       (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
 
 
-            if self.step_sleep_factor:
+            if self.step_sleep_factor and sleep_time > 0:
                 # Compensate for simulation calculation time:
-                sleep_time = (dt-self.timings['step_time'])*self.step_sleep_factor
-                if sleep_time > 0:
-                    print("Sleeping for %s seconds before next step..." % sleep_time)
-                    time.sleep(sleep_time)
-                else:
-                    print("Simulation step calculation time %s is larger than simulation reaction tau = %s" %
-                          (self.timings['step_time'], dt))
+                # print("Sleeping for %s seconds before next step..." % sleep_time)
+                time.sleep(sleep_time)
                 self.timings['step_start_time'] = timer()
             answer = 'c' or input(("\nReaction complete."
                             "Type 'd' to enter debugger;"

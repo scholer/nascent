@@ -44,7 +44,10 @@ def translate_domain_graph_to_domain_str_graph(graph, directed=None, node_attrs=
     Translate a full domain-object graph to domain str-repr graph.
     """
     if directed is None:
-        directed = getattr(graph, 'is_directed', False)
+        try:
+            directed = graph.is_directed()
+        except AttributeError:
+            directed = False
     trans_graph = (nx.MultiDiGraph() if directed else nx.MultiGraph()) if graph.is_multigraph() else \
                   (nx.DiGraph() if directed else nx.Graph())
     if node_attrs is None:
@@ -66,31 +69,40 @@ def translate_domain_graph_to_domain_str_graph(graph, directed=None, node_attrs=
 def translate_domain_graph_to_5p3p_str_graph(graph, directed=None):
     """
     Translate a full domain-object graph to 5p3p str-repr graph.
+    Uhm... Why not just initialize from the ends5p3p graph??
     """
     if directed is None:
-        directed = getattr(graph, 'is_directed', False)
-    trans_graph = nx.DiGraph() if directed else nx.Graph()
-
+        try:
+            directed = graph.is_directed()
+        except AttributeError:
+            directed = False
+    trans_graph = (nx.MultiDiGraph() if directed else nx.MultiGraph()) if graph.is_multigraph() else \
+                  (nx.DiGraph() if directed else nx.Graph())
     for domain, attrs in graph.nodes(data=True):
-        trans_graph.add_node(str(domain)+":5p", attrs)
-        trans_graph.add_node(str(domain)+":3p", attrs)
-        trans_graph.add_edge(str(domain)+":5p", str(domain)+":3p", attrs)
+        trans_graph.add_node(str(domain)+":5p", attr_dict=attrs)
+        trans_graph.add_node(str(domain)+":3p", attr_dict=attrs)
+        trans_graph.add_edge(str(domain)+":5p", str(domain)+":3p", key=PHOSPHATEBACKBONE_INTERACTION, attr_dict=attrs)
 
-    for domain1, domain2, attrs in graph.edges(data=True):
+    if graph.is_multigraph():
+        edge_tups = graph.edges(keys=True, data=True)
+    else:
+        edge_tups = [(domain1, domain2, None, attrs) for domain1, domain2, attrs in graph.edges(data=True)]
+
+    for domain1, domain2, key, attrs in edge_tups:
         interaction = attrs.get('interaction')
         if interaction in (PHOSPHATEBACKBONE_INTERACTION, STACKING_INTERACTION):
             # For edges connecting domain backbone, we connect
             # the 3p end of the 5p-domain to the 5p domain of the 3p domain
             # 5'-domainA-3' 5'-domainB-3'
-            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", attrs)
+            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", key=key, attr_dict=attrs)
         elif interaction == HYBRIDIZATION_INTERACTION:
             # Always connecting 3p end to 5p end:
-            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", attrs)
-            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", attrs)
+            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", key=key, attr_dict=attrs)
+            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", key=key, attr_dict=attrs)
         else:
             print("Unrecognized interaction '%s' between '%s' and '%s'" %
                   (attrs.get('interaction'), domain1, domain2))
-            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", attrs)
+            trans_graph.add_edge(str(domain1)+":3p", str(domain2)+":5p", key=key, attr_dict=attrs)
 
     return trans_graph
 
@@ -220,7 +232,7 @@ def translate_domain_change_to_5p3p_str_graph_event(change):
         # Add style to event?
     elif change['change_type'] in (1, 'edge event'):
         dom1, dom2 = change['nodes']
-        if change['interaction']:
+        if isinstance(change['interaction'], int):
             change['interaction'] = interaction_idx_to_str[change['interaction']]
         # Suggested key: For ends5p3p, the interaction should be sufficient.
         change['key'] = change['interaction']
@@ -228,9 +240,7 @@ def translate_domain_change_to_5p3p_str_graph_event(change):
             # The 3p of the first (5p-most) domain connects to the 5p end of the second (3p-most) domain
             event['nodes'] = [str(dom1.end3p), str(dom2.end5p)]
             return [event]
-        else:
-            print("Unrecognized interaction for change %s" % change)
-        if change['interaction'] in (2, 'h', 'hh', 'hybridization'):
+        elif change['interaction'] in (2, 'h', 'hh', 'hybridization'):
             # The 3p of the first domain connects to the 5p end of the second (3p-most) domain,
             # AND connect the 5p end of the first to the 3p of the second.
             # We have already done the former above, only do the latter:
@@ -238,6 +248,8 @@ def translate_domain_change_to_5p3p_str_graph_event(change):
             event['nodes'] = [str(dom1.end3p), str(dom2.end5p)]
             event2['nodes'] = [str(dom1.end5p), str(dom2.end3p)]
             return [event, event2]
+        else:
+            print("Unrecognized interaction for change %s" % change)
 
 
 def translate_domain_change_to_strand_str_graph_event(change):

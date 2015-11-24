@@ -27,13 +27,15 @@ Module for
 import itertools
 import networkx as nx
 import numpy as np
+import math
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
 from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
-                        interactions)
+                        interactions,
+                        HELIX_XOVER_DIST, HELIX_WIDTH, HELIX_STACKING_DIST)
 from .strandcolor import StrandColor
 
 
@@ -77,7 +79,15 @@ class Strand(nx.MultiGraph):
     def set_domains(self, domains):
         """ Set this strands domains. Should only be invoked once. """
         self.domains = domains
-        self.length = sum(d.length for d in domains)
+        # for attr in "n_nt ss_dist_ee_sq ds_dist_ee_sq ss_len_contour ds_len_contour".split():
+        #     setattr(self, attr, sum(getattr(domain, attr) for domain in domains))
+        self.n_nt = sum(d.n_nt for d in domains)
+        self.ss_dist_ee_sq = sum(d.ss_dist_ee_sq for d in domains)
+        self.ds_dist_ee_sq = sum(d.ds_dist_ee_sq for d in domains)
+        self.ss_len_contour = sum(d.ss_len_contour for d in domains)
+        self.ds_len_contour = sum(d.ds_len_contour for d in domains)
+        self.ds_dist_ee_nm = math.sqrt(self.ds_dist_ee_sq)
+        self.ss_dist_ee_nm = math.sqrt(self.ss_dist_ee_sq)
 
         # self is a graph of domains:
         # self.add_nodes_from(domains) # Add all domains as nodes
@@ -104,40 +114,51 @@ class Strand(nx.MultiGraph):
             rgb_tup = colormgr.domain_rgb(self, frac)
             node_attrs = {'color_rgb': rgb_tup,
                           'color_hsv': hsv_str,
-                          'size': len(domain), # pygephi: 200 is a reasonable size.
                           'Label': domain.name,
+                          'ds_dist_ee_nm': domain.ds_dist_ee_nm,
+                          #'size': math.sqrt(domain.ds_dist_ee_nm),
                           'R': rgb_tup[0],
                           'G': rgb_tup[1],
                           'B': rgb_tup[2],
                          }
+            ## TODO: We don't really need all these node attributes:
+            for attr in "n_nt ss_dist_ee_sq ss_dist_ee_nm ds_dist_ee_nm ds_dist_ee_sq".split():
+                node_attrs[attr] = getattr(domain, attr)
+
             self.add_node(domain, attr_dict=node_attrs)
 
             ## Add edge between domain and domain2:
             if domain2 is not None:
                 #s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)), PHOSPHATEBACKBONE_INTERACTION)
                 s_edge_key = PHOSPHATEBACKBONE_INTERACTION
-                avg_length = sum((len(domain), len(domain2)))/2
+                avg_length = (domain.ds_dist_ee_nm + domain2.ds_dist_ee_nm)/2
                 # Note: If strand is not a multigraph, then key will be an edge attribute, NOT a proper key
                 # That means when you do multigraph.add_edges_from(strand.edges(data=True)), then
                 # the multigraph's edges will have an attribute key=akey,
                 # BUT THEY WILL NOT ACTUALLY HAVE ANY KEYS!
                 self.add_edge(domain, domain2, key=s_edge_key,
-                              len=avg_length, weight=10/avg_length, **edge_attrs)
+                              len=avg_length, attr_dict=edge_attrs)
 
-            ## Update ends5p3p_graph:
+            #### Update ends5p3p_graph: ####
             self.ends5p3p_graph.add_node(domain.end5p, attr_dict=node_attrs)
             self.ends5p3p_graph.add_node(domain.end3p, attr_dict=node_attrs)
 
             # The "long" edge from 5p of d to 3p of domain:
-            long_edge_attrs = dict(edge_attrs, weight=10/len(domain), len=len(domain),
+            long_edge_attrs = dict(edge_attrs, len=domain.ds_dist_ee_nm,
+                                   dist_ee_nm=domain.ss_dist_ee_nm,  # Initially, it is ss backbone
+                                   dist_ee_sq=domain.ss_dist_ee_sq,
+                                   stiffness=0, # ss backbone has zero stiffness
                                    _color=rgb_tup, style='bold')
             self.ends5p3p_graph.add_edge(domain.end5p, domain.end3p, key=PHOSPHATEBACKBONE_INTERACTION,
                                          attr_dict=long_edge_attrs)
             # The "short" edge connecting 3p of one domain to 5p of the next domain:
             if domain2 is not None:
                 short_edge_attrs = dict(edge_attrs,
-                                        weight=10,  # Typically used as spring constant. Higher -> shorter edge.
-                                        len=4       # With of ds helix ~ 2 nm ~ 5 bp
+                                        #weight=10,  # Typically used as spring constant. Higher -> shorter edge.
+                                        #len=HELIX_WIDTH,       # With of ds helix ~ 2 nm ~ 5 bp
+                                        dist_ee_nm=HELIX_XOVER_DIST,
+                                        dist_ee_sq=HELIX_XOVER_DIST**2,
+                                        stiffness=0, # ss backbone has zero stiffness
                                        )
                 self.ends5p3p_graph.add_edge(domain.end3p, domain2.end5p, key=PHOSPHATEBACKBONE_INTERACTION,
                                              attr_dict=short_edge_attrs)

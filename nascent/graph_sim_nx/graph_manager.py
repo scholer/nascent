@@ -23,6 +23,7 @@ from networkx.algorithms.shortest_paths import shortest_path
 import numpy as np
 import math
 import itertools
+from pprint import pprint
 
 
 from .nx_utils import draw_graph_and_save
@@ -32,9 +33,107 @@ from .structural_elements.bundle import HelixBundle
 from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
-                        N_AVOGADRO, AVOGADRO_VOLUME_NM3)
+                        N_AVOGADRO, AVOGADRO_VOLUME_NM3,
+                        HELIX_XOVER_DIST, HELIX_WIDTH, HELIX_STACKING_DIST)
 from .debug import printd, pprintd
 from .domain import Domain, DomainEnd
+
+
+def determine_interaction(source, target, edge):
+    """
+    :source:, :target: DomainEnd instances connected by edge.
+    :edge: NetworkX edge connecting :source: and :target:.
+    """
+    # Fallback method: Manually determine what type of interaction we have based on source, target:
+    print("WARNING: ends5p3p_graph edge (%s - %s) has no interaction attribute: %s" % (
+        source, target, edge))
+    if target == source.stack_partner:
+        interaction = STACKING_INTERACTION
+        length = 1
+        length_sq = 1
+    elif target == source.hyb_partner:
+        interaction = HYBRIDIZATION_INTERACTION
+        length = 1 # one nm from one helix to the next. We really don't know for sure because it turns.
+        length_sq = 1
+    # Check phosphate backbone up- and downstream (5' and 3').
+    elif target in (source.pb_upstream, source.pb_downstream):
+        if source.hyb_partner and \
+            ((source.end == "5p" and target == source.pb_downstream) or
+             (source.end == "3p" and target == source.bp_upstream)):
+            # Above could probably be done with an XOR:
+            # (source.end == "5p") != (target == source.pb_downstream) # boolean xor
+            # (source.end == "5p") ^ (target == source.pb_downstream)  # bitwise xor
+            # We have a stacked duplex:
+            interaction = STACKING_INTERACTION
+            length = source.domain.ds_dist_ee_nm
+            length_sq = source.domain.ds_dist_ee_sq
+        else:
+            # We have a single-stranded domain:
+            interaction = PHOSPHATEBACKBONE_INTERACTION
+            length = source.domain.ss_dist_ee_nm     # mean end-to-end length; not contour length
+            length_sq = source.domain.ss_dist_ee_sq
+    else:
+        raise ValueError("Could not determine interaction between %s and %s" % (source, target))
+    return interaction
+
+
+def determine_end_end_distance(source, target, edge_attrs, interaction):
+    """
+    Returns a two-tuple of (length_sq, length_nm).
+    WAIT: We *need* this info to already be in the graph in order to efficiently calculate the shortest path!
+    """
+    stiffness = 0    # 0 for ss, 1 for ds, optionally at some point 2 for helix-bundle.
+    edge_required_attrs = ("dist_ee_sq", "dist_ee_nm", "stiffness")
+    if 'dist_ee_sq' in edge_attrs:
+        length_sq = edge_attrs['dist_ee_sq']
+        length_nm = edge_attrs.get('dist_ee_nm') or math.sqrt(length_sq) # short-circut; don't calculate default value.
+        stiffness = edge_attrs.get('stiffness')
+        if all(at in edge_attrs for at in edge_required_attrs):
+            return length_nm, length_sq, stiffness
+    print("\n\nWARNING: Edge (%s, %s) with attrs %s is missing attributes %s! (It should have to calculate shortest path!)\n"
+          % (source, target, edge_attrs, [at for at in edge_required_attrs if at not in edge_attrs]))
+
+    # We need to determine length, length_sq and stiffness manually... (Mostly for reference...)
+    if interaction is None:
+        interaction = determine_interaction(source, target, edge_attrs)
+
+    ## TODO: Move this logic the the graph edge creation location -- ComponentMgr (hybridize, stack, etc).
+    ## Note that we use multigraphs. We can easily have
+    if interaction == PHOSPHATEBACKBONE_INTERACTION:
+        if source.domain == target.domain:
+            ## "Long 5p-3p edge", connecting the 5p end to the 3p end of the same domain.
+            # Length depends on whether domain is hybridized:
+            if source.domain.partner is not None:
+                # hybridized - consider as rigid stack:
+                length = source.domain.ds_dist_ee_nm
+                length_sq = source.domain.ds_dist_ee_sq
+                stiffness = 1
+            else:
+                length = source.domain.ss_dist_ee_nm     # mean end-to-end length; not contour length
+                length_sq = source.domain.ss_dist_ee_sq
+        else:
+            # Cross-over (or similar):
+            length = HELIX_XOVER_DIST
+            length_sq = HELIX_XOVER_DIST**2
+    elif interaction == HYBRIDIZATION_INTERACTION:
+        length = HELIX_WIDTH
+        length_sq = length**2
+        stiffness = 1
+        # Regardless of what type of connection (stacking/hybridization/phosphate), if
+        # source.domain != target.domain, then length is always 1 (or maybe it should be 2...)
+        # Edit: No.
+        # if length is None:
+        #     length = 1
+        # if length_sq is None:
+        #     length_sq = 1
+    elif interaction == STACKING_INTERACTION:
+        length = HELIX_STACKING_DIST
+        length_sq = length**2
+        stiffness = 1
+    else:
+        raise ValueError("UNKNOWN INTERACTION: %r" % (interaction, ))
+    return length, length_sq, stiffness
+
 
 
 class GraphManager():
@@ -72,6 +171,7 @@ class GraphManager():
 
     def domain_path_elements(self, path):
         """
+        (CURRENTLY NOT USED)
         Returns a list of structural elements based on a domain-level path (list of domains).
         """
         #path_set = set(path)
@@ -112,115 +212,65 @@ class GraphManager():
                       (2, [(length, length_sq, source, target)]
         Where 1 indicates a list of single-stranded edges,
         2 indicates a hybridization edge, and 3 indicates a list of stacked edges.
-        Since only the interaction type and lenghts are important, maybe just
+        Since only the stiffness type and lenghts are important, maybe just
         path_edges = [(1, [length, length, ...]), (3, [length, length, ...], ...)]
         Edit: Instead of 1/2/3, use the standard INTERACTION constants values.
         """
         path_edges = []
-        interaction = None
-        last_interaction = None
-        interaction_group = None
+        stiffness = None
+        last_stiffness = None
+        stiffness_group = None
         for i in range(len(path)-1):
+            # source, target are DomainEnd instances, either end5p, end3p or reversed.
             source, target = path[i], path[i+1]
             # Method 1: Use ends5p3p_graph edge attributes (which must include stacking edges!):
-            edge = self.ends5p3p_graph[source][target]
+            edge_attrs = self.ends5p3p_graph[source][target]
             if self.ends5p3p_graph.is_multigraph():
-                # Select edge with lowest r squared:
-                key, edge = min([(k, edge_i) for k, edge_i in edge.items()], key=lambda kv: kv[1].get('weight', 1))
+                # edge_attrs is actually a dict with one or more edge_key => edge_attrs pairs.
+                # Select edge with lowest R squared: ('dist_ee_sq' should always be present for 5p3p graphs)
+                key, edge_attrs = min(edge_attrs.items(), key=lambda kv: kv[1]['dist_ee_sq'])
             # for multigraphs, graph[u][v] returns a dict with {key: {edge_attr}} containing all edges between u and v.
-            interaction = edge.get('interaction')
-            if interaction is not None:
-                length = edge.get('length')     # TODO: Reach consensus on "length" vs "len" vs "weight" vs ?
-                length_sq = edge.get('weight')     # TODO: Reach consensus on "length" vs "len" vs "weight" vs ?
-                if interaction == PHOSPHATEBACKBONE_INTERACTION and source.domain == target.domain:
-                    # Length depends on whether domain is hybridized:
-                    if source.domain.partner is not None:
-                        # hybridized - consider as rigid stack:
-                        length = source.domain.ds_length_nm
-                        length_sq = source.domain.ds_length_sq
-                        interaction = STACKING_INTERACTION
-                    else:
-                        length = source.domain.ss_length_nm     # mean end-to-end length; not contour length
-                        length_sq = source.domain.ss_length_sq
-                # Regardless of what type of connection (stacking/hybridization/phosphate), if
-                # source.domain != target.domain, then length is always 1 (or maybe it should be 2...)
-                if length is None:
-                    length = 1
-                if length_sq is None:
-                    length_sq = 1
-            else:
-                # edge 'interaction' attribute is not available.
-                # Fallback method: Manually determine what type of interaction we have based on source, target:
-                print("WARNING: ends5p3p_graph edge (%s - %s) has no interaction attribute: %s" % (
-                    source, target, edge))
-                if target == source.stack_partner:
-                    interaction = STACKING_INTERACTION
-                    length = 1
-                    length_sq = 1
-                elif target == source.hyb_partner:
-                    interaction = HYBRIDIZATION_INTERACTION
-                    length = 1 # one nm from one helix to the next. We really don't know for sure because it turns.
-                    length_sq = 1
-                # Check phosphate backbone up- and downstream (5' and 3').
-                elif target in (source.pb_upstream, source.pb_downstream):
-                    if source.hyb_partner and \
-                        ((source.end == "5p" and target == source.pb_downstream) or
-                         (source.end == "3p" and target == source.bp_upstream)):
-                        # Above could probably be done with an XOR:
-                        # (source.end == "5p") != (target == source.pb_downstream) # boolean xor
-                        # (source.end == "5p") ^ (target == source.pb_downstream)  # bitwise xor
-                        # We have a stacked duplex:
-                        interaction = STACKING_INTERACTION
-                        length = source.domain.ds_length_nm
-                        length_sq = source.domain.ds_length_sq
-                    else:
-                        # We have a single-stranded domain:
-                        interaction = PHOSPHATEBACKBONE_INTERACTION
-                        length = source.domain.ss_length_nm     # mean end-to-end length; not contour length
-                        length_sq = source.domain.ss_length_sq
-                else:
-                    raise ValueError("Could not determine interaction between %s and %s" % (source, target))
-            # end fallback determination of interaction type
+            # interaction = edge.get('interaction')
+            # length = edge_attrs.get('length')     # TODO: Reach consensus on "length" vs "len" vs "weight" vs ?
+            # length_sq = edge_attrs.get('weight')     # TODO: Reach consensus on "length" vs "len" vs "weight" vs ?
+            interaction = edge_attrs.get('interaction')
+            length, length_sq, stiffness = determine_end_end_distance(source, target, edge_attrs, interaction)
 
-            if interaction == HYBRIDIZATION_INTERACTION:
-                # We only distinguish between ds-helix vs single-strand; use STACKING_INTERACTION to indicate ds-helix:
-                interaction = STACKING_INTERACTION
-
-            # If interaction of the current path element is different from the last, then
-            # add the old interaction group to path_edges, and
-            # create a new interaction group to put this element in...
-            if interaction != last_interaction:
-                if last_interaction is not None:
-                    path_edges.append((last_interaction, interaction_group))
-                interaction_group = []
-                last_interaction = interaction
-            # interaction group is a group of elements with the same interaction type,
-            # path_edges is a list of (interaction, interaction groups) tuples, e.g.
+            # If stiffness of the current path element is different from the last, then
+            # add the old stiffness group to path_edges, and
+            # create a new stiffness group to put this element in...
+            if stiffness != last_stiffness:
+                if last_stiffness is not None:
+                    path_edges.append((last_stiffness, stiffness_group))
+                stiffness_group = []
+                last_stiffness = stiffness
+            # stiffness group is a group of elements with the same stiffness type,
+            # path_edges is a list of (stiffness, stiffness groups) tuples, e.g.
             #   [('b', [elements with ss backbone interaction]), ('s', [stacked elms]), ('b', [backbone elms]), ...]
             if length_only:
                 if length_only == 'sq':
-                    interaction_group.append(length_sq)
+                    stiffness_group.append(length_sq)
                 elif length_only == 'both':
-                    interaction_group.append((length, length_sq))
+                    stiffness_group.append((length, length_sq))
                 else:
-                    interaction_group.append(length)
+                    stiffness_group.append(length)
             else:
-                interaction_group.append((length, length_sq, source, target))
+                stiffness_group.append((length, length_sq, source, target))
         # end iteration over all path elements
 
-        # Append the last interaction group to path_edges:
-        path_edges.append((interaction, interaction_group))
+        # Append the last stiffness group to path_edges:
+        path_edges.append((stiffness, stiffness_group))
 
         printd("Path edges: %s" % path_edges)
-        #printd("Interaction groups: %s" % interaction_group)
+        #printd("stiffness groups: %s" % stiffness_group)
 
         if summarize and length_only:
             if length_only == 'both':
-                # Return a list of (interaction, (length, length_squared)) tuples:
-                return [(interaction, [sum(lengths) for lengths in zip(*lengths_tup)]) # pylint: disable=W0142
-                        for interaction, lengths_tup in path_edges]
+                # Return a list of (stiffness, (length, length_squared)) tuples:
+                return [(stiffness, [sum(lengths) for lengths in zip(*lengths_tup)]) # pylint: disable=W0142
+                        for stiffness, lengths_tup in path_edges]
             else:
-                return [(interaction, sum(lengths)) for interaction, lengths in path_edges]
+                return [(stiffness, sum(lengths)) for stiffness, lengths in path_edges]
         return path_edges
 
 
@@ -237,7 +287,7 @@ class GraphManager():
         TODO: This should certainly be cached.
         TODO: Verify shortest path for end3p as well?
         """
-        return shortest_path(self.ends5p3p_graph, end5p3p1, end5p3p2)
+        return shortest_path(self.ends5p3p_graph, end5p3p1, end5p3p2, weight='dist_ee_sq')
 
 
     def intracomplex_activity(self, elem1, elem2):
@@ -375,6 +425,10 @@ class GraphManager():
         TODX: Saving secondary loops/paths might be be useful when determining if a dehybridization will split
               up a complex. Although that is pretty much the reverse process and can't really be used. Nevermind.
 
+        TODO: How does this perform for small loops, e.g. this:     --------------------------------
+              which is just 0.67 nm.                                ---------------.________________
+              effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2) = 1.66 nm³
+              activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3 = 1.66 nm³ / 1.66 nm³ = 1.
         """
         #path = self.domains_shortest_path(domain1, domain2)
         #path_elements = self.domain_path_elements(path)
@@ -407,7 +461,7 @@ class GraphManager():
 
         ## TODO: Check for secondary loops!
 
-        # list of [(interaction, total-length), ...]
+        # list of [(stiffness, total-length), ...]
         # For rigid, double-helical elements, element length, l, is N_bp * 0.34 nm.
         # For single-stranded elements, we estimate the end-to-end distance by splitting the strand into
         #   N = N_nt*0.6nm/1.8nm segments, each segment being the Kuhn length 1.8 nm of ssDNA,
@@ -415,23 +469,31 @@ class GraphManager():
         #   E[r²] = ∑ Nᵢbᵢ² for i ≤ m = N (1.8 nm)²
         #         = round(N_nt*0.6nm/1.8nm) (1.8 nm)² = N_nt * 0.6/1.8 * 1.8*1.8 nm² = N_nt 0.6*1.8 nm²
         #         = N_nt * lˢˢ * λˢˢ = N_nt * 1.08 nm²
-        # Why use interaction as first maximum criteria??
-        _, LRE_len, LRE_len_sq, LRE_idx = max((interaction, elem_length, elem_len_sq, i)
-                                              for i, (interaction, (elem_length, elem_len_sq))
-                                              in enumerate(path_elements)
-                                              if interaction in (STACKING_INTERACTION, HYBRIDIZATION_INTERACTION))
-        #LRE = path_elements[LRE_idx] # .pop(LRE_idx)
-        # Exclude LRE when calculating SRE length:
-        if len(path_elements) > 1:
-            SRE_lengths, SRE_sq_lengths = zip(*[(elem_length, elem_len_sq)
-                                                for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
-                                                for interaction, (elem_length, elem_len_sq) in sub_path])
-            # SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
-            #               for interaction, (elem_length, elem_len_sq) in sub_path)
-            SRE_len, SRE_len_sq = sum(SRE_lengths), sum(SRE_sq_lengths)
+        # Why use stiffness as first maximum criteria??
+        try:
+            _, LRE_len, LRE_len_sq, LRE_idx = max((stiffness, elem_length, elem_len_sq, i)
+                                                  for i, (stiffness, (elem_length, elem_len_sq))
+                                                  in enumerate(path_elements)
+                                                  if stiffness > 0)
+        except ValueError:
+            # No stiff elements:
+            LRE_len = 0
+            LRE_len_sq = 0
+            SRE_len = sum(elem_length for (stiffness, (elem_length, elem_len_sq)) in path_elements if stiffness == 0)
+            SRE_len_sq = sum(elem_len_sq for (stiffness, (elem_length, elem_len_sq)) in path_elements if stiffness == 0)
         else:
-            SRE_lengths, SRE_sq_lengths = [], []
-            SRE_len, SRE_len_sq = 0, 0
+            #LRE = path_elements[LRE_idx] # .pop(LRE_idx)
+            # Exclude LRE when calculating SRE length:
+            if len(path_elements) > 1:
+                SRE_lengths, SRE_sq_lengths = zip(*[(elem_length, elem_len_sq)
+                                                    for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+                                                    for stiffness, (elem_length, elem_len_sq) in sub_path])
+                # SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+                #               for stiffness, (elem_length, elem_len_sq) in sub_path)
+                SRE_len, SRE_len_sq = sum(SRE_lengths), sum(SRE_sq_lengths)
+            else:
+                # SRE_lengths, SRE_sq_lengths = [], []
+                SRE_len, SRE_len_sq = 0, 0
 
         # Comparing mean-end-to-end-squared values vs mean end-to-end lengths vs full contour length?
         # There is a difference that sum of squares does not equal the square of sums, so
@@ -442,7 +504,6 @@ class GraphManager():
 
         if LRE_len > SRE_len:
             print("LRE_len > SRE_len for path between %r and %r" % (domain1, domain2))
-            from pprint import pprint
             pprint(path)
             pprint(path_elements)
             # The domains cannot reach each other.
@@ -490,7 +551,7 @@ class GraphManager():
         # For LRE_len_sq == SRE_len_sq, this gives us exp(-3*LRE_len_sq / (2*SRE_len_sq)) = 1/e = 0.22.
         # For example 1, this will give us:
         # exp(-3*LRE_len_sq / (2*SRE_len_sq)) = 0.02.
-        LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq))
+        LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq)) if LRE_len_sq else 1
 
         gamma_corr = 1
         if LRE_len_sq > SRE_len_sq:
@@ -547,6 +608,9 @@ class GraphManager():
 
         # TODO: Currently not accounting for bending or zipping energy.
         # TODO: Account for secondary (and tertiary?) loops
+        if activity < 1:
+            print("Low activity, %s - printing locals():" % activity)
+            pprint(locals())
         return activity
 
 

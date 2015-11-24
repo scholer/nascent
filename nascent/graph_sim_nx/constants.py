@@ -57,10 +57,23 @@ LITER_TO_M3 = 0.001
 NM3_TO_LITER = 1e-24
 AVOGADRO_VOLUME_NM3 = 1/(N_AVOGADRO*NM3_TO_LITER)
 
+
+#### DNA STRUCTURAL PARAMETERS: ####
+
 ss_kuhn_length = 1.8 # nm
 ss_rise_per_nt = 0.60 # nm per nt
 ds_rise_per_bp = 0.34 # nm per bp
 ds_kuhn_length = 100 # nm
+
+# Distance between the 3p end of one base and the 5p end of the other stack.
+HELIX_STACKING_DIST = ds_rise_per_bp
+# Distance / backbone contour length from the 5p end of one domain to the 3p end of an unstacked downstream domain.
+# A distance of 0.66954 nm gives an activity of 1 (M):
+HELIX_XOVER_DIST = 0.66954  # 1 # nm
+HELIX_WIDTH = 2      # nm.
+
+
+
 
 # "Cgamma prefactor":
 loop_Cgamma0 = 3/(2*pi)*(LITER_TO_M3/N_AVOGADRO)**(2/3)

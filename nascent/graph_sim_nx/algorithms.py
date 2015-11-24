@@ -64,6 +64,9 @@ def connectivity_rings(graph, source, max_radius, overlap=False, edge_filter=Non
 
     Note here that a tuple with source as the only element is the first tuple yielded.
     """
+    # if graph.is_directed():
+    #     print("WARNING, connectivity_rings not implemented for directed graphs, making an undirected copy...")
+    #     graph = graph.to_undirected()
     if edge_filter is None:
         edge_filter = lambda node: True
     visited = set()

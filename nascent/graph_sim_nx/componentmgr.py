@@ -71,6 +71,7 @@ import numpy as np
 #, R # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K
 # from .constants import R, N_AVOGADRO, AVOGADRO_VOLUME_NM3
 from .constants import HYBRIDIZATION_INTERACTION, PHOSPHATEBACKBONE_INTERACTION, STACKING_INTERACTION
+from .constants import HELIX_XOVER_DIST, HELIX_STACKING_DIST, HELIX_WIDTH
 from .complex import Complex
 from .graph_manager import GraphManager
 from .debug import printd, pprintd
@@ -92,7 +93,7 @@ class ComponentMgr(GraphManager):
     """
 
     def __init__(self, strands, params, domain_pairs=None):
-        GraphManager.__init__(self, strands=strands)
+        super().__init__(strands=strands)
         self.params = params
         self.stacking_joins_complexes = params.get('stacking_joins_complexes', True)
         self.enable_helix_bending = params.get('enable_helix_bending', False)
@@ -207,26 +208,47 @@ class ComponentMgr(GraphManager):
 
         # Update system-level graphs:
         edge_kwargs = {"interaction": HYBRIDIZATION_INTERACTION,
-                       "len": 6, # With of ds helix ~ 2 nm ~ 6 bp
-                       "weight": 2,
+                       #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
+                       #"weight": 2,
                        #"key": HYBRIDIZATION_INTERACTION
+                       'dist_ee_sq': HELIX_WIDTH**2,
+                       'dist_ee_nm': HELIX_WIDTH,
+                       'stiffness': 1,
                       }
         #key = (domain1.universal_name, domain2.universal_name, HYBRIDIZATION_INTERACTION)
         s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)), HYBRIDIZATION_INTERACTION)
         printd("Adding strand_graph edge (%s, %s, key=%s)" % (strand1, strand2, s_edge_key))
-        self.strand_graph.add_edge(strand1, strand2, key=s_edge_key, interaction=HYBRIDIZATION_INTERACTION)
-        self.domain_graph.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION, attr_dict=edge_kwargs)
-        self.ends5p3p_graph.add_edge(domain1.end5p, domain2.end3p, key=HYBRIDIZATION_INTERACTION, attr_dict=edge_kwargs)
-        self.ends5p3p_graph.add_edge(domain2.end5p, domain1.end3p, key=HYBRIDIZATION_INTERACTION, attr_dict=edge_kwargs)
+        edge_key = HYBRIDIZATION_INTERACTION
+        self.strand_graph.add_edge(strand1, strand2, key=s_edge_key, interaction=edge_key)
+        self.domain_graph.add_edge(domain1, domain2, key=edge_key, attr_dict=edge_kwargs)
+        self.ends5p3p_graph.add_edge(domain1.end5p, domain2.end3p, key=edge_key, attr_dict=edge_kwargs)
+        self.ends5p3p_graph.add_edge(domain2.end5p, domain1.end3p, key=edge_key, attr_dict=edge_kwargs)
 
+        # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
+        for d in (domain1, domain2):
+            if self.ends5p3p_graph.is_multigraph():
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_nm'] = d.ds_dist_ee_nm
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_sq'] = d.ds_dist_ee_sq
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['stiffness'] = 1  # ss backbone has zero stiffness
+            else:
+                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_nm'] = d.ds_dist_ee_nm
+                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ds_dist_ee_sq
+                self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 1  # ds helix has stiffness 1
+            # dist_ee_nm=HELIX_XOVER_DIST,
+            # dist_ee_sq=HELIX_XOVER_DIST**2
         if join_complex:
             result = self.join_complex_at(domain_pair=(domain1, domain2), edge_kwargs=edge_kwargs)
         else:
             c1 = strand1.complex
             if c1 is not None:
-                c1.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION, attr_dict=edge_kwargs)
-                c1._hybridization_fingerprint = None
-                c1._state_fingerprint = None
+                c1.history.append("hybridize: Adding edge (%r, %r, %r)." %
+                                       (domain1, domain2, edge_key))
+                # I'm experimenting having Complex being a DiGraph...
+                c1.add_hybridization_edge((domain1, domain2))
+                # c1.add_edge(domain1, domain2, key=edge_key, attr_dict=edge_kwargs)
+                # c1.add_edge(domain2, domain1, key=edge_key, attr_dict=edge_kwargs)
+                # c1._hybridization_fingerprint = None
+                # c1._state_fingerprint = None
             result = None
 
         assert strand1.complex == strand2.complex != None
@@ -243,16 +265,31 @@ class ComponentMgr(GraphManager):
             raise ValueError("Must provide either domain_pair or stacking_pair.")
         if domain_pair is not None and stacking_pair is not None:
             raise NotImplementedError("Providing both domain_pair and stacking_pair is not yet implemented!")
-        if edge_kwargs is None:
-            edge_kwargs = {"interaction": HYBRIDIZATION_INTERACTION,
-                           "len": 6, # With of ds helix ~ 2 nm ~ 6 bp
-                           "weight": 2,
-                          }
+
         if domain_pair:
             domain1, domain2 = domain_pair
+            # NOTE: Complex graph edge attributes doesn't matter very much!
+            if edge_kwargs is None:
+                edge_kwargs = {"interaction": HYBRIDIZATION_INTERACTION,
+                               #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
+                               #"weight": 2,
+                               'dist_ee_nm': HELIX_WIDTH,
+                               'dist_ee_sq': HELIX_WIDTH**2,
+                               'stiffness': 1
+                              }
+            domain_edge_kwargs = edge_kwargs
             #h1end3p = h1end5p = (h2end3p, h2end5p) = ()
         else:
             (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+            if edge_kwargs is None:
+                edge_kwargs = {"interaction": STACKING_INTERACTION,
+                               #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
+                               #"weight": 2,
+                               'dist_ee_nm': HELIX_STACKING_DIST,
+                               'dist_ee_sq': HELIX_STACKING_DIST**2,
+                               'stiffness': 1
+                              }
+            stacking_edge_kwargs = edge_kwargs
             domain1, domain2 = h1end3p.domain, h2end3p.domain
         ## Variable unpacking:
         strand1 = domain1.strand
@@ -268,26 +305,18 @@ class ComponentMgr(GraphManager):
                   'case': None}
 
         if strand1 == strand2:
-            # If forming an intra-strand connection, no need to make or merge any Complexes
+            # If forming an intra-strand connection, we don't need to check if we make or merge any Complexes
             print("hybridize case 0: intra-strand hybridization.")
             result['case'] = 0
-            if strand1.complex:
-                assert strand1.complex == strand2.complex
-                if domain_pair:
-                    strand1.complex.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION, attr_dict=edge_kwargs)
-                    c1._hybridization_fingerprint = None
-                if stacking_pair:
-                    ## TODO: There could be a non-unique key issue if two domains are stacked on both ends, forming
-                    ## a circular structure. However, only an issue if we self.enable_helix_bending is True
-                    c1.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
-                    c1.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
-                    c1._stacking_fingerprint = None  # Reset hybridization fingerprint
+            assert c1 == c2
+            if c1 is None:
+                # No complex to update, just return:
+                return result
+            else:
+                c_major = c1
                 result['changed_complexes'] = [c1]
-                c1._state_fingerprint = None
-            return result
-
-        ## Update complex:
-        if c1 and c2:
+        ## Else: Analyse what happened to the complex
+        elif c1 and c2:
             ## Both domains are in a complex.
             if c1 == c2:
                 ## Case (1): Intra-complex hybridization
@@ -297,11 +326,14 @@ class ComponentMgr(GraphManager):
                 # c1.add_edge(domain1, domain2, interaction=HYBRIDIZATION_INTERACTION) # done below
                 c_major = c1
                 result['changed_complexes'] = [c_major]
+                c_major.history.append("join_complex_at: Intra-complex hybridization.")
             else:
                 ## Case (2): Inter-complex hybridization between two complexes. Merge the two complexs:
                 printd("hybridize case 2: inter-complex hybridization.")
                 result['case'] = 2
                 c_major, c_minor = (c1, c2) if (len(c1.nodes()) >= len(c2.nodes())) else (c2, c1)
+                c_major.history.append("join_complex_at: Inter-complex hybridization, merging with c_minor = %r" %
+                                       (c_minor,))
                 # Import nodes and edges to major complex:
                 # add_strands updates: strand.complex, c_major.strands, c_major.strands_by_name
                 c_major.add_strands(c_minor.strands, update_graph=False)
@@ -309,30 +341,40 @@ class ComponentMgr(GraphManager):
                 c_major.add_nodes_from(c_minor.nodes(data=True))
                 c_major.add_edges_from(c_minor.edges(keys=True, data=True))
                 c_major.N_strand_changes += c_minor.N_strand_changes # Currently not keeping track of strand changes.
-                c_major._strands_fingerprint = None
-                c_major._hybridization_fingerprint = None
-                c_major._stacking_fingerprint = None
+                c_major.history.append(c_minor.history)
+                c_major.hybridized_pairs |= c_minor.hybridized_pairs
+                c_major.stacked_pairs |= c_minor.stacked_pairs
+                # Complex.add_strands takes care of updating counters:
+                #c_major.domain_species_counter += c_minor.domain_species_counter
+                #c_major.strand_species_counter += c_minor.strand_species_counter
                 ## Delete the minor complex:
                 c_minor.strands.clear()     # Clear strands
                 c_minor.strands_by_name.clear()
+                c_minor.domain_species_counter.clear()
+                c_minor.strand_species_counter.clear()
+                c_minor.hybridized_pairs.clear()
+                c_minor.stacked_pairs.clear()
                 c_minor.node.clear()        # Clear nodes
                 c_minor.adj.clear()         # Clear edges (graph.adj attribute contains edge data for nx graphs)
+                c_minor.history.append("This complex is now merged with %r" % (c_major,))
                 result['obsolete_complexes'] = [c_minor]
                 result['changed_complexes'] = [c_major]
         elif c1:
             ## Case 3a: domain2/strand2 is not in a complex; use c1
             printd("hybridize case 3a: strand hybridizing to complex.")
             result['case'] = 3
-            c1.add_strand(strand2, update_graph=True)
             c_major = c1
+            c_major.history.append("join_complex_at: Strand+complex hybridization.")
+            c_major.add_strand(strand2, update_graph=True)
             c_major._strands_fingerprint = None
             result['changed_complexes'] = [c_major]
         elif c2:
             ## Case 3b: domain1/strand1 is not in a complex; use c2
             printd("hybridize case 3b: strand hybridizing to complex.")
             result['case'] = 3
-            c2.add_strand(strand1, update_graph=True)
             c_major = c2
+            c_major.history.append("join_complex_at: Strand+complex hybridization.")
+            c_major.add_strand(strand1, update_graph=True)
             c_major._strands_fingerprint = None
             result['changed_complexes'] = [c_major]
         else:
@@ -340,6 +382,7 @@ class ComponentMgr(GraphManager):
             result['case'] = 4
             printd("hybridize case 4: inter-strand hybridization (forming a new complex).")
             new_complex = Complex(strands=[strand1, strand2])
+            new_complex.history.append("join_complex_at: Complex created from strands %r, %r." % (strand1, strand2))
             # new_complex.strands |= {strand1, strand2}
             # strand1.complex = strand2.complex = new_complex
             # new_complex.add_strand(strand1)
@@ -349,14 +392,18 @@ class ComponentMgr(GraphManager):
 
         # Create the hybridization connection in the major complex graph:
         if domain_pair:
-            c_major.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION, attr_dict=edge_kwargs)
-            c_major._hybridization_fingerprint = None
+            c_major.history.append("join_complex_at: Adding edge (%r, %r, %r)." %
+                                   (domain1, domain2, HYBRIDIZATION_INTERACTION))
+            c_major.add_hybridization_edge((domain1, domain2))
         if stacking_pair:
-            c_major.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
-            c_major.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
-            c_major._stacking_fingerprint = None
+            c_major.history.append("join_complex_at: Adding edges (%r, %r, %r) and (%r, %r, %r)." %
+                                   (h1end3p.domain, h1end5p.domain, STACKING_INTERACTION,
+                                    h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
+            c_major.add_stacking_edge(stacking_pair)
+
+        # Reset complex: (maybe not needed here)
         c_major.domain_distances = {} # Reset distances
-        c_major._state_fingerprint = None
+        c_major.reset_state_fingerprint()
 
         return result
 
@@ -383,6 +430,8 @@ class ComponentMgr(GraphManager):
         assert domain1 != domain2
         assert domain1.partner == domain2 != None
         assert domain2.partner == domain1 != None
+        assert domain1.end3p.hyb_partner is domain2.end5p and domain2.end5p.hyb_partner is domain1.end3p
+        assert domain2.end3p.hyb_partner is domain1.end5p and domain1.end5p.hyb_partner is domain2.end3p
 
         # dset = frozenset((domain1, domain2))
         #sset = frozenset(domain1.strand, domain2.strand)
@@ -399,22 +448,46 @@ class ComponentMgr(GraphManager):
         s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)), HYBRIDIZATION_INTERACTION)
         printd("%s: Removing strand_graph edge (%s, %s, key=%s)" % (type(self).__name__, strand1, strand2, s_edge_key))
         self.strand_graph.remove_edge(strand1, strand2, key=s_edge_key)
-        self.domain_graph.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
-        self.ends5p3p_graph.remove_edge(domain1.end5p, domain2.end3p, key=HYBRIDIZATION_INTERACTION)
-        self.ends5p3p_graph.remove_edge(domain2.end5p, domain1.end3p, key=HYBRIDIZATION_INTERACTION)
+        edge_key = HYBRIDIZATION_INTERACTION
+        self.domain_graph.remove_edge(domain1, domain2, key=edge_key)
+        self.ends5p3p_graph.remove_edge(domain1.end5p, domain2.end3p, key=edge_key)
+        self.ends5p3p_graph.remove_edge(domain2.end5p, domain1.end3p, key=edge_key)
+
+        # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
+        for d in (domain1, domain2):
+            if self.ends5p3p_graph.is_multigraph():
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_nm'] = d.ss_dist_ee_nm
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_sq'] = d.ss_dist_ee_sq
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['stiffness'] = 0
+                # ss backbone has zero stiffness
+            else:
+                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_nm'] = d.ss_dist_ee_nm
+                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ss_dist_ee_sq
+                self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 0  # ss backbone has zero stiffness
 
         ## If domain is stacked, break the stacking interaction before breaking complex:
         unstacking_results = {}
-        for d in (domain1, domain2):
+        for d, h2d in ((domain1, domain2), (domain2, domain1)):
             h1end3p = d.end3p
+            h2end5p = h2d.end5p  # Is "unpartnered" above, so cannot use end.partner
+            #             h1end3p         h1end5p
+            # Helix 1   ----------3' : 5'----------
+            # Helix 2   ----------5' : 3'----------
+            #             h2end5p         h2end3p
             if h1end3p.stack_partner is not None:
                 ## Variable unpacking:
                 h1end5p = h1end3p.stack_partner
-                h2end3p = h1end5p.hyb_partner
-                h2end5p = h2end3p.stack_partner
-                assert h2end5p is h1end3p.hyb_partner
+                h2end3p = h2end5p.stack_partner
+                assert h2end3p == h1end5p.hyb_partner  # Other stacking end is still intact.
+                # Edit: When I do domain.partner = None above, it also sets domain.end5p/3p = None! (property)
+                # assert h2end5p is h1end3p.hyb_partner
                 # With break_complex=False, unstack() will update system-graphs and complex domain graph,
                 # but not check if complex is broken apart.
+                # But wait - we SHOULD check if complex breaks apart. That can EASILY happen.
+                ## TODO: FIX THIS!!
+                ## Hypothesis: We can ONLY break a hybridization that is NOT stacked?
+                ## - Must give correct result for the "1 vs 2 vs N split" example case.
+                ## TODO: CHECK WHETHER DOMAINS CAN DEHYBRIDIZE IF STACKED
                 unstacking_results[frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))] = \
                     self.unstack(h1end3p, h2end5p, h2end3p, h1end5p, break_complex=False)
                 printd("Unstack result for domain %r:" % (d,))
@@ -430,9 +503,13 @@ class ComponentMgr(GraphManager):
             # Manually remove complex edges (but don't break it into two):
             c1 = strand1.complex
             if c1 is not None:
-                c1.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
-                c1._hybridization_fingerprint = None
-                c1._state_fingerprint = None
+                c1.history.append("dehybridize: Removing edge (%r, %r, %r)." %
+                                  (domain1, domain2, HYBRIDIZATION_INTERACTION))
+                c1.remove_hybridization_edge((domain1, domain2))
+                # c1.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
+                # c1.hybridized_pairs.remove(frozenset((domain1, domain2)))
+                # c1._hybridization_fingerprint = None
+                # c1._state_fingerprint = None
             result = {}
 
         result['unstacking_results'] = unstacking_results
@@ -446,7 +523,12 @@ class ComponentMgr(GraphManager):
 
 
     def break_complex_at(self, domain_pair=None, stacking_pair=None, interaction=None):
-        """ Break complex at one or more edges and determine how it splits up. """
+        """
+        Break complex at one or more edges and determine how it splits up.
+        Note: This only deals with the complex (although it uses system graphs for analysis).
+        Make sure to break edges in system graphs before calling this method to determine and
+        process complex breakage.
+        """
         if domain_pair is None and stacking_pair is None:
             raise ValueError("Must provide either domain_pair or stacking_pair.")
         if domain_pair is not None and stacking_pair is not None:
@@ -488,19 +570,33 @@ class ComponentMgr(GraphManager):
 
         assert c is not None
 
-        ## BREAK CONNECTION:
+        ## First, BREAK CONNECTION:
         if domain_pair is not None:
             ## Update complex graph, breaking the d1-d2 hybridization edge:
-            c.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
+            # c.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
+            # c.hybridized_pairs.remove(frozenset(domain_pair))
+            c.remove_hybridization_edge(domain_pair)
+            c.history.append("break_complex_at: Removed edge (%r, %r, %r) and unsetting _hybridization_fingerprint..." %
+                             (domain1, domain2, HYBRIDIZATION_INTERACTION))
             #c.strand_graph.remove_edge(strand1, strand2, s_edge_key)  ## complex strand_graph is obsolete
             c._hybridization_fingerprint = None  # Reset hybridization fingerprint
         if stacking_pair is not None:
             ## Update complex graph, breaking (h1end3p, h1end5p) and (h2end3p, h2end5p) stacking edges:
-            c.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
-            c.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+            # c.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
+            # c.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+            # # Stacked_pairs have direction (h1nd3p, h1end5p) Unless you want it to be the same stacking pair as here?
+            # c.stacked_pairs.remove((h1end3p.domain, h1end5p.domain))
+            # c.stacked_pairs.remove((h1end3p.domain, h2end5p.domain))
+            c.remove_stacking_edge(stacking_pair)
+            c.history.append("break_complex_at: Removed edges (%r, %r, %r) and (%r, %r, %r) and unsetting _stacking_fingerprint..." %
+                             (h1end3p.domain, h1end5p.domain, STACKING_INTERACTION,
+                              h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
             c._stacking_fingerprint = None  # Reset hybridization fingerprint
+        c.history.append(" - break_complex_at: also unsetting _state_fingerprint (was: %s)" % (c._state_fingerprint,))
         c._state_fingerprint = None
         c.domain_distances = {}  # Reset distances:
+
+        ## Then, SEE WHAT HAS HAPPENED TO THE COMPLEX:
 
         ## Determine the connected component for strand 1:
         dom1_cc_oligos = nx.node_connected_component(self.strand_graph, strand1)
@@ -508,6 +604,7 @@ class ComponentMgr(GraphManager):
 
         if strand2 in dom1_cc_oligos:
             ## The two strands are still connected: No need to do anything further
+            c.history.append("( - break_complex_at: complex is still intact.)")
             result['case'] = 0
             result['changed_complexes'] = [c]
             printd("Dehybridize case 0: Complex still intact.")
@@ -537,34 +634,45 @@ class ComponentMgr(GraphManager):
             ## TODO: I don't really need the domain-graph, the strand-level should suffice.
             ## (although it is a good check to have while debuggin...)
             # Make sure NOT to make a copy of graph attributes (nodes/edges/etc)
-            cc_subgraphs = list(connected_component_subgraphs(c, copy=False))
-            if len(cc_subgraphs) != 2:
-                print("Unexpected length %s of connected_component_subgraphs(c):" % len(cc_subgraphs))
-                pprint(cc_subgraphs)
-            graph_minor, graph_major = sorted(cc_subgraphs, key=lambda g: len(g.nodes()))
-            # Remember to add the departing domain.strand to the new_complex_oligos list:
-            new_complex_oligos = set(dom2_cc_oligos if domain1 in graph_major.nodes() else dom1_cc_oligos)
+            # connected_component_subgraphs is not implemented for directed graphs!
+            # However, you can just do it manually using system graphs instead of complex domain graph:
+            # cc_subgraphs = list(connected_component_subgraphs(c, copy=False))
+            # if len(cc_subgraphs) != 2:
+            #     print("Unexpected length %s of connected_component_subgraphs(c):" % len(cc_subgraphs))
+            #     pprint(cc_subgraphs)
+            cc1_nodes = nx.node_connected_component(self.domain_graph, domain1)
+            cc2_nodes = nx.node_connected_component(self.domain_graph, domain2)
+            #graph_minor, graph_major = sorted(cc_subgraphs, key=lambda g: len(g.nodes()))
+            if len(cc1_nodes) < len(cc2_nodes):
+                graph_minor = self.domain_graph.subgraph(cc1_nodes)
+                # Remember to add the departing domain.strand to the new_complex_oligos list:
+                new_complex_oligos = set(dom1_cc_oligos)
+            else:
+                graph_minor = self.domain_graph.subgraph(cc2_nodes)
+                new_complex_oligos = set(dom2_cc_oligos)
             # Use graph_minor to initialize; then all other is obsolete
             # c.strands -= new_complex_oligos
             # c.remove_nodes_from(graph_minor.nodes())
-            c.remove_strands(new_complex_oligos, update_graph=True)
+            c.history.append("break_complex_at: Breaking off minor complex...")
+            removed_hybridization_pairs, removed_stacking_pairs = \
+                c.remove_strands(new_complex_oligos, update_graph=True, update_edge_pairs=True)
             c_new = Complex(data=graph_minor, strands=new_complex_oligos)
+            # Remember to add the hybridized_pairs and stacked_pairs removed from the major complex.
+            c_new.hybridized_pairs |= removed_hybridization_pairs
+            c_new.stacked_pairs |= removed_stacking_pairs
             printd("Dehybridize case (a) - De-hybridization caused splitting into two complexes:")
             printd(" - New complex: %s, nodes = %s" % (c_new, c_new.nodes()))
             printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
             printd(" - graph_minor nodes:", graph_minor.nodes())
-            printd(" - graph_major nodes:", graph_major.nodes())
+            c.history.append(" - break_complex_at: minor complex %r with %s strands broken off." % (c_new, new_complex_oligos))
             result['case'] = 1
             result['changed_complexes'] = [c]
             result['new_complexes'] = [c_new]
-            ## Update super-complex:
-            if c.supercomplex:
-                # We don't know whether they are still connected by secondary connections.
-                pass
         elif dom2_cc_size > 1 or dom1_cc_size > 1:
             # Case (b) one complex and one unhybridized strand - no need to do much further
             # Which-ever complex has more than 1 strands is the major complex:
             domain_minor = domain1 if dom1_cc_size == 1 else domain2
+            c.history.append("break_complex_at: Breaking off strand...")
             c.remove_strand(domain_minor.strand, update_graph=True)
             printd("Dehybridize case (b) - De-hybridization caused a free strand to split away:")
             printd(" - Free strand: %s, nodes = %s" % (domain_minor.strand, domain_minor.strand.nodes()))
@@ -577,9 +685,10 @@ class ComponentMgr(GraphManager):
             result['case'] = 3
             result['obsolete_complexes'] = [c]
             result['free_strands'] = [domain1.strand, domain2.strand]
-            c.remove_strands({strand1, strand2})
-            c.remove_nodes_from(strand1) # iter(nx.Graph) yields nodes.
-            c.remove_nodes_from(strand2)
+            c.history.append("break_complex_at: Breaking now-obsolete complex into two free strands...")
+            c.remove_strands((strand1, strand2), update_graph=True)
+            # c.remove_nodes_from(strand1) # iter(nx.Graph) yields nodes.
+            # c.remove_nodes_from(strand2)
             assert c.strands == set()
             ## This sometimes fails:
             if not all(len(strandset) == 0 for strandset in c.strands_by_name.values()):
@@ -635,14 +744,10 @@ class ComponentMgr(GraphManager):
         stacking_tuple = ((h1end3p, h2end5p), (h2end3p, h1end5p))
         stacking_pair = frozenset(stacking_tuple)
         ## Variable unpacking:
-        h1domain1 = h1end3p.domain
-        h1domain2 = h1end5p.domain
-        h2domain1 = h2end3p.domain
-        h2domain2 = h2end5p.domain
-        h1strand1 = h1domain1.strand
-        h1strand2 = h1domain2.strand
-        h2strand1 = h2domain1.strand
-        h2strand2 = h2domain2.strand
+        h1strand1 = h1end3p.domain.strand
+        h1strand2 = h1end5p.domain.strand
+        h2strand1 = h2end3p.domain.strand
+        h2strand2 = h2end5p.domain.strand
         c1 = h1strand1.complex
         c2 = h1strand2.complex
         if c1:
@@ -675,32 +780,43 @@ class ComponentMgr(GraphManager):
 
         ## Update system-level graphs:
         edge_kwargs = {"interaction": STACKING_INTERACTION,
-                       ## TODO: Decide whether "len" is in bp or nm.
-                       ## You could have separate attrs, length_nm and length_bp, but there should be just one "len".
-                       "len": 0.5, # With of ds helix ~ 2 nm ~ 6 bp
-                       "weight": 2,
+                       ## You can have separate attrs, length_nm and length_bp, but there should be just one "len":
+                       #"len": 0.5, # With of ds helix ~ 2 nm ~ 6 bp
+                       #"weight": 2,
                        #"key": HYBRIDIZATION_INTERACTION
+                       "dist_ee_nm": HELIX_STACKING_DIST,
+                       "dist_ee_sq": HELIX_STACKING_DIST**2,
+                       "stiffness": 1,
                       }
-        h1_edge_key = (frozenset((h1end3p.instance_name, h1end5p.instance_name)), STACKING_INTERACTION)
-        h2_edge_key = (frozenset((h2end3p.instance_name, h2end5p.instance_name)), STACKING_INTERACTION)
+        # h1_edge_key = (frozenset((h1end3p.instance_name, h1end5p.instance_name)), STACKING_INTERACTION)
+        # h2_edge_key = (frozenset((h2end3p.instance_name, h2end5p.instance_name)), STACKING_INTERACTION)
+        # Edit: domain-level stacking interactions have directionality, use tuple:
+        h1_edge_key = (STACKING_INTERACTION, (h1end3p.instance_name, h1end5p.instance_name))
+        h2_edge_key = (STACKING_INTERACTION, (h2end3p.instance_name, h2end5p.instance_name))
+
         printd("Adding strand_graph edge (%s, %s, key=%s)" % (h1strand1, h1strand2, h1_edge_key))
         self.strand_graph.add_edge(h1strand1, h1strand2, key=h1_edge_key, interaction=STACKING_INTERACTION)
         printd("Adding strand_graph edge (%s, %s, key=%s)" % (h2strand1, h2strand2, h2_edge_key))
         self.strand_graph.add_edge(h2strand1, h2strand2, key=h2_edge_key, interaction=STACKING_INTERACTION)
 
-        self.domain_graph.add_edge(h1domain1, h1domain2, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
-        self.domain_graph.add_edge(h2domain1, h2domain2, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
+        self.domain_graph.add_edge(h1end3p.domain, h1end5p.domain, key=h1_edge_key, attr_dict=edge_kwargs)
+        self.domain_graph.add_edge(h2end3p.domain, h2end5p.domain, key=h2_edge_key, attr_dict=edge_kwargs)
         self.ends5p3p_graph.add_edge(h1end3p, h1end5p, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
         self.ends5p3p_graph.add_edge(h2end3p, h2end5p, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
 
         if join_complex and self.stacking_joins_complexes:
             result = self.join_complex_at(stacking_pair=stacking_tuple, edge_kwargs=edge_kwargs)
         else:
+            assert False  # Making sure this doesn't happen during testing...
             if c1 is not None:
-                c1.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
-                c1.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
-                c1._stacking_fingerprint = None  # Reset hybridization fingerprint
-                c1._state_fingerprint = None
+                c1.history.append(("stack: Manually adding stacking edges (%r, %r) (%r, %r) "
+                                   "but not performing merge (if relevant).") %
+                                  (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain))
+                c1.add_stacking_edge(stacking_tuple)
+                # c1.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
+                # c1.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
+                # c1._stacking_fingerprint = None  # Reset hybridization fingerprint
+                # c1._state_fingerprint = None
             result = None
 
         if self.hyb_dehyb_file:
@@ -738,14 +854,10 @@ class ComponentMgr(GraphManager):
         stacking_pair = frozenset(stacking_tuple)
 
         ## Variable unpacking:
-        h1domain1 = h1end3p.domain
-        h1domain2 = h1end5p.domain
-        h2domain1 = h2end3p.domain
-        h2domain2 = h2end5p.domain
-        h1strand1 = h1domain1.strand
-        h1strand2 = h1domain2.strand
-        h2strand1 = h2domain1.strand
-        h2strand2 = h2domain2.strand
+        h1strand1 = h1end3p.domain.strand
+        h1strand2 = h1end5p.domain.strand
+        h2strand1 = h2end3p.domain.strand
+        h2strand2 = h2end5p.domain.strand
         c1 = h1strand1.complex
         c2 = h1strand2.complex
         if c1:
@@ -764,15 +876,18 @@ class ComponentMgr(GraphManager):
         h1end3p.stack_string = h1end5p.stack_string = h2end3p.stack_string = h2end5p.stack_string = None
 
         ## Update system-level graphs:
-        h1_edge_key = (frozenset((h1end3p.instance_name, h1end5p.instance_name)), STACKING_INTERACTION)
-        h2_edge_key = (frozenset((h2end3p.instance_name, h2end5p.instance_name)), STACKING_INTERACTION)
+        # h1_edge_key = (frozenset((h1end3p.instance_name, h1end5p.instance_name)), STACKING_INTERACTION)
+        # h2_edge_key = (frozenset((h2end3p.instance_name, h2end5p.instance_name)), STACKING_INTERACTION)
+        # Edit: stacking keys have directionality. Use tuple.
+        h1_edge_key = (STACKING_INTERACTION, (h1end3p.instance_name, h1end5p.instance_name))
+        h2_edge_key = (STACKING_INTERACTION, (h2end3p.instance_name, h2end5p.instance_name))
         printd("Removing strand_graph edge (%s, %s, key=%s)" % (h1strand1, h1strand2, h1_edge_key))
         self.strand_graph.remove_edge(h1strand1, h1strand2, key=h1_edge_key)
         printd("Removing strand_graph edge (%s, %s, key=%s)" % (h2strand1, h2strand2, h2_edge_key))
         self.strand_graph.remove_edge(h2strand1, h2strand2, key=h2_edge_key)
 
-        self.domain_graph.remove_edge(h1domain1, h1domain2, key=STACKING_INTERACTION)
-        self.domain_graph.remove_edge(h2domain1, h2domain2, key=STACKING_INTERACTION)
+        self.domain_graph.remove_edge(h1end3p.domain, h1end5p.domain, key=h1_edge_key)
+        self.domain_graph.remove_edge(h2end3p.domain, h2end5p.domain, key=h2_edge_key)
         self.ends5p3p_graph.remove_edge(h1end3p, h1end5p, key=STACKING_INTERACTION)
         self.ends5p3p_graph.remove_edge(h2end3p, h2end5p, key=STACKING_INTERACTION)
 
@@ -780,13 +895,27 @@ class ComponentMgr(GraphManager):
             result = self.break_complex_at(stacking_pair=stacking_tuple)
         else:
             # Manually update complex domain graph, but do not process/break the complex into two (if applicable).
+            assert False # checking that this does not happen during testing..
             if c1 is not None:
                 # c1.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
                 # c1._hybridization_fingerprint = None
-                c1.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
-                c1.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
-                c1._stacking_fingerprint = None  # Reset hybridization fingerprint
-                c1._state_fingerprint = None
+                # old_fingerprints1 = c1.get_all_fingerprints()
+                # c1.reset_state_fingerprint()
+                # old_fingerprints2 = c1.get_all_fingerprints()
+                c1.history.append(("unstack: Manually removing stacking edges (%r, %r) (%r, %r) "
+                                   "but not breaking complex (if relevant)...") %
+                                  (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain))
+                c1.remove_stacking_edge(stacking_tuple)
+                # c1.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
+                # c1.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+                # c1.reset_state_fingerprint()
+                # c1._stacking_fingerprint = None  # Reset hybridization fingerprint
+                # c1._state_fingerprint = None
+                # for end in h1end3p, h2end5p, h2end3p, h1end5p:
+                #     end.domain.state_change_reset(reset_complex=False)
+                # new_fingerprints = c1.get_all_fingerprints()
+                # assert new_fingerprints != old_fingerprints2
+
             result = None
 
         if self.hyb_dehyb_file:

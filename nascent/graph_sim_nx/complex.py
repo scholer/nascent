@@ -41,12 +41,16 @@ interactions.
 """
 
 
-from collections import defaultdict #, deque
+from collections import defaultdict, Counter, deque
 import networkx as nx
+from pprint import pprint
+from functools import wraps
+import pdb
 
 # Relative imports
 from .connected_multigraph import ConnectedMultiGraph
 from .utils import (sequential_number_generator, sequential_uuid_gen)
+from .nx_utils import draw_graph_and_save
 from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
@@ -59,10 +63,28 @@ make_sequential_id = sequential_number_generator()
 supercomplex_sequential_id_gen = sequential_number_generator()
 
 
+def state_should_change(method):
+    """ Decorator for methods that are expected to change the Complex state fingerprint.
+    Will save the current-soon-to-be-obsolete fingerprint, invoke the method to change the state,
+    and finally ensure that the the method actually changed the Complex' state by
+    asserting that the new state fingerprint is not the same as the old fingerprint."""
+    @wraps(method)
+    def replacement_func(self, *args, **kwargs):
+        old_fingerprint = self.state_fingerprint()
+        ret = method(self, *args, **kwargs)
+        self.reset_state_fingerprint()
+        new_fingerprint = self.state_fingerprint()
+        assert new_fingerprint != old_fingerprint
+        return ret
+    return replacement_func
 
 
 
-class Complex(nx.MultiGraph):
+
+# connected_component_subgraphs is not implemented for directed graphs.
+# But we can just use system graphs instead...
+
+class Complex(nx.MultiDiGraph):
     """
     This class represents a graph of connected domains.
 
@@ -95,17 +117,17 @@ class Complex(nx.MultiGraph):
         for strand in strands:
             strand.complex = self
         self.domains = self.nodes  # alias
-        self.supercomplex = None
         # Should strands be a set or list? Set is most natural, but a list might play better with a adjacency matrix.
         # Then, you could just have a dict mapping strand -> index of the matrix
         self.strands = set(strands)
-        #self._domains = itertools.chain(s.domains for s in strands)
-        if data is None:
-            #self.add_nodes_from(self.domains_gen()) # Add all domains as nodes
-            # Use the (linear) strand graphs to build an initial graph with phosphate backbones:
-            for strand in strands:
-                self.add_nodes_from(strand.nodes(data=True))
-                self.add_edges_from(strand.edges(data=True, keys=True))
+
+        # If we know how many of each domain species we have, we can make the problem of graph isomorphism
+        # a little easier. (In particular the case where we only have *one* of each domain species.)
+        # For domains with specie count >1, instead of using just domain specie, you could use
+        # domain.in_complex_identifier. It will not be 100% ceretain/accurate, but it should be close enough.
+        self.domain_species_counter = Counter()
+        # We are already calculating a strand-species count, might as well make it permanent running counter:
+        self.strand_species_counter = Counter()
 
         # Distances between domains.
         # If we have N domains, then we have sum(1..(N-1)) = N**2 - N possible distances?
@@ -118,19 +140,10 @@ class Complex(nx.MultiGraph):
 
         # Having a list of strands indexed by strand name is useful (e.g. for fingerprinting)
         self.strands_by_name = defaultdict(set)
-        for strand in strands:
-            strand.complex = self
-            self.strands_by_name[strand.name].add(strand)
 
-        # Domains, indexed by name:
-        # Should it be a set or a list?
-        # We do have random access and modification, so maybe a list is better?
-        self.domains_by_name = defaultdict(set)
-        for domain in self.domains():
-            self.domains_by_name[domain.name].add(domain)
-
-        self.hybridized_domains = set() # set of frozenset({dom1, dom2}) sets, specifying which domains are hybridized.
-        self.stacked_pairs = set()    # set of tuples. (5p-domain, 3p-domain)
+        # self.hybridized_domains = set() # set of frozenset({dom1, dom2}) sets, specifying which domains are hybridized.
+        self.hybridized_pairs = set() # set of domain pairs: frozenset({dom1, dom2})
+        self.stacked_pairs = set()    # set of domain two-tuples. (5p-domain, 3p-domain)
 
         # State fingerprint is used for cache lookup
         # To reduce recalculation overhead, it is separated into three parts:
@@ -144,6 +157,38 @@ class Complex(nx.MultiGraph):
         self._historic_strands = []
         self._historic_fingerprints = []
         self.N_strand_changes = 0
+        self.icid_radius = 5
+        # Use domain instance instead of in_complex_identifier. Caching efficiency will decrease.
+        # If Complex.icid_use_instance has been set to True, fall back to using domain instances as
+        # in_complex_identifier (icid) for *all* domains. If icid_use_instance is not True but is
+        # boolean True, it is assumed to be a set of domains for which to use domain instance as icid.
+        self.icid_use_instance = False
+
+        self.history = deque(maxlen=100) # []
+
+        ## Load initial strands:
+        if data is None:
+            #self.add_nodes_from(self.domains_gen()) # Add all domains as nodes
+            # Use the (linear) strand graphs to build an initial graph with phosphate backbones:
+            for strand in strands:
+                if self.is_directed() and not strand.is_directed():
+                    strand = nx.MultiDiGraph(strand)
+                self.add_nodes_from(strand.nodes(data=True))
+                self.add_edges_from(strand.edges(data=True, keys=True))
+
+        for strand in strands:
+            strand.complex = self
+            self.strands_by_name[strand.name].add(strand)
+            self.strand_species_counter[strand.name] += 1
+
+        # Domains, indexed by name:
+        # Should it be a set or a list?
+        # We do have random access and modification, so maybe a list is better?
+        self.domains_by_name = defaultdict(set)
+        for domain in self.domains():
+            self.domains_by_name[domain.name].add(domain)
+            self.domain_species_counter[domain.name] += 1
+
 
         ### Graphs: ###
 
@@ -188,28 +233,103 @@ class Complex(nx.MultiGraph):
     #         # self.ends5p3p_graph.remove_nodes_from([domain.end5p, domain.end3p])
 
 
+
+    def print_history(self, history=None, level=0, indent_str="    ", search_str=None, limit=20, totlimit=100,
+                      reverse=True, last_first=True):
+        print("History for %r (%s, %s)" % (self, "reversed" if reverse else "", "last-first" if last_first else ""))
+        if history is None:
+            history = self.history
+        if last_first ^ reverse: # last_first != reverse, XOR
+            entries = self.gen_history_records(history=history, level=level, search_str=search_str,
+                                               limit=limit, totlimit=totlimit, reverse=reverse)
+        else:
+            entries = reversed(list(self.gen_history_records(
+                history=history, level=level, search_str=search_str,
+                limit=limit, totlimit=totlimit, reverse=reverse)))
+        for (level, entry) in entries:
+            print(indent_str*level + entry)
+
+    def history_str(self, history=None, level=0, indent_str="    ", search_str=None, sep="\n",
+                    limit=20, totlimit=100, reverse=False):
+        return sep.join((indent_str*level + entry) for level, entry
+            in self.gen_history_records(history=history, level=level, search_str=search_str,
+                                        limit=limit, totlimit=totlimit, reverse=reverse))
+
+    def gen_history_records(self, history=None, level=0, search_str=None, limit=20, totlimit=1000, reverse=False):
+        if history is None:
+            history = self.history
+        if limit and limit < len(history):
+            org_length = len(history)
+            history = history[-limit:] # Makes a slice copy
+            history[0] = "(...history truncated to %s of %s entries...)" % (len(history), org_length)
+        if reversed:
+            history = reversed(history)
+        for entry in history:
+            totlimit -= 1
+            if totlimit < 0:
+                yield "(...totlimit reached, breaking of here...)"
+                break
+            if isinstance(entry, str):
+                if search_str is None or search_str in entry:
+                    yield (level, entry)
+            else:
+                # Returning a final value from a generator and obtaining it with "yield from" is
+                # a new feature of python 3.3:
+                totlimit = yield from self.gen_history_records(history=entry, level=level+1,
+                                                               search_str=search_str,
+                                                               limit=limit-1, totlimit=totlimit)
+        return totlimit
+
+    @state_should_change
     def add_strand(self, strand, update_graph=False):
         """ We keep track of strands for use with fingerprinting, etc. """
         printd("%r: Adding strand %r..." % (self, strand))
         self.strands.add(strand)
         self.strands_by_name[strand.name].add(strand)
+        self.strand_species_counter[strand.name] += 1
         strand.complex = self
+        for domain in strand.domains:
+            self.domains_by_name[domain.name].add(domain)
+            self.domain_species_counter[domain.name] += 1
         if update_graph:
             # strand is also a (linear) graph of domains:
+            if self.is_directed() and not strand.is_directed():
+                strand = nx.MultiDiGraph(strand)
             self.add_nodes_from(strand.nodes(data=True))
             self.add_edges_from(strand.edges(data=True, keys=True))
             # self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph)
             # self.strand_graph.add_node(strand)
         self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
         self.N_strand_changes += 1
+        self.history.append("add_strand: Adding strand %r (update_graph=%s)" % (strand, update_graph))
+        self.reset_state_fingerprint()
 
-    def remove_strand(self, strand, update_graph=False):
+
+    @state_should_change
+    def remove_strand(self, strand, update_graph=False, update_edge_pairs=True):
         """ We keep track of strands for use with fingerprinting, etc. """
         printd("%r: Removing strand %r..." % (self, strand))
+        all_removed_hybridization_pairs, all_removed_stacking_pairs = set(), set()
         self.strands.remove(strand)
         self.strands_by_name[strand.name].remove(strand)
+        self.strand_species_counter[strand.name] -= 1
+        if self.strand_species_counter[strand.name] == 0:
+            del self.strand_species_counter[strand.name]
         if strand.complex == self:
             strand.complex = None
+        for domain in strand.domains:
+            self.domains_by_name[domain.name].remove(domain)
+            self.domain_species_counter[domain.name] -= 1
+            if self.domain_species_counter[domain.name] < 1:
+                del self.domain_species_counter[domain.name]
+            if update_edge_pairs:
+                obsolete_hybridization_pairs = {pair for pair in self.hybridized_pairs
+                                                if domain in pair}
+                self.hybridized_pairs -= obsolete_hybridization_pairs
+                obsolete_stacking_pairs = {pair for pair in self.stacked_pairs if domain in pair}
+                self.stacked_pairs -= obsolete_stacking_pairs
+                all_removed_hybridization_pairs |= obsolete_hybridization_pairs
+                all_removed_stacking_pairs |= obsolete_stacking_pairs
         if update_graph:
             # strand is also a (linear) graph of domains:
             self.remove_nodes_from(strand)
@@ -217,14 +337,24 @@ class Complex(nx.MultiGraph):
             # self.strand_graph.remove_node(strand)
         self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
         self.N_strand_changes += 1
+        self.history.append("remove_strand: Removing strand %r (update_graph=%s)" % (strand, update_graph))
+        return all_removed_hybridization_pairs, all_removed_stacking_pairs
 
+
+    @state_should_change
     def add_strands(self, strands, update_graph=False):
         """ Strands must be a set. """
         printd("%r: Adding strands %s..." % (self, strands))
         for strand in strands:
             self.strands_by_name[strand.name].add(strand)
+            self.strand_species_counter[strand.name] += 1
             strand.complex = self
+            for domain in strand.domains:
+                self.domains_by_name[domain.name].add(domain)
+                self.domain_species_counter[domain.name] += 1
             if update_graph:
+                if self.is_directed() and not strand.is_directed():
+                    strand = nx.MultiDiGraph(strand) # to_directed() returns a DEEP copy of the data. We DO NOT want that.
                 # strand is also a (linear) graph of domains:
                 self.add_nodes_from(strand.nodes(data=True))
                 self.add_edges_from(strand.edges(data=True, keys=True))
@@ -234,14 +364,35 @@ class Complex(nx.MultiGraph):
         self.strands |= strands
         self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
         self.N_strand_changes += 1
+        self.history.append("add_strands: Adding strands %s (update_graph=%s)" % (strands, update_graph))
 
-    def remove_strands(self, strands, update_graph=False):
+
+    @state_should_change
+    def remove_strands(self, strands, update_graph=False, update_edge_pairs=True):
         """ Strands must be a set. """
         printd("%r: Removing strands %s..." % (self, strands))
+        self.history.append("remove_strands: Removing strands %s (update_graph=%s)" % (strands, update_graph))
+        all_removed_hybridization_pairs, all_removed_stacking_pairs = set(), set()
         for strand in strands:
             self.strands_by_name[strand.name].remove(strand)
+            self.strand_species_counter[strand.name] -= 1
+            if self.strand_species_counter[strand.name] < 1:
+                del self.strand_species_counter[strand.name]
             if strand.complex == self:
                 strand.complex = None
+            for domain in strand.domains:
+                self.domains_by_name[domain.name].remove(domain)
+                self.domain_species_counter[domain.name] -= 1
+                if self.domain_species_counter[domain.name] < 1:
+                    del self.domain_species_counter[domain.name]
+                if update_edge_pairs:
+                    obsolete_hybridization_pairs = {pair for pair in self.hybridized_pairs
+                                                    if domain in pair}
+                    obsolete_stacking_pairs = {pair for pair in self.stacked_pairs if domain in pair}
+                    self.hybridized_pairs -= obsolete_hybridization_pairs
+                    self.stacked_pairs -= obsolete_stacking_pairs
+                    all_removed_hybridization_pairs |= obsolete_hybridization_pairs
+                    all_removed_stacking_pairs |= obsolete_stacking_pairs
             if update_graph:
                 # strand is also a (linear) graph of domains:
                 self.remove_nodes_from(strand)
@@ -252,6 +403,57 @@ class Complex(nx.MultiGraph):
         self.strands -= strands
         self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
         self.N_strand_changes += 1
+        return all_removed_hybridization_pairs, all_removed_stacking_pairs
+
+
+    @state_should_change
+    def add_hybridization_edge(self, domain_pair):
+        self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
+        domain1, domain2 = domain_pair
+        self.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
+        if self.is_directed():
+            self.add_edge(domain2, domain1, key=HYBRIDIZATION_INTERACTION)
+        self.hybridized_pairs.add(frozenset(domain_pair))
+        self._hybridization_fingerprint = None
+        self._state_fingerprint = None
+
+    @state_should_change
+    def remove_hybridization_edge(self, domain_pair):
+        self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
+        domain1, domain2 = domain_pair
+        self.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
+        if self.is_directed():
+            self.remove_edge(domain2, domain1, key=HYBRIDIZATION_INTERACTION)
+        self.hybridized_pairs.remove(frozenset(domain_pair))
+        self._hybridization_fingerprint = None
+        self._state_fingerprint = None
+
+    @state_should_change
+    def add_stacking_edge(self, stacking_pair):
+        """
+        Stacking pair must be tuple ((h1end3p, h2end5p), (h2end3p, h1end5p))
+        or frozenset((h1end3p, h2end5p), (h2end3p, h1end5p)).
+        """
+        self.history.append("add_stacking_edge: stacking_pair = %s" % (stacking_pair,))
+        (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+        self.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
+        self.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+        self.stacked_pairs.add((h1end3p.domain, h1end5p.domain))
+        self.stacked_pairs.add((h2end3p.domain, h2end5p.domain))
+        self._stacking_fingerprint = None
+        self._state_fingerprint = None
+
+    @state_should_change
+    def remove_stacking_edge(self, stacking_pair):
+        self.history.append("remove_stacking_edge: stacking_pair = %s" % (stacking_pair,))
+        (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+        self.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
+        self.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+        self.stacked_pairs.remove((h1end3p.domain, h1end5p.domain))
+        self.stacked_pairs.remove((h2end3p.domain, h2end5p.domain))
+        self._stacking_fingerprint = None
+        self._state_fingerprint = None
+
 
 
     def state_fingerprint(self):
@@ -294,6 +496,18 @@ class Complex(nx.MultiGraph):
             The best is probably to probe the local environment.
 
         """
+        ## TODO: Add check that no two domains in the complex has the same in_complex_identifier:
+        #in_complex_id_counts = Counter([d.in_complex_identifier() for d in self.nodes()])
+        nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
+        in_complex_id_counts = Counter(nonzero_icids)
+        # if 0 in in_complex_id_counts:
+        #     # icid of 0 means "this domain is the only of its kind, no need to calculate an icid."
+        #     del in_complex_id_counts[0]
+        if any(count > 1 for icid, count in in_complex_id_counts.items()):
+            self.adjust_icid_radius_or_use_instance(in_complex_id_counts)
+        ## TODO: Add fall-back to using domain instances (rather than state species) for fingerprint.
+        ## This will not be useful for caching between complexes, but might still be used within the same
+        ## complex, as long as we don't have strand swapping.
         if not self._state_fingerprint:
             ## TODO: Re-enable hashing when I'm done debugging
             ## Must not include anything unique to this complex instance such as str(self)
@@ -301,12 +515,50 @@ class Complex(nx.MultiGraph):
                 self.strands_fingerprint(),
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()  ## TODO: Implement stacking
-                )) % 10000  # TODO: Remove modulus when done debugging.
+                )) % 100000  # TODO: Remove modulus when done debugging.
             self._historic_fingerprints.append((self._state_fingerprint,))
+            self.history.append("state_fingerprint: Calculated fingerprint: %r" % (self._state_fingerprint,))
         return self._state_fingerprint
 
+    def adjust_icid_radius_or_use_instance(self, in_complex_id_counts=None, n_tries=3):
+        if in_complex_id_counts is None:
+            # icid of 0 means "this domain is the only of its kind, no need to calculate an icid."
+            # We can have as many of these as we'd like.
+            nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
+            in_complex_id_counts = Counter(nonzero_icids)
+        while n_tries > 0:
+            # if 0 in in_complex_id_counts:
+            #     del in_complex_id_counts[0]
+            self.icid_radius *= 2 # Double the range (up to n_tries=4 times: 2, 4, 8, 16 times original)
+            for domain in self.nodes():
+                domain.state_change_reset(reset_complex=False)
+            nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
+            in_complex_id_counts = Counter(nonzero_icids)
+            n_tries -= 1
+            if all(count < 2 for icid, count in in_complex_id_counts.items()):
+                print("adjust_icid_radius_or_use_instance: Unique icid found at icid_radius %s for %r" %
+                      (self.icid_radius, self))
+                pdb.set_trace()
+                break
+        else:
+            # Increasing icid range did not help; fall back to using domain instances...
+            print("# Increasing icid range did not help; falling back to using domain instances...")
+            # If Complex.icid_use_instance has been set to True, fall back to using domain instances as
+            # in_complex_identifier (icid) for *all* domains. If icid_use_instance is not True but is
+            # boolean True, it is assumed to be a set of domains for which to use domain instance as icid.
+            self.icid_use_instance = True
+            for domain in self.nodes():
+                domain.state_change_reset(reset_complex=False)
+            pdb.set_trace()
 
-    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False):
+
+    def get_all_fingerprints(self):
+        return (self._state_fingerprint, self._strands_fingerprint, self._stacking_fingerprint)
+
+
+    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False,
+                                reset_domains=True):
+        self.history.append("reset_state_fingerprint: Unsetting fingerprints: %r" % (locals(),))
         self._state_fingerprint = None
         if reset_strands:
             self._strands_fingerprint = None
@@ -314,7 +566,9 @@ class Complex(nx.MultiGraph):
             self._hybridization_fingerprint = None
         if reset_stacking:
             self._stacking_fingerprint = None
-
+        if reset_domains:
+            for domain in self.domains():
+                domain.state_change_reset(reset_complex=False)
 
     # def domains_gen(self):
     #     return (domain for strand in self.strands for domain in strand.domains)
@@ -322,11 +576,29 @@ class Complex(nx.MultiGraph):
     def strands_species_count(self):
         """ Count the number of strand species. Used as part of complex state finger-printing. """
         species_counts = {}
+        domain_species_counts = {}
         for strand in self.strands:
             if strand.name not in species_counts:
                 species_counts[strand.name] = 1
             else:
                 species_counts[strand.name] += 1
+            for domain in strand.domains:
+                if domain.name not in domain_species_counts:
+                    domain_species_counts[domain.name] = 1
+                else:
+                    domain_species_counts[domain.name] += 1
+        # Remove entries with zero count:
+        depleted = [sname for sname, count in self.strand_species_counter.items() if count < 1]
+        for sname in depleted:
+            del self.strand_species_counter[sname]
+
+        assert species_counts == self.strand_species_counter
+
+        # Remove entries with zero count:
+        depleted = [name for name, count in self.domain_species_counter.items() if count < 1]
+        for name in depleted:
+            del self.domain_species_counter[name]
+        assert domain_species_counts == self.domain_species_counter
         #return species_counts
         # Used for hashing, so return a hashable frozenset(((specie1, count), ...))
         return frozenset(species_counts.items())
@@ -337,6 +609,7 @@ class Complex(nx.MultiGraph):
             ## TODO: Re-add hashing when I'm done debugging
             # self._strands_fingerprint = hash(self.strands_species_count())
             self._strands_fingerprint = self.strands_species_count()
+            self.history.append("strands_fingerprint: Calculated strands fingerprint: %r" % (self._strands_fingerprint,))
         return self._strands_fingerprint
 
     def hybridization_fingerprint(self):
@@ -382,10 +655,29 @@ class Complex(nx.MultiGraph):
         I will defer the issue of isomorphic degeneracies to later.
         """
         if not self._hybridization_fingerprint:
-            hyb_edges = self.hybridization_edges()
-            edgesfs = frozenset(frozenset(d.domain_strand_specie for d in edge) for edge in hyb_edges)
+            ## TODO: Hey, uhm, does this really work if we have multiple copies of the same domain specie?
+            ## If we have multiple, I think we might need to COUNT. And even then,
+            ## If we have hybridizations A#1:a#2 and A#3:a#4,
+            ## how do we tell that apart from A#1:a#4 and A#3:a#2, if all we have is
+            ## ({A, a}, 2) = "There is two A:a connections".
+            ## Use (domain.specie, domain.in_complex_identifier) instead?
+            edge_pairs = [frozenset((d.domain_strand_specie, d.in_complex_identifier()) for d in edge)
+                          for edge in self.hybridization_edges()]
+            edgesfs = frozenset(edge_pairs)
+            # If complex is a directed graph, we add edges both back and forth.
+            # Thus, we get two edges between each pair of domains.
+            # We expect to get half the size if we make a set:
+            if len(edgesfs) != len(edge_pairs)/2:
+                print("Domain.hybridization_fingerprint: WARNING! len(edgesfs) != len(edge_pairs) (%s vs %s)" %
+                      (len(edgesfs), len(edge_pairs)))
+                if len(edge_pairs) < 10:
+                    print("edge_pairs:")
+                    pprint(edge_pairs)
+                    print("edgesfs:")
+                    pprint(edgesfs)
             ## TODO: Re-add hashing when I'm done debugging
             self._hybridization_fingerprint = edgesfs # hash(edgesfs)
+            self.history.append("hybridization_fingerprint: Calculated hybridization fingerprint: %r" % (self._hybridization_fingerprint,))
         return self._hybridization_fingerprint
 
 
@@ -396,11 +688,16 @@ class Complex(nx.MultiGraph):
 
         """
         # you can loop over all edges and filter by type:
-        hyb_edges = [(d1, d2) for d1, d2, cnxtype in self.edges(data='interaction')
-                     if cnxtype == HYBRIDIZATION_INTERACTION]
+        edges = [(d1, d2) for d1, d2, key, interaction in self.edges(keys=True, data='interaction')
+                 if key == HYBRIDIZATION_INTERACTION or interaction == HYBRIDIZATION_INTERACTION]
         # or maybe it is easier to keep a dict with hybridization connections:
         # hyb_edges = self.hybridized_domains
-        return hyb_edges
+        # if self.is_directed():
+        assert set(frozenset(tup) for tup in edges) == self.hybridized_pairs
+        # else:
+        #     assert set(frozenset(tup) for tup in edges) == self.hybridized_pairs
+        return edges
+
 
     def stacking_fingerprint(self):
         """
@@ -409,10 +706,20 @@ class Complex(nx.MultiGraph):
         """
         if not self._stacking_fingerprint:
             # This is using (d1, d2) tuple rather than {d1, d2} frozenset, since directionality matters.
-            edgesfs = frozenset(frozenset((e.domain.domain_strand_specie, e.end) for e in edge)
-                                for edge in self.stacked_pairs)
+            # edgesfs = frozenset(frozenset((e.domain.domain_strand_specie, e.end) for e in edge)
+            #                     for edge in self.stacking_edges())
+            # NOTE: STACKING EDGES HAVE DIRECTIONALITY! h1: d1end3p -> d2.end5p - DO NOT USE FROZENSET.
+            edge_pairs = [tuple((d.domain_strand_specie, d.in_complex_identifier()) for d in edge)
+                          for edge in self.stacking_edges()]
+            edgesfs = frozenset(edge_pairs)
+            if len(edgesfs) != len(edge_pairs):
+                # Primitive check - not all edges are unique. Should not happen. But is not enough to avoid problems!
+                print("Domain.hybridization_fingerprint: WARNING! len(edgesfs) != len(edge_pairs) (%s vs %s)" %
+                      (len(edgesfs), len(edge_pairs)))
+                assert len(edgesfs) == len(edge_pairs)
             ## TODO: Re-enable hashing when I'm done debugging:
             self._stacking_fingerprint = edgesfs # hash(edgesfs)
+            self.history.append("stacking_fingerprint: Calculated stacking fingerprint: %r" % (self._stacking_fingerprint,))
         return self._stacking_fingerprint
 
 
@@ -429,11 +736,15 @@ class Complex(nx.MultiGraph):
         """
         # you can loop over all edges and filter by type:
         # But need directionality to know which end of the domain is pairing.
-        #hyb_edges = [frozenset((d1, d2)) for d1, d2, cnxtype in self.edges(data='type')
-                     #if cnxtype == STACKING_INTERACTION]
+        # New: Complex is now a directed graph. It won't work for analysis,
+        # but we have system graphs for that, so let's try.
+        stack_edges = [(d1, d2) for d1, d2, key, interaction in self.edges(keys=True, data='interaction')
+                       if key == STACKING_INTERACTION or interaction == STACKING_INTERACTION]
+        # Only if Complex is a DiGraph:
+        assert set(stack_edges) == self.stacked_pairs and len(set(stack_edges)) == len(self.stacked_pairs)
         # For now, I have to keep a dict with hybridization connections:
+        return stack_edges
         #return self.stacked_pairs
-        pass
 
 
     def stacked_subgraph(self):
@@ -454,6 +765,10 @@ class Complex(nx.MultiGraph):
         subg.add_edges_from(edges)
         return subg
 
+    def draw_graph_and_save(self, outputfn, node_labels=True, **kwargs):
+        if node_labels is True:
+            node_labels = {node: node.instance_name for node in self.nodes()}
+        draw_graph_and_save(self, outputfn, labels=node_labels, **kwargs)
 
 
     def fqdn(self):
@@ -502,4 +817,3 @@ class SuperComplex(ConnectedMultiGraph):
 
     def reset_state_fingerprint(self):
         self._state_fingerprint = None
-

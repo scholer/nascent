@@ -20,15 +20,19 @@
 
 from pprint import pprint
 
+# do_print = False
+do_print = True
+
 
 def print_debug(*args, origin=None, **kwargs):
-    print(*args, **kwargs)
+    """ Change module-level do_print variable to toggle behaviour. """
+    if do_print:
+        print(*args, **kwargs)
+
 
 def mute(*args, **kwargs):
     pass
 
-# do_print = False
-do_print = True
 
 if do_print:
     pprintd = pprint

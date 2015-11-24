@@ -61,7 +61,6 @@ logger = logging.getLogger(__name__)
 
 # Nascent imports:
 from nascent.graph_sim_nx.domain import Domain
-from nascent.graph_visualization.graph_utils import directed_for_all_edges
 from nascent.graph_sim_nx.constants import (HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
                                             PHOSPHATEBACKBONE_INTERACTION)
 from .graph_translators import (translate_domain_graph_to_5p3p_str_graph,
@@ -70,6 +69,7 @@ from .graph_translators import (translate_domain_graph_to_5p3p_str_graph,
                                 translate_domain_change_to_5p3p_str_graph_event,
                                 translate_domain_change_to_domain_str_graph_event,
                                 translate_domain_change_to_strand_str_graph_event)
+from nascent.graph_visualization.graph_utils import directed_for_all_edges
 
 STREAMERS = {}
 try:
@@ -81,10 +81,14 @@ except ImportError as e:
 try:
     # Make sure pygephi is available on your python path
     # Use gephi_ws for websocket communication
-    from nascent.graph_visualization.gephi import GephiGraphStreamer
-    from nascent.graph_visualization.gephi_ws import GephiGraphStreamerWs
-    STREAMERS['gephi_old'] = GephiGraphStreamer
-    STREAMERS['gephi_ws'] = GephiGraphStreamerWs
+    from nascent.graph_visualization.gephi import (GephiMultiGraphStreamer, GephiRegularGraphStreamer,
+                                                   GephiRegularGraphStreamerMock)
+    #from nascent.graph_visualization.gephi_ws import GephiGraphStreamerWs
+    #STREAMERS['gephi_old'] = GephiGraphStreamer
+    STREAMERS['gephi'] = GephiMultiGraphStreamer
+    STREAMERS['gephi_multi'] = GephiMultiGraphStreamer
+    STREAMERS['gephi_regular'] = GephiRegularGraphStreamer
+    STREAMERS['gephi_mock'] = GephiRegularGraphStreamerMock
 except ImportError as e:
     print(e, "(Streaming to Gephi (graph-streaming plugin) will not be available)")
     GephiGraphStreamer = None
@@ -133,18 +137,19 @@ class StateChangeDispatcher():
         ## File output and format: ##
         self.outputfn = config.get('dispatcher_state_changes_fn')
         self.keep_file_open = config.get('dispatcher_keep_file_open')
-        # If just specifying the output fields, they will be written as
-        #   ",".join(str(state_change[field]) for field in self.state_change_line_fields)
-        self.state_change_line_fields = config.get(
-            'dispatcher_state_changes_line_fields',
-            ['T', 'time', 'tau', 'change_type', 'forming', 'interaction'])
+        self.file_add_header = config.get('dispatcher_state_changes_file_add_header', True)
         # If state_change_line_unpack_nodes is True,
         # add all nodes at the end of the line appended to the fields above.
         self.state_change_line_unpack_nodes = config.get('dispatcher_state_changes_unpack_nodes', True)
+        # If just specifying the output fields, they will be written as
+        #   ",".join(str(state_change[field]) for field in self.state_change_line_fields)
+        # Note: Don't invlude 'nodes' in state_change_line_fields; it is added automatically as the last field.
+        self.state_change_line_fields = config.get(
+            'dispatcher_state_changes_line_fields',
+            ['T', 'time', 'tau', 'change_type', 'forming', 'interaction'])
         # For more control of the output line format, you can specify a string instead:
         self.state_change_line_fmt = config.get('dispatcher_state_changes_line_fmt')
         # If supporting multi node/edge directive, a single state_change can have multiple nodes/edes
-
         ## State change directies and graph visualization ##
         self.multi_directive_support = config.get('dispatcher_multi_directive_support', True)
         self.graph_translation = config.get('dispatcher_graph_translation', "domain-to-5p3p")
@@ -158,10 +163,15 @@ class StateChangeDispatcher():
         ## Init file output stream: ##
         if self.keep_file_open:
             self.outputfd = open(self.outputfn, 'w') if self.outputfn else None
+            if self.file_add_header:
+                self.outputfd.write(self.state_change_header_str())
             self.state_changes_cache_size = None
             self.state_changes_cache = None
         else:
             self.outputfd = None
+            if self.file_add_header:
+                with open(self.outputfn, 'w') as outputfd:
+                    outputfd.write(self.state_change_header_str())
             self.state_changes_cache_size = config.get('dispatcher_cache_size', 100)
             self.state_changes_cache = []
 
@@ -193,6 +203,9 @@ class StateChangeDispatcher():
         before initializing the new graph.
         TODO: Implement this!
         """
+        if self.live_streamer is None:
+            print("No live-streamer set - not initializing graph.")
+            return
         #if self.live_graph_repr == 'strand':
         if self.graph_translation == 'domain-to-strand':
             print("Initialization of Stand graphs not implemented.")
@@ -211,18 +224,35 @@ class StateChangeDispatcher():
         print("Initializing streamer using graph with nodes:", sorted(translated_graph.nodes()))
         self.live_streamer.initialize_graph(translated_graph, reset=reset)
 
+    def state_change_header_str(self, eol="\n", fieldsep=","):
+        """
+        Make a header for the state_change file.
+        """
+        headerfields = self.state_change_line_fields + ['nodes']
+        if self.state_change_line_fmt:
+            headerdict = dict(zip(headerfields, headerfields))
+            return self.state_change_line_fmt.format(**headerdict) + eol
+        else:
+            return fieldsep.join(headerfields) + eol
 
-    def state_change_str(self, state_change, eol='\n'):
+
+    def state_change_str(self, state_change, eol='\n', fieldsep=","):
         """
         state_change is a tuple
         """
+        # state_change['nodes'] contains Domain instances; the string representation of this list,
+        # str(state_change['nodes']) will produce [repr(d) for d in list] - not str(d).
+        # To get the required str representation of each domain, we make a stringified list:
+        nodes_str_list = [str(node) for node in state_change['nodes']]
         if self.state_change_line_fmt:
-            return self.state_change_line_fmt.format(**state_change) + eol
+            return self.state_change_line_fmt.format(nodes_str=nodes_str_list, **state_change) + eol
         else:
             values = [str(state_change[field]) for field in self.state_change_line_fields]
             if self.state_change_line_unpack_nodes:
-                values += [str(node) for node in state_change['nodes']]
-            return ",".join(values) + eol
+                values += nodes_str_list
+            else:
+                values.append(nodes_str_list)
+            return fieldsep.join(values) + eol
 
 
     def flush_state_changes_cache(self):
@@ -398,12 +428,12 @@ class StateChangeDispatcher():
         """
         # When supporting multi node/edge directives, a single state_change dict can have
         # multiple nodes for node-pairs under the "nodes" key.
-        if self.multi_directive_support and \
-            any(state_change.get('multi_directive') for state_change in state_changes):
-            state_changes = chain(self.unpack_multi_directive(state_changes)
-                                  if state_change.get('multi_directive')
-                                  else [state_change]
-                                  for state_change in state_changes)
+        if self.multi_directive_support and any(state_change.get('multi_directive') for state_change in state_changes):
+            # state_changes = chain(*[self.unpack_multi_directive(state_change) if state_change.get('multi_directive')
+            #                         else [state_change] for state_change in state_changes])
+            state_changes = [single for state_change in state_changes for single in
+                             (self.unpack_multi_directive(state_change) if state_change.get('multi_directive')
+                              else (state_change,))]
         if self.graph_translation == "domain-to-5p3p":
             print("Translating domain change to 5p3p graph change...")
             events = [trans_change for state_change in state_changes

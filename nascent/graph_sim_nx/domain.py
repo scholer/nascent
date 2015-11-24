@@ -77,14 +77,22 @@ class Domain():
             self.domain_strand_specie = (None, name)
             self.universal_name = "%s:%s" % (None, self.instance_name)
         self.sequence = seq
-        self.length = self.n_nt = len(seq)
+        ## TODO: Reach a consensus on "length" attributes
+        ## Suggestions:
+        ## - Always use 'ss' vs 'ds' and 'sq' vs 'nm'.
+        ## - For end-to-end distances, use: 'ee' or 'rms' or 'dist' or 'ee_dist' or 'Er' or 'R' or 'rRsq' or 'rsq' or...?
+        ## - For contour lengths, use: 'length', 'len', 'contour',
+        self.n_nt = len(seq)
+        self.length_nt = self.n_nt
         # E[r²] = ∑ Nᵢbᵢ² for i ≤ m = N (λˢˢ)², N = N_nt∙lˢˢ/λˢˢ
         #       = N_nt * lˢˢ * λˢˢ
         # Could be ss_mean_squared_end2end_distance or ss_msqee_dist or ss_ersq
-        self.ss_length_sq = self.n_nt * ss_rise_per_nt * ss_kuhn_length
-        self.ss_length_nm = math.sqrt(self.ss_length_sq)
-        self.ds_length_nm = self.n_nt * ds_rise_per_bp
-        self.ds_length_sq = self.ds_length_nm**2
+        self.ss_dist_ee_sq = self.n_nt * ss_rise_per_nt * ss_kuhn_length
+        self.ss_dist_ee_nm = math.sqrt(self.ss_dist_ee_sq)
+        self.ds_dist_ee_nm = self.n_nt * ds_rise_per_bp
+        self.ds_dist_ee_sq = self.ds_dist_ee_nm**2
+        self.ss_len_contour = self.n_nt * ss_rise_per_nt
+        self.ds_len_contour = self.n_nt * ds_rise_per_bp
         self._partner = partner  # duplex hybridization partner
         self.end5p = Domain5pEnd(self)
         self.end3p = Domain3pEnd(self)
@@ -96,6 +104,8 @@ class Domain():
         # Cached values:
         self._in_complex_identifier = None
         self._specie_state_fingerprint = None
+        self.history = []
+
 
     @property
     def partner(self):
@@ -104,8 +114,10 @@ class Domain():
     @partner.setter
     def partner(self, partner):
         """ Making this a property for now to ensure that ends5p3p are properly set. """
+        self.history.append("Setting self.partner = %r..." % partner)
         if partner is None:
             if self._partner is not None:
+                self.history.append(" - partner: Resetting current partner %r and ends..." % self._partner)
                 self._partner._partner = None # pylint:disable=W0212
                 self._partner.end3p.hyb_partner = None
                 self._partner.end5p.hyb_partner = None
@@ -123,6 +135,7 @@ class Domain():
 
     def set_strand(self, strand):
         """ (re-)set domain's strand. """
+        self.history.append("Setting self.strand = %r..." % strand)
         self.strand = strand
         self.domain_strand_specie = (strand.name, self.name)
         ## Concern: If you add support for strand nicking/ligation, then you cannot use strand to specify
@@ -130,30 +143,67 @@ class Domain():
         self.universal_name = "%s:%s" % (self.strand.instance_name, self.instance_name)
 
 
+    def print_history(self, history=None, level=0, indent_str="    ", search_str=None, entrylimit=20):
+        if history is None:
+            history = self.history
+        for (level, entry) in self.gen_history_records(history=history, level=level, search_str=search_str):
+            print(indent_str*level + entry)
+
+    def gen_history(self, history=None, level=0, indent_str="    ", search_str=None, sep="\n", entrylimit=20):
+        return sep.join((indent_str*level + entry) for level, entry
+            in self.gen_history_records(history=history, level=level, search_str=search_str))
+
+    def gen_history_records(self, history=None, level=0, search_str=None, entrylimit=20):
+        if history is None:
+            history = self.history
+        if entrylimit and entrylimit < len(history):
+            org_length = len(history)
+            history = history[-entrylimit:] # Makes a slice copy
+            history[0] = "(...history truncated to %s of %s entries...)" % (len(history), org_length)
+        for entry in history:
+            if isinstance(entry, str):
+                if search_str is None or search_str in entry:
+                    yield (level, entry)
+            else:
+                yield from self.gen_history_records(history=entry, level=level+1, search_str=search_str)
+
+
     def in_complex_identifier(self, strandgraph=None):
         """
         Return a hash that can be used to identify the current domain within the complex.
         """
+        ## IMPORTANT: THIS MUST NOT USE COMPLEX.STATE_FINGERPRINT
         if self._in_complex_identifier is None:
             c = self.strand.complex
             if c is None or len(c.strands_by_name[self.strand.name]) < 2:
                 # If only one strand in the complex, no need to calculate strand-domain identifier:
                 self._in_complex_identifier = 0
             else:
-                # We have a complex with more than one copy of the domain's strand specie:
-                # probably just probing the local environment is enough.
-                # It won't tell *exactly* which domain we have, but it will usually be good enough.
-                # Note: Using hybridization graph, because no reason to vary based on stacking here
-                # TODO: It is very important that the in-complex-identifier is unique.
-                #       Fortunately, you have the option to VERIFY that it actually is.
-                neighbor_rings = connectivity_rings(c, self, 5,   # use self, not self.strand; we have domains.
-                                                    edge_filter=dont_follow_stacking_interactions)
-                # Done: The hash should probably include the strand specie as well
-                #       - d.domain_strand_specie vs d.name
-                # pdb.set_trace()
-                self._in_complex_identifier = hash(tuple(frozenset(d.domain_strand_specie for d in ring)
-                                                         for ring in neighbor_rings))
-                #specie_instances = c.domains_by_name[self.name]
+                if c.icid_use_instance:
+                    # Using domain in_complex_identifier has given non-unique values for two or more domains.
+                    # If Complex.icid_use_instance has been set to True, fall back to using domain instances as
+                    # in_complex_identifier (icid) for *all* domains. If icid_use_instance is not True but is
+                    # boolean True, it is assumed to be a set of domains for which to use domain instance as icid.
+                    if c.icid_use_instance is True or self in c.icid_use_instance:
+                        self._in_complex_identifier = self
+                else:
+                    # We have a complex with more than one copy of the domain's strand specie:
+                    # probably just probing the local environment is enough.
+                    # It won't tell *exactly* which domain we have, but it will usually be good enough.
+                    # Note: Using hybridization graph, because no reason to vary based on stacking here
+                    # TODO: It is very important that the in-complex-identifier is unique.
+                    #       Fortunately, you have the option to VERIFY that it actually is.
+                    # Argh, this doesn't work well for DiGraphs!
+                    neighbor_rings = connectivity_rings(c, self, 5,   # use self, not self.strand; we have domains.
+                                                        edge_filter=dont_follow_stacking_interactions)
+                    # Done: The hash should probably include the strand specie as well
+                    #       - d.domain_strand_specie vs d.name
+                    # pdb.set_trace()
+                    # TODO: Remove modulus when done testing
+                    self._in_complex_identifier = hash(tuple(frozenset(d.domain_strand_specie for d in ring)
+                                                             for ring in neighbor_rings)) % 100000
+                    #specie_instances = c.domains_by_name[self.name]
+            self.history.append("in_complex_identifier: Calculated in_complex_identifier = %r..." % (self._in_complex_identifier,))
         return self._in_complex_identifier
 
 
@@ -163,7 +213,10 @@ class Domain():
         This is a hash of:
             (domain_strand_specie, complex-state, in-complex-identifier)
         TODO: Consider not making duplexes state-dependent but rather just depend on their local stacking state.
+              (Because a duplex has the same de-hybridization reaction kinetics regardless of complex state.)
         """
+        #self._specie_state_fingerprint = None
+        self.state_change_reset(reset_complex=False)
         if self._specie_state_fingerprint is None:
             printd("(re-)calculating state fingerprint for domain %r" % (self, ))
             dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
@@ -174,13 +227,19 @@ class Domain():
             ## TODO: I'm currently including hybridization state in fingerprint; this should not be needed, but...
             self._specie_state_fingerprint = (dspecie, self.partner is not None, c_state, self.in_complex_identifier())
             # print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
+            self.history.append("Domain.state_fingerprint: Calculated domain specie state fingerprint = %r..." % (self._specie_state_fingerprint,))
         return self._specie_state_fingerprint
 
 
-    def state_change_reset(self):
+    def state_change_reset(self, reset_complex=True, **kwargs):
         """ Reset state-dependent attributes (must be invoked after a state change). """
         self._in_complex_identifier = None
         self._specie_state_fingerprint = None
+        self.history.append(("Domain.state_change_reset: Unsetting specie_state_fingerprint (and in_complex_identifier; "
+                             "reset_complex=%r, kwargs=%s)...") %
+                            (reset_complex, kwargs))
+        if reset_complex and self.strand.complex is not None:
+            self.strand.complex.reset_state_fingerprint(reset_domains=False, **kwargs)
 
 
     def fqdn(self):
@@ -237,7 +296,7 @@ class DomainEnd():
         ## TODO: Many of these attributes are essentially duplicated in the ends5p3p system graph.
         ## Consider consolidating these in some way.
 
-    def state_fingerprint(self, ):
+    def state_fingerprint(self):
         return (self.domain.state_fingerprint(), self.end)
 
     def __str__(self):
@@ -245,6 +304,7 @@ class DomainEnd():
 
     def __repr__(self):
         return repr(self.domain)+":"+self.end # + " at " id(self)
+
 
 class Domain5pEnd(DomainEnd):
     def __init__(self, domain):

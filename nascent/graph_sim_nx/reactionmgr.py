@@ -57,7 +57,7 @@ Reactions: (this could be a separate object, but for now system state and reacti
 
 import os
 #import random
-from collections import defaultdict, namedtuple
+from collections import defaultdict, namedtuple, Counter, deque
 from itertools import zip_longest
 # Using namedtuple is quite slow in CPython, but faster than dicts in PyPy.
 # (Attribute accessing namedtuple.a is faster than dict['a']; not sure about instantiation.)
@@ -106,7 +106,21 @@ class ReactionMgr(ComponentMgr):
         self.specific_bimolecular_activity = 1/self.volume/N_AVOGADRO # × M
         self.include_steric_repulsion = False # True
         self.enable_intercomplex_stacking = params.get("enable_intercomplex_stacking", True)
+
         self.reaction_update_pair_against_all = params.get("reaction_update_pair_against_all", True)
+        self.reaction_throttle = params.get("reaction_throttle", False)
+        self.reaction_throttle_fun = params.get("reaction_throttle_fun")
+        self.reaction_throttle_offset = params.get("reaction_throttle_offset", 0)
+        self.reaction_throttle_rolling_fraction = params.get("reaction_throttle_rolling_fraction", False)
+        # Nric = normalized_reaction_invocation_count is calculated as:
+        # sysmgr.reaction_invocation_count[reaction_spec]/sum(len(sysmgr.domains_by_name[d.name] for d in (d1, d2)))
+        if self.reaction_throttle:
+            if self.reaction_throttle_fun is None:
+                self.reaction_throttle_fun = lambda Nric: exp(-Nric/10)
+            elif isinstance(self.reaction_throttle_fun, str):
+                self.reaction_throttle_fun = eval(self.reaction_throttle_fun)
+        self.reaction_invocation_count = Counter()
+        self.reaction_invocation_deque = deque(maxlen=self.params.get("reaction_throttle_rolling_window_size", 40))
 
         print("Simulation system manager initiated at V=%s with %s strands spanning %s domains." \
               % (self.volume, len(self.strands), len(self.domains)))
@@ -137,8 +151,10 @@ class ReactionMgr(ComponentMgr):
         # For inter-complex reactions (including free strands), the combined relative activity is simply the product:
         #   rel_activity = dom1_rel_activity * dom2_rel_activity
 
-        self.cache['intracomplex_activity'] = {}    # indexed by {F₁, F₂}
-        self.cache['stochastic_rate_constant'] = {} # indexed by {F₁, F₂}
+        # Activities and c_j caches, indexed by {d₁.F, d₂.F} or {(h1e3p.F, h2e5p.F), (h2e3p.F, h1e5p.F)}
+        self.cache['intracomplex_activity'] = {}
+        self.cache['stochastic_rate_constant'] = {}
+        self.cache['stochastic_rate_constant_attrs'] = defaultdict(list)
         # For surface/steric/electrostatic reduction in k_on.
         # TODO: Check surface-hybridization kinetics papers whether reduction in k_on yields same reduction in k_off.
         #       I.e. if the surface reduces Tm, hybridization energy or equivalent.
@@ -191,6 +207,15 @@ class ReactionMgr(ComponentMgr):
             self.invoked_reactions_file = open(fn, 'w')
 
 
+    def reset_temperature(self, T):
+        """ Set system temperature to T and and reset specified caches. """
+        self.temperature = T
+        if self.params.get("reaction_throttle_reset_on_temperature_change"):
+            self.reaction_invocation_count.clear()
+        self.cache['intracomplex_activity'].clear()
+        self.cache['stochastic_rate_constant'].clear()
+
+
     def init_possible_reactions(self):
         """
         Reactions have:
@@ -221,86 +246,30 @@ class ReactionMgr(ComponentMgr):
         Maybe a better name would be domain_subpopulation_by_state?
         """
         printd("\nInitializing possible reactions (UNGROUPED)...")
-        Rxs = self.possible_hybridization_reactions
-        for d1 in self.domains:
-            # d1_domspec = d1.state_fingerprint()
-            if d1.partner is not None:
-                is_forming, is_intra = False, True
-                # If d1 is hybridized, then there is only one possible reaction channel: dehybridizing
-                d2 = d1.partner
-                # d2_domspec = d2.state_fingerprint()
-                domain_pair = frozenset((d1, d2))
-                #reaction_spec = (domspec_pair, is_forming, is_intra)
-                Rxs[domain_pair] = self.calculate_c_j(d1, d2, is_forming=is_forming, is_intra=is_intra)
-                self.reaction_attrs[domain_pair] = ReactionAttrs(reaction_type=HYBRIDIZATION_INTERACTION,
-                                                                 is_forming=is_forming, is_intra=is_intra)
-                self.reaction_pairs_by_domain[d1].add(domain_pair)
-                self.reaction_pairs_by_domain[d2].add(domain_pair)
-                # self.hybridization_reactions_by_domspec[d1_domspec].add(reaction_spec)
-                # self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
-            else:
-                # find all possible reaction channels for domain d1
-                # self.domain_pairs[dname] = [list of complementary domain names]
-                # all possible hybridization partners/candidates:
-                is_forming = True
-                if d1.name not in self.domain_pairs:
-                    # No domain partners for this domain
-                    continue
-                for d2 in (d for cname in self.domain_pairs[d1.name]
-                           for d in self.unhybridized_domains_by_name[cname]):
-                    assert d2.partner is None
-                    # d2_domspec = d2.state_fingerprint()
-                    domain_pair = frozenset((d1, d2))
-                    is_intra = (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex) or \
-                               (d1.strand == d2.strand)  # intra-complex OR intra-strand reaction
-                    #reaction_spec = (domspec_pair, is_forming, is_intra)
-                    if domain_pair not in Rxs:
-                        # R_j = (c_j, v_j) - propensity constant for reaction j
-                        Rxs[domain_pair] = self.calculate_c_j(d1, d2, is_forming=True, is_intra=is_intra)
-                        self.reaction_attrs[domain_pair] = ReactionAttrs(reaction_type=HYBRIDIZATION_INTERACTION,
-                                                                         is_forming=is_forming, is_intra=is_intra)
-                        self.reaction_pairs_by_domain[d1].add(domain_pair)
-                        self.reaction_pairs_by_domain[d2].add(domain_pair)
-                    # self.hybridization_reactions_by_domspec[d1_domspec].add(reaction_spec)
-                    # self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
+        self.update_possible_hybridization_reactions(changed_domains=None, recalculate_hybridized=True)
+        self.update_possible_stacking_reactions(changed_domains=None, recalculate_stacked=True)
         print(len(self.possible_hybridization_reactions), "possible hybridization reactions initialized.")
 
 
-    def update_possible_reactions(self, changed_domains, reacted_pair=None,
-                                  reaction_attr=None, reaction_domspec_pair=None, pair_against_all=True):
+    def update_possible_hybridization_reactions(self, changed_domains, reacted_pair=None,
+                                                reaction_attr=None, reaction_domspec_pair=None,
+                                                pair_against_all=True, recalculate_hybridized=None):
         """
-        Maybe it is better to just re-calculate a_j for all changed domains,
-        and then filter out reactions with a_j = 0,
-        rather than bothering with keeping track of depleted domain state species?
+        First, process the reacted_pair: if pair was formed (hybridized), remove each domain
+        from other possible reactions involving either of the two domains.
 
-        Wow, this is getting really complex.
-        I'm almost contemplating going back to the old approach where we do not try to group and "count"
-        domain states, but instead we just consider them all independent.
-        Pros for simulating without grouping domains by domain state:
-        - We don't have to keep track of possible_hybridization_reactions, etc.
-        - Each domain instance has its own propensity function; (just beware of (d1, d2) and (d2, d1) duplicates).
-        - At least for small copy numbers, grouping and keeping track of domain state count is likely inefficient.
-        - Because of the large number of possible states, even for large copy numbers, the state count might occilate
-            between 0 and 1. That is particularly unfavorable for the "grouped" strategy.
-        - We can still use "domain state fingerprints" for caching.
-        Cons:
-        - If we have large copy numbers, a_j becomes very large. Well... It becomes the number of domains.
-            Although, even if we have 1000 domain instances, it still only takes 0.1 ms to find a suitable a_j.
-        - If we have 10 domain "a" copies and 10 complementary domain "A" copies, then there are 10*10=100 combinations.
-            If
-        - Grouping has other advantages, e.g. caching.
+        Second, process changed_domains. If :changed_domains: is None, it defaults to ALL domains.
+        We only consider un-hybridized domains, unless :recalculate_hybridized: is set to True.
 
-        Instead, I guess we could have
-
-        # Set vs list:
-        # - Lists are slightly faster to iterate over;
-        # - Sets are significantly faster for lookups and removing arbitrary elements (about 80 times faster)
-
+        If :pair_against_all: is True, we consider reactions against all other un-hybridized domains.
+        If :pair_against_all: is False, only consider reactions on within the same complex.
         """
         if changed_domains is None:
             changed_domains = self.domains
+            if recalculate_hybridized is None:
+                recalculate_hybridized = True
         ## TODO: Consolidate this and init_possible_reactions into a single method.
-        printd(("\nupdate_possible_reactions invoked with reacted_pair=%s, reaction_attr=%s, reaction_domspec_pair=%s, "
+        printd(("\nupdate_possible_hybridization_reactions invoked with reacted_pair=%s, reaction_attr=%s, reaction_domspec_pair=%s, "
                 "changed_domains:") % (reacted_pair, reaction_attr, reaction_domspec_pair))
         pprintd(changed_domains)
 
@@ -362,9 +331,9 @@ class ReactionMgr(ComponentMgr):
                 # It is thus only a set of possible reactions that can be deleted.
                 # Add de-hybridization reaction for d1, d2: (will be skipped when processing all changed domains)
                 domain_pair = frozenset((d1, d2))
-                # Calling calculate_c_j or any other can produce a call to domain.state_fingerprint()
+                # Calling calculate_hybridization_c_j or any other can produce a call to domain.state_fingerprint()
                 self.possible_hybridization_reactions[domain_pair] = \
-                    self.calculate_c_j(d1, d2, is_forming=False, is_intra=True)
+                    self.calculate_hybridization_c_j(d1, d2, is_forming=False, is_intra=True)
                 self.reaction_attrs[domain_pair] = ReactionAttrs(reaction_type=HYBRIDIZATION_INTERACTION,
                                                                  is_forming=False, is_intra=True)
                 self.reaction_pairs_by_domain[d1].add(domain_pair)
@@ -396,39 +365,59 @@ class ReactionMgr(ComponentMgr):
                 print(" - complex.reset_state_fingerprint() ...")
                 print(" - complex.state_fingerprint() =", c.state_fingerprint())
 
-            if domain.partner is not None:
-                # Currently, we don't re-calculate hybridized domains that are already hybridized (other than d1, d2)
-                continue
-            elif domain.name in self.domain_pairs:
+            if domain.partner is None and domain.name in self.domain_pairs:
                 ## No partner (but is has potential partners at the specie level specified in domain_pairs)
                 ## consider hybridization reactions with all other unhybridized complementary domains.
                 ## Or maybe just re-calculate for complementary domains in changed domains?
                 # for d2 in [d for cname in self.domain_pairs[d1.name]
                 #            for d in self.unhybridized_domains_by_name[cname]]:
                 #pdb.set_trace()
+                is_forming = True
                 for cname in self.domain_pairs[domain.name]:
                     for domain2 in self.unhybridized_domains_by_name[cname]:
                         # Remove old reaction propensity:
                         # TODO: Consider only updating/removing intra-complex reactions
                         if (pair_against_all or domain2 in changed_domains) and domain is not domain2:
                             domain_pair = frozenset((domain, domain2))
+                            if domain_pair in updated_reactions:
+                                continue
                             # is_intra: intra-complex OR intra-strand reaction:
                             is_intra = (domain.strand.complex is not None and \
                                         domain.strand.complex == domain2.strand.complex) \
                                         or (domain.strand == domain2.strand)
-                            self.possible_hybridization_reactions[domain_pair] = self.calculate_c_j(
+                            reaction_attr = ReactionAttrs(reaction_type=HYBRIDIZATION_INTERACTION,
+                                                          is_forming=True, is_intra=is_intra)
+                            self.possible_hybridization_reactions[domain_pair] = self.calculate_hybridization_c_j(
                                 domain, domain2, is_forming=True, is_intra=is_intra)
-                            self.reaction_attrs[domain_pair] = ReactionAttrs(
-                                reaction_type=HYBRIDIZATION_INTERACTION, is_forming=True, is_intra=is_intra)
+                            self.reaction_attrs[domain_pair] = reaction_attr
                             self.reaction_pairs_by_domain[domain].add(domain_pair)
                             self.reaction_pairs_by_domain[domain2].add(domain_pair)
-                            if domain_pair not in updated_reactions:
-                                updated_reactions.add(domain_pair)
+                            #if domain_pair not in updated_reactions:
+                            updated_reactions.add(domain_pair)
+            elif domain.partner is not None and recalculate_hybridized:
+                # Currently, we don't re-calculate hybridized domains that are already hybridized (other than d1, d2)
+                # d2_domspec = d2.state_fingerprint()
+                is_forming = False
+                domain_pair = frozenset((domain, domain2))
+                if domain_pair in updated_reactions:
+                    continue
+                #reaction_spec = (domspec_pair, is_forming, is_intra)
+                self.possible_hybridization_reactions[domain_pair] = \
+                    self.calculate_hybridization_c_j(d1, d2, is_forming=is_forming, is_intra=is_intra)
+                self.reaction_attrs[domain_pair] = ReactionAttrs(reaction_type=HYBRIDIZATION_INTERACTION,
+                                                                 is_forming=is_forming, is_intra=is_intra)
+                self.reaction_pairs_by_domain[d1].add(domain_pair)
+                self.reaction_pairs_by_domain[d2].add(domain_pair)
+                updated_reactions.add(domain_pair)
 
 
     def print_reaction_stats(self):
         """ Print information on reaction pathways. """
-        printd("Reaction pathways (ungrouped reactions):")
+        print("Reaction pathways (ungrouped reactions):")
+        print("\n".join(self.reaction_stats_strs()))
+
+    def reaction_stats_strs(self, ):
+        reaction_stats_strs = []
         #keyfun = lambda kv: sorted([d.instance_name for d in kv[0]])
         # We sort the domains to make the stats easier to read:
         # Inner sorted sorts the domain pair (d1, d2 vs d2, d1), outer sorts the reactions by domain
@@ -443,16 +432,17 @@ class ReactionMgr(ComponentMgr):
             reaction_attr = self.reaction_attrs[reaction_spec]
             reaction_str = REACTION_NAMES[reaction_attr.is_forming][reaction_attr.reaction_type]
             # Use %10s or %18r for domain str/repr
-            printd("%18s %9s %s %18s" % (domain1,
-                                           "hybrid" if is_forming else "de-hyb",
-                                           "intra" if is_intra else "inter", domain2),
-                   (": %0.03e x 1 x 1 = %03e" % (
-                       c_j, self.propensity_functions[reaction_spec])
-                   ) if is_forming else (": %0.03e   x   1 = %03e" % (
-                       c_j, self.propensity_functions[reaction_spec])),
-                   "" if reaction_attr.is_forming == is_forming and reaction_attr.is_intra == is_intra
-                   else (" - EXPECTED: %s" % reaction_attr)
-                  )
+            stat = ("%18s %9s %s %18s" % (domain1,
+                                          "hybrid" if is_forming else "de-hyb",
+                                          "intra" if is_intra else "inter", domain2),
+                    (": %0.03e x 1 x 1 = %03e" % (
+                        c_j, self.propensity_functions[reaction_spec])
+                    ) if is_forming else (": %0.03e   x   1 = %03e" % (
+                        c_j, self.propensity_functions[reaction_spec])),
+                    "" if reaction_attr.is_forming == is_forming and reaction_attr.is_intra == is_intra
+                    else (" - EXPECTED: %s" % reaction_attr)
+                   )
+            reaction_stats_strs.append("".join(stat))
         # Inner sorted sorts the domain pair (d1, d2 vs d2, d1), outer sorts the reactions by domain
         for reaction_spec_str, c_j, reaction_spec in sorted((sorted([repr(d) for d in k]), v, k) \
             for k, v in self.possible_stacking_reactions.items()):
@@ -464,12 +454,14 @@ class ReactionMgr(ComponentMgr):
             #reaction_str = ("" if reaction_attr.is_forming else "de-") + reaction_attr.reaction_type
             reaction_str = REACTION_NAMES[reaction_attr.is_forming][reaction_attr.reaction_type]
             # Use %10s or %18r for domain str/repr
-            printd("%42s %9s %s %42s" % (domain1, reaction_str[:8], #reaction_attr.is_intra, domain2),
-                                         "intra" if reaction_attr.is_intra else "inter", domain2),
-                   (": %0.03e x 1 x 1 = %03e" % (c_j, self.stacking_propensity_functions[reaction_spec]))
-                   if reaction_attr.is_forming else
-                   (": %0.03e   x   1 = %03e" % (c_j, self.stacking_propensity_functions[reaction_spec]))
-                  )
+            stat = ("%42s %9s %s %42s" % (domain1, reaction_str[:8], #reaction_attr.is_intra, domain2),
+                                          "intra" if reaction_attr.is_intra else "inter", domain2),
+                    (": %0.03e x 1 x 1 = %03e" % (c_j, self.stacking_propensity_functions[reaction_spec]))
+                    if reaction_attr.is_forming else
+                    (": %0.03e   x   1 = %03e" % (c_j, self.stacking_propensity_functions[reaction_spec]))
+                   )
+            reaction_stats_strs.append("".join(stat))
+        return reaction_stats_strs
 
 
     def map_reaction_specs_by_domspec(self):
@@ -492,7 +484,55 @@ class ReactionMgr(ComponentMgr):
                 if domspec in reaction_spec[0]}
 
 
-    def calculate_c_j(self, d1, d2, is_forming, is_intra=None):
+    def calculate_c_j(self, elem1, elem2, reaction_attr, reaction_spec_pair=None):
+        """
+        General method for calculation of c_j stochastic rate constant.
+        Unlike the specialized calculate_hybridization_c_j and calculate_stacking_c_j,
+        this method also takes care of caching and throttling.
+        Cached values does *not* include throttle factor.
+        """
+        reaction_type, is_forming, is_intra = reaction_attr
+        if reaction_spec_pair is not None and reaction_spec_pair in self.cache['stochastic_rate_constant']:
+            c_j = self.cache['stochastic_rate_constant'][reaction_spec_pair]
+        else:
+            if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+                c_j = self.calculate_hybridization_c_j(elem1, elem2, is_forming=is_forming, is_intra=is_intra,
+                                                       reaction_spec_pair=reaction_spec_pair)
+            elif reaction_attr.reaction_type is STACKING_INTERACTION:
+                c_j = self.calculate_stacking_c_j(elem1[0], elem1[1], elem2[0], elem2[1],
+                                                  is_forming=is_forming, is_intra=is_intra,
+                                                  reaction_spec_pair=reaction_spec_pair)
+            else:
+                raise ValueError("Unknown reaction type %r for reaction_attr %s between %s and %s" %
+                                 (reaction_attr.reaction_type, reaction_attr, elem1, elem2))
+            self.cache['stochastic_rate_constant'][reaction_spec_pair] = c_j
+            raise NotImplementedError("Not implemented yet...")
+        if self.reaction_throttle:
+            throttle_factor = self.calculate_throttle_factor(elem1, elem2, reaction_type, reaction_spec_pair)
+            c_j *= throttle_factor
+        return c_j
+
+
+    def calculate_throttle_factor(self, elem1, elem2, reaction_type, reaction_spec_pair):
+        """
+        """
+        assert reaction_spec_pair is not None and reaction_type is not None
+        if reaction_type is HYBRIDIZATION_INTERACTION:
+            N_dom_copies = sum(len(self.domains_by_name[d.name] for d in (elem1, elem2)))
+        elif reaction_type is HYBRIDIZATION_INTERACTION:
+            N_dom_copies = sum(len(self.domains_by_name[end.name] for endpair in (elem1, elem2) for end in endpair))
+        Nric = self.reaction_invocation_count[reaction_spec_pair]/N_dom_copies
+        if Nric < self.reaction_throttle_offset:
+            return 1
+        if self.reaction_throttle_rolling_fraction:
+            frac = self.reaction_invocation_deque.count(reaction_spec_pair)/len(self.reaction_invocation_deque)
+            if frac < self.reaction_throttle_rolling_fraction:
+                return 1
+        return self.reaction_throttle_fun(Nric-self.reaction_throttle_offset)
+
+
+    def calculate_hybridization_c_j(self, d1, d2, is_forming, is_intra, reaction_type=HYBRIDIZATION_INTERACTION,
+                                    reaction_spec_pair=None):
         """
         :is_intra: whether the reaction is intra-molecular; that is, either intra-complex or intra-strand.
         Calculate propensity constant, c_j, for hybridization or dehybridization of d1 and d2.
@@ -555,6 +595,8 @@ class ReactionMgr(ComponentMgr):
             [2]: http://www.ncbi.nlm.nih.gov/pmc/articles/PMC1303974/ "stochastic rate constant cμ"
             [3]: http://www.async.ece.utah.edu/BioBook/lec4.pdf
         """
+        ## TODO: Make this a cached value???
+
         if is_forming:
             # if d1.strand.complex == d2.strand.complex != None:
             # Edit: We might have a single strand interacting with itself
@@ -625,24 +667,37 @@ class ReactionMgr(ComponentMgr):
         return 1
 
 
-    def intracomplex_activity(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION):
+    def intracomplex_activity(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION, reaction_spec_pair=None):
         """
         Return the activity for hybridization of two domains within a complex.
         TODO: Add steric/electrostatic/surface repulsion (individual activity contribution for d1 and d2,
               so that activity = intercomplex_activity*d1_activity*d2_activity)
         """
-        if isinstance(elem1, Domain):
-            d1, d2 = elem1, elem2
+        if isinstance(elem1, tuple):
+            #assert reaction_type == STACKING_INTERACTION
+            if reaction_spec_pair is None:
+                reaction_spec_pair = frozenset(((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
+                                                (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
+            d1, d2 = elem1[0].domain, elem2[0].domain
         else:
-            d1, d2 = elem1.domain, elem2.domain
+            if reaction_spec_pair is None:
+                reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
+            if isinstance(elem1, Domain):
+                d1, d2 = elem1, elem2
+                assert reaction_type == HYBRIDIZATION_INTERACTION
+            elif isinstance(elem1, DomainEnd):
+                d1, d2 = elem1.domain, elem2.domain
         assert d1.strand.complex == d2.strand.complex != None
-        cache_key = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
-        cache = self.cache['intracomplex_activity']
-        if cache_key in cache:
-            return cache[cache_key]
+        # cache = self.cache['intracomplex_activity']
+        if reaction_spec_pair in self.cache['intracomplex_activity']:
+            return self.cache['intracomplex_activity'][reaction_spec_pair]
         #activity = d1.strand.complex.intracomplex_activity(d1, d2)
-        activity = super().intracomplex_activity(elem1, elem2)
-        cache[cache_key] = activity
+        if isinstance(elem1, tuple):
+            activity = (super().intracomplex_activity(elem1[0], elem2[0]) +
+                        super().intracomplex_activity(elem1[1], elem2[1]))/2
+        else:
+            activity = super().intracomplex_activity(elem1, elem2)
+        self.cache['intracomplex_activity'][reaction_spec_pair] = activity
         return activity
 
 
@@ -800,6 +855,7 @@ class ReactionMgr(ComponentMgr):
         Reaction specie consists of:
             ({domspec1, domspec2}, is_forming, is_intracomplex)
         """
+        ## TODO: Merge this with stack_and_process
         print("\nreact_and_process invoked with args: domain_pair = %s, reaction_attr = %s" %
               (domain_pair, reaction_attr))
         printd("domain domspecs/fingerprints (before reaction):", [d.state_fingerprint() for d in domain_pair])
@@ -879,7 +935,7 @@ class ReactionMgr(ComponentMgr):
             changed_domains += [d1, d2]
 
         if len(changed_domains) != len(set(changed_domains)):
-            print("WARNING: changed_domains contains duplicates!! THIS SHOULD NOT HAPPEN!")
+            print("\nWARNING: changed_domains contains duplicates!! THIS SHOULD NOT HAPPEN!\n")
             print("changed_domains:")
             pprint(changed_domains)
             print("result['changed_complexes']:")
@@ -900,7 +956,7 @@ class ReactionMgr(ComponentMgr):
 
 
         ## Update reactions for changed domains:
-        self.update_possible_reactions(changed_domains, reacted_pair=domain_pair, reaction_attr=reaction_attr)
+        self.update_possible_hybridization_reactions(changed_domains, reacted_pair=domain_pair, reaction_attr=reaction_attr)
         # Only provide reacted_pairs if a reaction really has occured:
         # HEY, IF UNHYBRIDIZE() SETS d1.partner = None, then that currently also sets d1.end3p.hyb_partner = None, etc!
         # Then, if update_possible_stacking_reactions tries to "assert h2end5p == h1end3p.hyb_partner", it will fail.
@@ -912,7 +968,7 @@ class ReactionMgr(ComponentMgr):
         #     reacted_stacking_pairs = None
         # Using dehybridized_duplex_ends is much better than trying to pretend that a (stacking) reaction has occoured:
         dehybridized_ends = [d1.end5p, d1.end3p, d2.end5p, d2.end3p] if not is_forming else None
-        self.update_possible_stacking_reactions(for_domains=changed_domains,
+        self.update_possible_stacking_reactions(changed_domains=changed_domains,
                                                 dehybridized_ends=dehybridized_ends)
         # Note: We still use 'unstacking_results' for forwarding these side-effect unstacking reactions to dispatcher.
 
@@ -920,7 +976,7 @@ class ReactionMgr(ComponentMgr):
         # TODO: Move this hybridization/dehybridization methods and apply conditionally.
         if d1.strand.complex:
             d1.strand.complex.reset_state_fingerprint()
-        if d2.strand.complex:
+        if d2.strand.complex not in (d1.strand.complex, None):
             d2.strand.complex.reset_state_fingerprint()
 
         printd("changed_domains _specie_state_fingerprint:")
@@ -940,8 +996,9 @@ class ReactionMgr(ComponentMgr):
     ###    STACKING REACTIONS    ###
     ################################
 
-    def update_possible_stacking_reactions(self, for_domains=None, reacted_pairs=None,
-                                           reaction_attrs=None, dehybridized_ends=None): #, reaction_endspec_pair=None
+    def update_possible_stacking_reactions(self, changed_domains=None, reacted_pairs=None, reaction_attrs=None,
+                                           dehybridized_ends=None, recalculate_stacked=False,
+                                           reaction_endspec_pair=None):
         """
         The stacking equivalent to init_possible_reactions.
         If changed_domains is None, consider ALL domains.
@@ -949,16 +1006,16 @@ class ReactionMgr(ComponentMgr):
         :reacted_pair: If provided, should be a frozenset of {(h1end3p, h2end5p), (h2end3p, h1end5p)}.
         Only provided reacted_pair when processing a recent stacking/unstacking reaction.
         DO NOT provide reacted_pair when processing a hybridization/dehybridization reaction.
-        (The hybridized/dehybridized domains are listed in "for_domains" and processed accordingly.)
+        (The hybridized/dehybridized domains are listed in "changed_domains" and processed accordingly.)
 
         :dehybridized_duplex_ends: is a list of ends: [d1end3p, d2end5p, ...]
         """
-        print("Updating possible stacking reactions for domains: (None=All)")
-        pprint(for_domains)
-        print("Reacted pairs:", reacted_pairs)
-        print("Reaction attrs:", reaction_attrs)
-        if for_domains is None:
-            for_domains = list(self.domains)
+        printd("Updating possible stacking reactions for domains: (None=All)")
+        pprintd(changed_domains)
+        printd("Reacted pairs:", reacted_pairs)
+        printd("Reaction attrs:", reaction_attrs)
+        if changed_domains is None:
+            changed_domains = list(self.domains)
 
         ## NOTE: The reaction could have been either stacking/unstacking OR HYBRIDIZATION/DEHYBRIDIZATION.
 
@@ -987,33 +1044,33 @@ class ReactionMgr(ComponentMgr):
                 # "if len(reacted_pair & other_pair) > 0" checks if the two stacking_pairs have any ends in common.
                 # set.intersection(other_set) is slower than '&' for small sets:
                 for reaction_pair in obsolete_reactions:
-                    print("Removing from possible_stacking_reactions obsolete stacking_pair:", reaction_pair)
+                    printd("Removing from possible_stacking_reactions obsolete stacking_pair:", reaction_pair)
                     del self.possible_stacking_reactions[reaction_pair]
                     del self.reaction_attrs[reaction_pair]
 
             ## TODO: Check to make sure that all reacted_pairs domains are in changed_domains
             # {(h1end3p, h1end5p), (h2end3p, h2nd5p)}
             for end in (end for reacted_pair in reacted_pairs for tup in reacted_pair for end in tup):
-                if not end.domain in for_domains:
-                    print(" - update_possible_stacking_reactions: Adding %s end's domain to changed_domains." % end)
-                    #for_domains.add(end.domain)
-                    for_domains.append(end.domain)
+                if not end.domain in changed_domains:
+                    printd(" - update_possible_stacking_reactions: Adding %s end's domain to changed_domains." % end)
+                    #changed_domains.add(end.domain)
+                    changed_domains.append(end.domain)
 
         if dehybridized_ends is not None:
             obsolete_reactions = [stacking_pair for stacking_pair in self.possible_stacking_reactions
                                   if any(end in ends_tup for end in dehybridized_ends
                                          for ends_tup in stacking_pair)]
-            print("Removing reactions obsolete by dehybridized_duplex_ends:", dehybridized_ends)
+            printd("Removing reactions obsolete by dehybridized_duplex_ends:", dehybridized_ends)
             pprint(obsolete_reactions)
             for stacking_pair in obsolete_reactions:
                 del self.possible_stacking_reactions[stacking_pair]
 
 
         # Only consider hybridized domains:
-        hybridized_domains = [domain for domain in for_domains if domain.partner is not None]
+        hybridized_domains = [domain for domain in changed_domains if domain.partner is not None]
         stacked_ends = [domain.end3p for domain in hybridized_domains if domain.end3p.stack_partner is not None]
-        print("stacked_ends:")
-        pprint(stacked_ends)
+        printd("stacked_ends:")
+        pprintd(stacked_ends)
         unstacked_ends3p = [domain.end3p for domain in hybridized_domains if domain.end3p.stack_partner is None]
         if self.enable_intercomplex_stacking:
             # Match against *all* unstacked domains (not just intra-complex)
@@ -1039,14 +1096,29 @@ class ReactionMgr(ComponentMgr):
             assert STACKING_INTERACTION in self.ends5p3p_graph[h2end3p][h2end5p]
 
             stacking_pair = frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))
+            # if stacking_pair in updated_reactions:
+            #     continue
             # For currently-stacked ends, we only need to update if its not in possible_stacking_reactions;
             # Once a stacking_pair is in possible_stacking_reactions, it doesn't change except when unstacked.
-            if stacking_pair not in self.possible_stacking_reactions: #updated_reactions: #:
+            # What if stacking_pair is already in possible_stacking_reactions, but the complex has changed
+            # enough to make the first c_j obsolete? Uhm, see above...
+            # And for the case looking at forming stacking reaction: the complex has changed,
+            # so we *MUST* to re-calculate c_j.
+            # stackspec_pair = frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+            #                             (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
+            # if stacking_pair in self.reaction_attrs:
+            #     if stackspec_pair == self.reaction_attrs[stacking_pair].stackspec_pair:
+            #         # No change since last:
+            #         continue
+            if stacking_pair not in self.possible_stacking_reactions or \
+                (recalculate_stacked and stacking_pair not in updated_reactions):
+                ## TODO: Reaction throttle should probably be inserted here. Edit: Use calculate_c_j() to add throttle.
+                reaction_attr = ReactionAttrs(reaction_type=STACKING_INTERACTION,
+                                              is_forming=False, is_intra=True) #, reactionspec_pair=stackspec_pair)
                 self.possible_stacking_reactions[stacking_pair] = \
                     self.calculate_stacking_c_j(h1end3p, h2end5p, h2end3p, h1end5p,
                                                 is_forming=False, is_intra=True)
-                self.reaction_attrs[stacking_pair] = ReactionAttrs(reaction_type=STACKING_INTERACTION,
-                                                                   is_forming=False, is_intra=True)
+                self.reaction_attrs[stacking_pair] = reaction_attr
                 updated_reactions.add(stacking_pair)
         for h1end3p in unstacked_ends3p:
             h2end5p = h1end3p.hyb_partner
@@ -1067,8 +1139,8 @@ class ReactionMgr(ComponentMgr):
                     # Helix 1  -> 5'--------------------3' <-
                     # Helix 2  -> 3'--------------------5' <-
                     #                h2end3p    h2end5p
-                    print("update_possible_stacking_reactions: Ignoring stacking between %r and %r" %
-                          (h1end3p, h2end3p))
+                    printd("update_possible_stacking_reactions: Ignoring stacking between %r and %r" %
+                           (h1end3p, h2end3p))
                     continue
                 h1end5p = h2end3p.hyb_partner
                 ## Assertions:
@@ -1104,7 +1176,7 @@ class ReactionMgr(ComponentMgr):
         The stacking equivalent to react_and_process.
         Perform a stacking reaction, determine which domains have changed,
         and forward that info to reaction updater method.
-        stacking_pair = frozenset((h1end3p, h2end5p), (h2end3p, h1end5p))
+        stacking_pair = frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))
         Ends annotation:
                     h1end3p         h1end5p
         Helix 1   ----------3' : 5'----------
@@ -1112,8 +1184,8 @@ class ReactionMgr(ComponentMgr):
                     h2end5p         h2end3p
         Returns stacking_pair, result
         """
-        print("stack_and_process invoked with stacking_pair:")
-        pprint(stacking_pair)
+        printd("stack_and_process invoked with stacking_pair:")
+        pprintd(stacking_pair)
         (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(stacking_pair)
         if self.invoked_reactions_file:
             print(("stacking_pair = frozenset(("
@@ -1144,35 +1216,51 @@ class ReactionMgr(ComponentMgr):
             assert h2end3p == h2end5p.stack_partner
             # assert d1.partner == d2 and d2.partner == d1
 
-        printd("%s h1end3p, h2end5p, h2end3p, h1end5p - %s %s and %s %s..." %
+        printd("stack_and_process: %s h1end3p, h2end5p, h2end3p, h1end5p - %s %s and %s %s..." %
                (reaction_str, h1end3p, h2end5p, h2end3p, h1end5p))
         if reaction_attr.is_forming:
             result = self.stack(h1end3p, h2end5p, h2end3p, h1end5p)
         else:
             result = self.unstack(h1end3p, h2end5p, h2end3p, h1end5p)
-        printd("Completed %s of h1end3p, h2end5p, h2end3p, h1end5p - %s %s and %s %s" %
+        printd("stack_and_process: Completed %s of h1end3p, h2end5p, h2end3p, h1end5p - %s %s and %s %s" %
                (reaction_str, h1end3p, h2end5p, h2end3p, h1end5p))
 
-        printd("%s result:" % reaction_str)
+        printd("stack_and_process: %s result:" % reaction_str)
         pprintd(result)
 
         changed_domains = []
         if result['changed_complexes']:
             # Edit: For stacking, we want duplexed domains, regardless of domain_pairs!!
             # No longer filtering with "if domain.partner is None and domain.name in self.domain_pairs"
-            # Instead, do appropriate filtering in update_possible_reactions.
+            # Instead, do appropriate filtering in update_possible_hybridization_reactions.
             ch_cmplx_domains = [domain for cmplx in result['changed_complexes'] for domain in cmplx.nodes()]
-            printd("Changed complexes domains:")
+            printd("stack_and_process: Changed complexes domains:")
             pprintd(ch_cmplx_domains)
             changed_domains += ch_cmplx_domains
         if result['free_strands']:
             free_st_domains = [domain for strand in result['free_strands'] for domain in strand.domains]
             changed_domains += free_st_domains
+        if result['new_complexes']:
+            self.complexes |= set(result['new_complexes'])
+            printd("stack_and_process: Adding new complexes %s to sysmgr.complexes:" % result['new_complexes'])
+            pprintd(self.complexes)
+            new_cmplx_domains = [domain for cmplx in result['new_complexes'] for domain in cmplx.nodes()]
+            changed_domains += new_cmplx_domains
+            printd("stack_and_process: New complexes domains:")
+            pprintd(new_cmplx_domains)
+        if result['obsolete_complexes']:
+            self.complexes -= set(result['obsolete_complexes'])
+            self.removed_complexes += result['obsolete_complexes']
+            printd("stack_and_process: Removing obsolete complexes %s from sysmgr.complexes:" % result['obsolete_complexes'])
+            pprintd(self.complexes)
+            printd("stack_and_process: sysmgr.removed_complexes:")
+            pprintd(self.removed_complexes)
+
 
         assert all(isinstance(domain, Domain) for domain in changed_domains)
 
         # Update hybridization reactions:
-        self.update_possible_reactions(changed_domains)
+        self.update_possible_hybridization_reactions(changed_domains)
         # Update stacking reactions:
         self.update_possible_stacking_reactions(changed_domains, reacted_pairs=(stacking_pair,),
                                                 reaction_attrs=(reaction_attr,))
@@ -1182,6 +1270,8 @@ class ReactionMgr(ComponentMgr):
             h1end3p.domain.strand.complex.reset_state_fingerprint()
         if h2end3p.domain.strand.complex:
             h2end3p.domain.strand.complex.reset_state_fingerprint()
+
+
 
         return stacking_pair, result
 
@@ -1194,10 +1284,13 @@ class ReactionMgr(ComponentMgr):
         """
         if T is None:
             T = self.temperature
-        stack_dH, stack_dS = DNA_NN4_R[h1end3p.stack_string]
         h1end5p = h2end3p.hyb_partner
         h2end5p = h1end3p.hyb_partner
+        ## TODO: Remove assertions
+        assert h1end3p.stack_string == h2end3p.stack_string
         assert h1end3p.stack_string == h2end3p.stack_string == h1end5p.stack_string == h2end5p.stack_string
+        assert h1end3p.stack_string is not None
+        stack_dH, stack_dS = DNA_NN4_R[h1end3p.stack_string] # Why does this have None as key?
         ## TODO: Remove stack_string equality assertion
         # K = exp(stack_dS - stack_dH/T)
         # k_off = self.stacking_rate_constant/K
@@ -1206,7 +1299,7 @@ class ReactionMgr(ComponentMgr):
 
 
     def calculate_stacking_c_j(self, h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra,
-                               reaction_type=STACKING_INTERACTION, reaction_pair_fingerprint=None):
+                               reaction_type=STACKING_INTERACTION, reaction_spec_pair=None):
         """
         Calculate stochastic rate constant c_j for forming/breaking a stacking interaction.
         Ends annotation:
@@ -1218,16 +1311,54 @@ class ReactionMgr(ComponentMgr):
         Note: Domains on the same helix may or may not be also connected by their phosphate backbone.
         E.g. you could have a hinge, where one helix is backbone-connected and the other one not.
         This is probably the most common case, e.g. in N-way junctions.
+        Nomenclature:
+        :reaction_spec_pair: (For state species - previously "reaction_pair_fingerprint")
+         - For stacking interactions, this is called "stackspec_pair", for domains its called "domspec_pair".
+         - The general case its called "reaction_spec_pair".
+
+        Q: Where do we apply throttling? Here? Or under the "undate_*_reactions" methods?
+        A: Maybe you could have a "calculate_c_j" wrapper which takes care of caching and throttling?
         """
         # TODO: Add caching of stacking c_j
+        # Caching is mostly needed for intracomplex reactions, and we already cache intracomplex_activity results!
+        if reaction_spec_pair is None:
+            reaction_spec_pair = frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+                                            (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
+        else:
+            ## TODO: Remove excessive assertions
+            assert reaction_spec_pair == frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+                                                    (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
+        # Reset complex (and domain) state fingerprints and re-check:
+        complexes = {c for c in (end.domain.strand.complex for end in (h1end3p, h2end5p, h2end3p, h1end5p))
+                     if c is not None}
+        for c in complexes:
+            c.reset_state_fingerprint()
+        assert reaction_spec_pair == frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+                                                (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
         d1 = h1end3p.domain
         d2 = h2end3p.domain
+        printd("Re-setting complex state and re-calculating state fingerprint:")
+        # d1.state_change_reset()
+        # d2.state_change_reset()
+        d1.strand.complex.reset_state_fingerprint(reset_domains=True)
+        d2.strand.complex.reset_state_fingerprint(reset_domains=True)
+        reaction_spec_pair_fresh = frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+                                              (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
+        try:
+            assert reaction_spec_pair == reaction_spec_pair_fresh
+        except AssertionError as e:
+            print("Got different reaction_spec_pair fingerprints after resetting domains/complexes!")
+            raise e
+        # if d1.strand.complex is not None:
+        #     d1.strand.complex.reset_state_fingerprint()
+        # if d2.strand.complex is not None:
+        #     d2.strand.complex.reset_state_fingerprint()
         assert h1end3p.hyb_partner == h2end5p
         assert h1end3p == h2end5p.hyb_partner
         assert h2end3p.hyb_partner == h1end5p
         assert h2end3p == h1end5p.hyb_partner
-        print("calculate_stacking_c_j invoked with h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra:")
-        print(", ".join(str(p) for p in (h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra)))
+        printd("calculate_stacking_c_j invoked with h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra:")
+        printd(", ".join(str(p) for p in (h1end3p, h2end5p, h2end3p, h1end5p, is_forming, is_intra)))
         if is_forming:
             # if d1.strand.complex == d2.strand.complex != None:
             # Edit: We might have a single strand interacting with itself
@@ -1235,17 +1366,22 @@ class ReactionMgr(ComponentMgr):
                 assert d1.strand.complex == d2.strand.complex
                 assert d1.strand.complex is not None or d1.strand == d2.strand
                 # Intra-complex reaction:
-                # This should really be the averaae of dist(h1end3p, h1end5p), dist(h2end3p, h2end5p).
+                # This should really be the average of dist(h1end3p, h1end5p), dist(h2end3p, h2end5p).
                 # However, except for the case where the helices are already backbone connected,
                 # we can approximate this by just one distance, dist(h1end3p, h2end3p):
                 if h1end3p.pb_downstream == h1end5p and h2end3p.pb_downstream == h2end5p:
                     stochastic_activity = 1
-                stochastic_activity = self.intracomplex_activity(h1end3p, h2end3p, reaction_type=STACKING_INTERACTION)
+                # (h1end3p, h2end5p), (h2end3p, h1end5p)
+                #stochastic_activity = self.intracomplex_activity(h1end3p, h2end3p, reaction_type=STACKING_INTERACTION)
+                stochastic_activity = self.intracomplex_activity((h1end3p, h2end5p), (h2end3p, h1end5p),
+                                                                 reaction_type=STACKING_INTERACTION)
+                print("reaction_spec_pair:")
+                pprint(reaction_spec_pair)
                 print(" - stacking stochastic_activity (intra reaction) = %s" % stochastic_activity)
             else:
                 # Inter-complex reaction:
                 stochastic_activity = self.specific_bimolecular_activity # Same as 1/self.volume/N_AVOGADRO × M
-                print(" - stacking stochastic_activity (inter reaction) = %s" % stochastic_activity)
+                printd(" - stacking stochastic_activity (inter reaction) = %s" % stochastic_activity)
             if self.include_steric_repulsion:
                 steric_activity_factor = ((1 if d1.strand.complex is None else self.steric_activity_factor(d1)) *
                                           (1 if d2.strand.complex is None else self.steric_activity_factor(d2)))
@@ -1253,12 +1389,70 @@ class ReactionMgr(ComponentMgr):
 
             k_on = self.stacking_rate_constant # (h1end3p, h2end3p)    # is fairly constant as long as ΔG° < 0
             c_j = k_on * stochastic_activity
-            print(" - stacking stochastic rate constant c_j = %s * %s = %s" % (k_on, stochastic_activity, c_j))
+            printd(" - stacking stochastic rate constant c_j = %s * %s = %s" % (k_on, stochastic_activity, c_j))
         else:
             # De-hybridization reaction;
             k_off = self.unstacking_rate_constant(h1end3p, h2end3p)  # k_off depends on ΔG°
             c_j = k_off # For uni-molecular reactions, c_j = k_j
-            print(" - un-stacking stochastic rate constant c_j = k_off = %s" % (c_j,))
+            printd(" - un-stacking stochastic rate constant c_j = k_off = %s" % (c_j,))
+
+        reaction_attrdict = {'ends': (h1end3p, h2end5p, h2end3p, h1end5p),
+                             'is_forming': is_forming,
+                             'is_intra': is_intra,
+                             'reaction_type': reaction_type,
+                             'c_j': c_j,
+                             ('k_%s' % ("on" if is_forming else "off")): k_on if is_forming else k_off,
+                             'stack_seq (all - None if forming)': tuple(end.stack_string for end in
+                                                                        (h1end3p, h2end5p, h2end3p, h1end5p)),
+                             'steric_activity_factor': steric_activity_factor
+                                                       if (is_forming and self.include_steric_repulsion) else None,
+                             'stochastic_activity': stochastic_activity if is_forming else "1 (unimolecular reac.)",
+                             'domains (str, frozen):': tuple(repr(end.domain)
+                                                             for end in (h1end3p, h2end5p, h2end3p, h1end5p)),
+                             'domains (now):': tuple(end.domain for end in (h1end3p, h2end5p, h2end3p, h1end5p)),
+                             'complexes stacking fingerprint': "c stack fp", # Key too long to pretty print...
+                             "c stack fp": tuple(c.stacking_fingerprint() for c in complexes),
+                             "c.stacking_edges": tuple(repr(c.stacking_edges()) for c in complexes),
+                            }
+
+        if reaction_spec_pair in self.cache['stochastic_rate_constant']:
+            try:
+                assert np.isclose(c_j, self.cache['stochastic_rate_constant'][reaction_spec_pair])
+            except AssertionError as e:
+                print(("\n\nERROR: Newly calculated c_j %0.03e for %r reaction_spec_pair %s "
+                       "is different from old value %0.03e") %
+                      (c_j, reaction_type, reaction_spec_pair,
+                       self.cache['stochastic_rate_constant'][reaction_spec_pair]))
+                print("Re-setting complex state and re-calculating state fingerprint:")
+                d1.state_change_reset()
+                d2.state_change_reset()
+                reaction_spec_pair_fresh = frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+                                                      (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
+                print("Fresh state fingerprint: %s" % (reaction_spec_pair_fresh,))
+                print(" - same as old reaction_spec_pair?", reaction_spec_pair_fresh == reaction_spec_pair)
+                print("stochastic_rate_constant_attrs:")
+                pprint(reaction_attrdict)
+                print("Previous stochastic_rate_constant_attrs:")
+                pprint(self.cache['stochastic_rate_constant_attrs'][reaction_spec_pair])
+                print("\nd1.print_history:")
+                d1.print_history()
+                print("\nd2.print_history:")
+                d2.print_history()
+                c1, c2 = d1.strand.complex, d1.strand.complex
+                if c1 or c2:
+                    if c1:
+                        print("\nc1.print_history:")
+                        c1.print_history()
+                    if c2 == c1:
+                        print("\nc1 == c2")
+                    else:
+                        print("\nc2.print_history:")
+                        c2.print_history()
+                raise e
+        else:
+            self.cache['stochastic_rate_constant'][reaction_spec_pair] = c_j
+            self.cache['stochastic_rate_constant_attrs'][reaction_spec_pair].append(reaction_attrdict)
+
         return c_j #, is_forming
 
 

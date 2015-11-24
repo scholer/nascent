@@ -171,6 +171,8 @@ class LiveVisualizerBase():
         """
         if directed is None:
             directed = self.directed_graph
+        if key is None:
+            key = interaction
         if self.is_multigraph:
             # key_directed, key_undirected = (source, target, key), (frozenset((source, target)), key)
             edge_lookup = (source, target, key) if directed else (frozenset((source, target)), key)
@@ -197,7 +199,8 @@ class LiveVisualizerBase():
             self.edge_names_to_suid[edge_lookup] = edge_id
         else:
             lookup_test = self.edge_suid_to_names.pop(edge_id)
-            self.deleted_name_to_suid.append({key: edge_id})
-            self.deleted_suid_to_name.append({edge_id: key})
-            if lookup_test != key:
-                print("WARNING: Mapping issue: node_suid_to_name[node_id] != node_name")
+            self.deleted_name_to_suid.append({lookup_test: edge_id})
+            self.deleted_suid_to_name.append({edge_id: lookup_test})
+            if lookup_test != edge_lookup:
+                print("WARNING: Mapping issue: node_suid_to_name[node_id] %s != node_name %s" %
+                      (lookup_test, edge_lookup))

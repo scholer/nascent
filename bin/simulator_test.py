@@ -49,6 +49,10 @@ from nascent.graph_sim_nx.simulator_dm import DM_Simulator as Simulator
 from nascent.graph_sim_nx.fileio import parse_strand_domains_file, check_strands
 from nascent.graph_sim_nx.dispatcher import StateChangeDispatcher
 from nascent.graph_sim_nx.constants import N_AVOGADRO #, R
+from nascent.graph_sim_nx import debug
+
+# Toggle debug printing:
+debug.do_print = False
 
 ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
 
@@ -149,7 +153,7 @@ def test(simulator, usepdb=False, testcase=None, execfile=None):
         # simulator.systemmgr.draw_and_save_graphs(n=1)
         # Or just run with python -m pdb <script>  (and press 'c' to continue until next error or breakpoint).
         # (Does not work if the exception is catched, of course...!)
-        n_done = simulator.simulate(T=328, n_steps_max=10, systime_max=1000) #
+        n_done = simulator.simulate(T=330, n_steps_max=100, systime_max=1000) #
         # try:
         #     # n_done = simulator.simulate(T=330, n_steps_max=10, systime_max=200)
         #     n_done = simulator.simulate(T=328, n_steps_max=20, systime_max=200) #
@@ -194,8 +198,8 @@ def run_repeatedly(simulator):
     sysmgr = simulator.reactionmgr
     answer = 'r'
     systime_max = 0
-    T = 350
-    n_steps_max = 10
+    T = 330
+    n_steps_max = 30
     print("Starting simulation...")
     while 'q' not in answer:
         systime_max += 1000
@@ -213,6 +217,7 @@ def run_repeatedly(simulator):
             elif 'g' in answer:
                 sysmgr.draw_and_save_graphs(n="end")
             else:
+                old_T = T
                 try:
                     vals = answer.strip().split()
                     T = int(vals[0])
@@ -221,6 +226,8 @@ def run_repeatedly(simulator):
                     pass
                 except IndexError:
                     pass
+                if T != old_T:
+                    simulator.reactionmgr.reset_temperature(T)
         n_done = simulator.simulate(T=T, n_steps_max=n_steps_max, systime_max=systime_max)
         print("\nCompleted %s steps..." % n_done)
 
@@ -370,7 +377,7 @@ def main():
                     'n_steps_per_T': n_steps_per_T,
                     "working_directory": run_directory,
                     # Sleep factor*tau after each DM simulation step: 0 = Do not wait, Higher = Wait longer.
-                    "simulator_step_sleep_factor": 2, # 0, 1, 0.5, 5...
+                    "simulator_step_sleep_factor": 0, # 0, 1, 0.5, 5...
                     # A filename str or True to save to working directory.
                     "save_invoked_reactions_to_file": True, # True or False
                     # A filename str or True to save to working directory.
@@ -384,6 +391,10 @@ def main():
                     # Re-calculate changed domain reactions against all other (complementary) domains,
                     # or only re-calculate for pairs against other changed domains?
                     "reaction_update_pair_against_all": True,
+                    # Nric = normalized_reaction_invocation_count = sysmgr.reaction_invocation_count[reaction_spec]/len(sysmgr.domains_by_name[d.name])
+                    "reaction_throttle": True, # True: default to c_j_throttle_factor = exp(-Nric/10)
+                    "reaction_throttle_offset": 10,
+                    "reaction_throttle_reset_on_temperature_change": True,
                    }
     simulator = Simulator(volume=volume, strands=input_oligos, params=adhoc_params,
                           outputstatsfiles=outputstatsfile)
@@ -392,6 +403,7 @@ def main():
     ## Hook up dispatcher
     dispatcher_config = {'dispatcher_state_changes_fn': outputfn(uid=uid, statstype="changes", ext="txt"),
                          'dispatcher_keep_file_open': True, # False,
+                         'dispatcher_state_changes_file_add_header': True,
                          'dispatcher_cache_size': 100, # If output file is not kept open
                          # File output formatting:
                          # 'dispatcher_state_changes_line_fields': ['T', 'time', 'tau', 'change_type', 'forming', 'interaction']
@@ -400,14 +412,15 @@ def main():
                          # multi-directives are state change dicts with multiple nodes or multiple pairs, e.g.
                          # change['nodes'] = (node1, node2, ...) or (source1, target1, source2, target2, ...)
                          'dispatcher_multi_directive_support': True, # True, False
-                         'dispatcher_graph_translation': None, #'domain-to-5p3p', # None, 'domain-to-5p3p', 'domain-to-strand'
+                         'dispatcher_graph_translation': 'domain-to-5p3p', # None, 'domain-to-5p3p', 'domain-to-strand'
                          #'livestreamer_graph_representation': '5p3p' # Not used.
                          'livestreamer_auto_apply_layout': 0,
                          'livestreamer_graph_layout_method': 'force-directed',
-                         'dispatcher_livestreamer': 'gephi_ws', #None, # 'gephi', 'gephi_ws', 'cytoscape'
-                         'visualization_use_websocket': False,
+                         #None, 'gephi_mock', 'gephi_regular', 'gephi_multi'/'gephi', 'cytoscape'
+                         'dispatcher_livestreamer': None, #'gephi_regular' if 0 else 'gephi_mock',
+                         'visualization_use_websocket': False,  # For gephi or other websocket-enabled streamers.
                          'visualization_workspace': 'workspace0',
-                         'dispatcher_debug_print': True, # print debug statements in dispatcher
+                         'dispatcher_debug_print': False, # print debug statements in dispatcher
                         }
     if enable_gephi_stream:
         dispatcher = StateChangeDispatcher(dispatcher_config)

@@ -99,7 +99,9 @@ from nascent.graph_sim_nx.constants import (HYBRIDIZATION_INTERACTION, PHOSPHATE
 DEFAULT_NODE_ATTR = {"size": 10, 'r': 1.0, 'g': 0.0, 'b': 0.0, 'x': 1, 'y': 0}
 DEFAULT_EDGE_ATTR = {}
 
-## TODO: Subclass GephiGraphStreamer instead of LiveVisualizerBase
+
+
+
 class GephiMultiGraphStreamer(LiveVisualizerBase):
     """
     Draw graph live using Gephi with graph-streaming plugin.
@@ -134,6 +136,7 @@ class GephiMultiGraphStreamer(LiveVisualizerBase):
         # Graph network:
         self.network = self.client # For pygephi, the client is a proxy for the network.
         self.id_key = 'id'   # is 'SUID' for Cytoscape, 'id' for graph-streaming
+        self.directed = None
 
 
     def initialize_graph(self, graph, reset=True):
@@ -151,13 +154,17 @@ class GephiMultiGraphStreamer(LiveVisualizerBase):
         self.client.autoflush = False # disable auto-flush while we build the graph
         for node, data in graph.nodes(data=True):
             self.add_node(node, attributes=data)
-        directed = False # graph.is_directed()
+        directed = self.directed if self.directed is not None else graph.is_directed()
+        # print("Gephi streamer: Initializing with graph, directed=%s" % (directed, ))
         ## TODO: Add explicit support for multi-graphs!
-        for source, target, data in graph.edges(data=True):
-            data.setdefault('interaction', PHOSPHATEBACKBONE_INTERACTION)
-            if 'weight' in data:
-                data['weight'] = math.sqrt(data['weight']) # Gephi is a little too sensitive to edge weight.
-            self.add_edge(source, target, directed=directed, attributes=data)
+        if graph.is_multigraph():
+            for source, target, key, data in graph.edges(data=True, keys=True):
+                interaction = data.setdefault('interaction', PHOSPHATEBACKBONE_INTERACTION)
+                self.add_edge(source, target, directed=directed, key=key, interaction=interaction, attributes=data)
+        else:
+            for source, target, data in graph.edges(data=True):
+                interaction = data.setdefault('interaction', PHOSPHATEBACKBONE_INTERACTION)
+                self.add_edge(source, target, directed=directed, interaction=interaction, attributes=data)
         self.client.flush()
         self.client.autoflush = autoflush
         print("node_name_to_suid:", self.node_name_to_suid)
@@ -215,9 +222,14 @@ class GephiMultiGraphStreamer(LiveVisualizerBase):
             attrs = self.edge_attributes
         if key is None:
             if interaction is None:
-                interaction = attrs.get('interaction', HYBRIDIZATION_INTERACTION)
-            key = "-" + str(interaction) + ("->" if directed else "--")
-        edge_id = "-".join((source, key, target))
+                interaction = attrs.get('interaction')
+            # If converting key from interaction, always use a standardized way.
+            # Using key = interaction is OK as long as we don't have tiny circular constructs.
+            key = interaction
+        edge_id = "%s--%s-%s%s" % (source, key, (">" if directed else "-"), target)
+        # if False and attributes and 'weight' not in attributes and 'len' in attributes:
+        #     # 'len' is typically root squared end-to-end distance in nm
+        #     attributes['weight'] = math.sqrt(1/attributes['len'])
         self.client.add_edge(edge_id, source, target, directed, **attrs)
         # register_new_edges takes a list of dicts or a single dict with
         if source not in self.node_name_to_suid or target not in self.node_name_to_suid:
@@ -226,14 +238,14 @@ class GephiMultiGraphStreamer(LiveVisualizerBase):
                   ("target '%s' not in node_name_to_suid" % target) if target not in self.node_name_to_suid else "")
         if edge_id in self.edge_suid_to_names:
             print("Note: edge id", edge_id, "already in edge_suid_to_names.")
-        self.register_new_edges([{'id': edge_id, 'source': source, 'target': target}], directed=directed)
+        self.register_new_edges([{self.id_key: edge_id, 'source': source, 'target': target}], directed=directed)
         return edge_id
 
 
     def add_edges(self, edges, directed, keys=None, attributes=None):
         """
         Takes a list of edges in the form of
-            [{'source': <name>, 'target': <name>, 'interaction': <str>, 'directed': <bool>}, ...]
+            [{'source': <name>, 'target': <name>, 'key': ..., 'interaction': <str>, 'directed': <bool>}, ...]
 
         """
         if attributes:
@@ -242,17 +254,24 @@ class GephiMultiGraphStreamer(LiveVisualizerBase):
         else:
             attrs = self.edge_attributes
         print("Attributes:", attrs)
-        default_interaction = attrs.get('interaction', HYBRIDIZATION_INTERACTION)
         autoflush = self.client.autoflush
-        new_edge_ids = []
         self.client.autoflush = False # disable auto-flush while we build the graph
-        if keys:
-            for (source, target), key in zip(edges, keys):
-                self.add_edge(source, target, directed=directed, key=key, attributes=attrs)
-        else:
-            for source, target in edges:
-                self.add_edge(source, target, directed=directed, attributes=attrs)
-        self.register_new_edges(new_edge_ids)
+        # new_edge_ids = []
+        # new_edge_ids = [{self.id_key: self.add_edge(source=edge['source'],
+        #                                             target=edge['target'],
+        #                                             directed=edge.get('directed'),
+        #                                             key=edge.get('key', key),
+        #                                             attributes=edge.get('attributes', attrs)),
+        #                  'source': edge['source'],
+        #                  'target': edge['target'],
+        #                  'key': edge.get('key')}
+        #                 for edge in edges]
+        # self.register_new_edges(new_edge_ids)
+        # Edit: add_edge will register the edge...
+        for edge in edges:
+            self.add_edge(source=edge['source'], target=edge['target'],
+                          directed=edge.get('directed'), key=edge.get('key'),
+                          interaction=edge.get('interaction'), attributes=edge.get('attributes', attrs))
         self.client.flush()
         self.client.autoflush = autoflush
 
@@ -262,3 +281,91 @@ class GephiMultiGraphStreamer(LiveVisualizerBase):
     #        return source+"-->"+target
     #    else:
     #        return source+"---"+target
+
+
+class GephiRegularGraphStreamer(GephiMultiGraphStreamer):
+    """
+    Prevent making multi-graph edges.
+    """
+    def __init__(self, config):
+        super().__init__(config)
+        self.is_multigraph = False  # Force regular-not-multi graph
+        self.current_edges = defaultdict(set) # (source, target) => key or interaction
+
+
+    def add_edge(self, source, target, directed=None, key=None, interaction=None, bidirectional=None, attributes=None):
+        """ Add a single edge. Id is auto-generated as {source}-{key}-{target}. """
+        edge = (source, target) if directed else frozenset((source, target))
+        key = key if key is not None else (interaction if interaction is not None else attributes.get('interaction'))
+        assert key is not None
+        super().add_edge(source, target, directed=directed, key=key,
+                         interaction=interaction, bidirectional=bidirectional, attributes=attributes)
+        self.current_edges[edge].add(key)
+
+    def delete_edge(self, source, target, directed=None, key=None, interaction=None):
+        """ Delete edge, but first: check . """
+        edge = (source, target) if directed else frozenset((source, target))
+        key = key if key is not None else interaction
+        assert key is not None
+        super().delete_edge(source, target, directed=directed, key=key, interaction=interaction)
+        self.current_edges[edge].remove(key)
+        if len(self.current_edges[edge]) == 0:
+            del self.current_edges[edge]
+
+
+class MockClient():
+    autoflush = True
+
+    def clean(self, *args, **kwargs):
+        pass
+
+    def flush(self, ):
+        pass
+
+from collections import defaultdict
+
+class GephiRegularGraphStreamerMock(GephiRegularGraphStreamer):
+    """
+    Test
+    """
+
+    def __init__(self, config):
+        self.config = config
+        self.client = MockClient()
+        self.node_attributes = {}
+        self.edge_attributes = {}
+        self.directed = None
+        self.node_name_to_suid = {}
+        self.node_suid_to_name = {}
+        self.edge_names_to_suid = {}
+        self.edge_suid_to_names = {}
+        self.is_multigraph = False  # Force regular-not-multi graph
+        self.current_edges = defaultdict(set) # (source, target) => key or interaction
+        self.deleted_edges = []
+
+    def __getattr(self, *args, **kwargs):
+        print("Uncaught getattr() for %s: %s, %s" % (self, args, kwargs))
+
+    def add_node(self, *args, **kwargs):
+        pass
+
+    def add_nodes(self, *args, **kwargs):
+        pass
+
+    def add_edge(self, source, target, directed=None, key=None, interaction=None, bidirectional=None, attributes=None):
+        """ Add a single edge. Id is auto-generated as {source}-{key}-{target}. """
+        edge = (source, target) if directed else frozenset((source, target))
+        key = key if key is not None else (interaction if interaction is not None else attributes.get('interaction'))
+        assert key is not None
+        self.current_edges[edge].add(key)
+
+    def delete_edge(self, source, target, directed=None, key=None, interaction=None):
+        """ Delete edge, but first: check . """
+        edge = (source, target) if directed else frozenset((source, target))
+        key = key if key is not None else interaction
+        assert key is not None
+        self.current_edges[edge].remove(key)
+        if len(self.current_edges[edge]) == 0:
+            del self.current_edges[edge]
+
+

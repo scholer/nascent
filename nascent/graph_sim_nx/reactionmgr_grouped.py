@@ -195,7 +195,7 @@ class ReactionMgrGrouped(ReactionMgr):
                 reaction_spec = (domspec_pair, is_hyb, is_intra)
                 if reaction_spec not in Rxs:
                     # tuple values are (propensity constant c_j, is_forming)
-                    Rxs[reaction_spec] = self.calculate_c_j(d1, d2, is_forming=is_hyb, is_intra=is_intra)
+                    Rxs[reaction_spec] = self.calculate_hybridization_c_j(d1, d2, is_forming=is_hyb, is_intra=is_intra)
                 self.hybridization_reactions_by_domspec[d1_domspec].add(reaction_spec)
                 self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
             else:
@@ -216,14 +216,14 @@ class ReactionMgrGrouped(ReactionMgr):
                     reaction_spec = (domspec_pair, is_hyb, is_intra)
                     if reaction_spec not in Rxs:
                         # R_j = (c_j, v_j) - propensity constant for reaction j
-                        Rxs[reaction_spec] = self.calculate_c_j(d1, d2, is_forming=True, is_intra=is_intra)
+                        Rxs[reaction_spec] = self.calculate_hybridization_c_j(d1, d2, is_forming=True, is_intra=is_intra)
                     self.hybridization_reactions_by_domspec[d1_domspec].add(reaction_spec)
                     self.hybridization_reactions_by_domspec[d2_domspec].add(reaction_spec)
         self.possible_hybridization_reactions = Rxs
         print(len(self.possible_hybridization_reactions), "possible hybridization reactions initialized.")
 
 
-    def update_possible_reactions(self, changed_domains, reacted_pair, reaction_attr, reaction_domspec_pair=None):
+    def update_possible_hybridization_reactions(self, changed_domains, reacted_pair, reaction_attr, reaction_domspec_pair=None):
         """
         Maybe it is better to just re-calculate a_j for all changed domains,
         and then filter out reactions with a_j = 0,
@@ -248,7 +248,7 @@ class ReactionMgrGrouped(ReactionMgr):
 
         Instead, I guess we could have
         """
-        print(("\nupdate_possible_reactions invoked with d1=%s, d2=%s, is_forming=%s, reaction_domspec_pair=%s, "
+        print(("\nupdate_possible_hybridization_reactions invoked with d1=%s, d2=%s, is_forming=%s, reaction_domspec_pair=%s, "
                "changed_domains:") % (d1, d2, is_forming, reaction_domspec_pair))
         pprint(changed_domains)
 
@@ -288,7 +288,7 @@ class ReactionMgrGrouped(ReactionMgr):
 
 
         for domain in changed_domains:
-            # print("update_possible_reactions: processing changed domain:", domain)
+            # print("update_possible_hybridization_reactions: processing changed domain:", domain)
             # IMPORTANT: changed_domains must not contain any
             # Set vs list:
             # - Lists are slightly faster to iterate over;
@@ -419,7 +419,7 @@ class ReactionMgrGrouped(ReactionMgr):
                     print(("de-hybrid reaction_spec %s for new domspec %s is not in possible_hybridization_reactions, "
                            "calculating c_j...") % (reaction_spec, domspec))
                     self.possible_hybridization_reactions[reaction_spec] = \
-                        self.calculate_c_j(domain1, domain2, is_forming=False, is_intra=is_intra)
+                        self.calculate_hybridization_c_j(domain1, domain2, is_forming=False, is_intra=is_intra)
                 elif reaction_spec not in updated_reactions:
                     # Should not happen - it is supposedly a "new domain state".
                     # Edit: Can happen when c and C is changed: (C hybridize c) AND (c hybridize C)
@@ -452,7 +452,7 @@ class ReactionMgrGrouped(ReactionMgr):
                                     print(("hybridizing reaction_spec %s for new domspec %s is not in possible"
                                            "_hybridization_reactions, calculating c_j...") % (reaction_spec, domspec))
                                     self.possible_hybridization_reactions[reaction_spec] = \
-                                        self.calculate_c_j(domain1, domain2, is_forming=True, is_intra=is_intra)
+                                        self.calculate_hybridization_c_j(domain1, domain2, is_forming=True, is_intra=is_intra)
                                 else:
                                     print(" GOOD: reaction_spec %s for new domspec %s is already in possible_hybridization_reactions." \
                                           % (reaction_spec, domspec))
@@ -828,7 +828,7 @@ class ReactionMgrGrouped(ReactionMgr):
                   ("Hybridization" if is_forming else "De-hybridization", d1, repr(d1), d2, repr(d2)))
             print("-----------------")
 
-        self.update_possible_reactions(changed_domains, reacted_pair=(d1, d2), is_forming=is_forming,
+        self.update_possible_hybridization_reactions(changed_domains, reacted_pair=(d1, d2), is_forming=is_forming,
                                        reaction_domspec_pair=domspec_pair)
         # DEBUGGING: Resetting complex fingerprint.
         # TODO: Move this hybridization/dehybridization methods and apply conditionally.
