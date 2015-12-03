@@ -29,11 +29,12 @@ TODO: Change all mentions of "strand" to "oligo" to conform with cadnano's nomen
 #import random
 import math
 import pdb
-#from collections import deque, OrderedDict
+from collections import deque #, OrderedDict
 #from itertools import zip_longest, chain#, accumulate
 # import itertools
 # import networkx as nx
 # import numpy as np
+import inspect
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
@@ -104,7 +105,7 @@ class Domain():
         # Cached values:
         self._in_complex_identifier = None
         self._specie_state_fingerprint = None
-        self.history = []
+        self.history = deque(maxlen=50)
 
 
     @property
@@ -114,10 +115,10 @@ class Domain():
     @partner.setter
     def partner(self, partner):
         """ Making this a property for now to ensure that ends5p3p are properly set. """
-        self.history.append("Setting self.partner = %r..." % partner)
+        # self.history.append("Setting self.partner = %r..." % partner)
         if partner is None:
             if self._partner is not None:
-                self.history.append(" - partner: Resetting current partner %r and ends..." % self._partner)
+                # self.history.append(" - partner: Resetting current partner %r and ends..." % self._partner)
                 self._partner._partner = None # pylint:disable=W0212
                 self._partner.end3p.hyb_partner = None
                 self._partner.end5p.hyb_partner = None
@@ -135,7 +136,7 @@ class Domain():
 
     def set_strand(self, strand):
         """ (re-)set domain's strand. """
-        self.history.append("Setting self.strand = %r..." % strand)
+        # self.history.append("Setting self.strand = %r..." % strand)
         self.strand = strand
         self.domain_strand_specie = (strand.name, self.name)
         ## Concern: If you add support for strand nicking/ligation, then you cannot use strand to specify
@@ -165,7 +166,10 @@ class Domain():
                 if search_str is None or search_str in entry:
                     yield (level, entry)
             else:
-                yield from self.gen_history_records(history=entry, level=level+1, search_str=search_str)
+                nextgen = self.gen_history_records(history=entry, level=level+1, search_str=search_str)
+                #yield from nextgen
+                for val in nextgen:
+                    yield val
 
 
     def in_complex_identifier(self, strandgraph=None):
@@ -203,7 +207,7 @@ class Domain():
                     self._in_complex_identifier = hash(tuple(frozenset(d.domain_strand_specie for d in ring)
                                                              for ring in neighbor_rings)) % 100000
                     #specie_instances = c.domains_by_name[self.name]
-            self.history.append("in_complex_identifier: Calculated in_complex_identifier = %r..." % (self._in_complex_identifier,))
+            # self.history.append("in_complex_identifier: Calculated in_complex_identifier = %r..." % (self._in_complex_identifier,))
         return self._in_complex_identifier
 
 
@@ -218,7 +222,7 @@ class Domain():
         #self._specie_state_fingerprint = None
         self.state_change_reset(reset_complex=False)
         if self._specie_state_fingerprint is None:
-            printd("(re-)calculating state fingerprint for domain %r" % (self, ))
+            # printd("(re-)calculating state fingerprint for domain %r" % (self, ))
             dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
             # the complex's state:
             c_state = self.strand.complex.state_fingerprint() \
@@ -227,7 +231,7 @@ class Domain():
             ## TODO: I'm currently including hybridization state in fingerprint; this should not be needed, but...
             self._specie_state_fingerprint = (dspecie, self.partner is not None, c_state, self.in_complex_identifier())
             # print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
-            self.history.append("Domain.state_fingerprint: Calculated domain specie state fingerprint = %r..." % (self._specie_state_fingerprint,))
+            # self.history.append("Domain.state_fingerprint: Calculated domain specie state fingerprint = %r..." % (self._specie_state_fingerprint,))
         return self._specie_state_fingerprint
 
 
@@ -235,9 +239,7 @@ class Domain():
         """ Reset state-dependent attributes (must be invoked after a state change). """
         self._in_complex_identifier = None
         self._specie_state_fingerprint = None
-        self.history.append(("Domain.state_change_reset: Unsetting specie_state_fingerprint (and in_complex_identifier; "
-                             "reset_complex=%r, kwargs=%s)...") %
-                            (reset_complex, kwargs))
+        # self.history.append(("Domain.state_change_reset: Unsetting specie_state_fingerprint (and in_complex_identifier; reset_complex=%r, kwargs=%s)...") % (reset_complex, kwargs))
         if reset_complex and self.strand.complex is not None:
             self.strand.complex.reset_state_fingerprint(reset_domains=False, **kwargs)
 
@@ -248,7 +250,10 @@ class Domain():
         return "%s:%s#%s" % (self.strand.fqdn(), self.name, self.duid)
 
     def __repr__(self):
-        return self.fqdn()
+        #frameinfo = inspect.getframeinfo(inspect.currentframe().f_back)
+        #print("Domain repr called from:", frameinfo.filename, frameinfo.lineno)
+        return "%s:%s#%s" % (self.strand, self.name, self.duid)
+        #return self.fqdn()
 
     def __str__(self):
         #return self.fqdn()
@@ -345,7 +350,8 @@ class Domain3pEnd(DomainEnd):
 
 def print_connection(parents, domain):
     """ """
-    print("->".join(str(d) for d in gen_parents_connection(parents, domain)))
+    #print("->".join(str(d) for d in gen_parents_connection(parents, domain)))
+    pass
 
 
 def print_domain_distances(distances):

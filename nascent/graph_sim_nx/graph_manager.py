@@ -20,7 +20,7 @@
 import os
 import networkx as nx
 from networkx.algorithms.shortest_paths import shortest_path
-import numpy as np
+# import numpy as np
 import math
 import itertools
 from pprint import pprint
@@ -261,7 +261,7 @@ class GraphManager():
         # Append the last stiffness group to path_edges:
         path_edges.append((stiffness, stiffness_group))
 
-        printd("Path edges: %s" % path_edges)
+        # printd("Path edges: %s" % path_edges)
         #printd("stiffness groups: %s" % stiffness_group)
 
         if summarize and length_only:
@@ -453,11 +453,11 @@ class GraphManager():
             d1end5p, d2end5p = elem1, elem2
             domain1, domain2 = d1end5p.domain, d2end5p.domain
         path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
-        printd("5p3p graph shortest path from %s to %s:" % (d1end5p, d2end5p))
-        pprintd(path)
+        # printd("5p3p graph shortest path from %s to %s:" % (d1end5p, d2end5p))
+        # pprintd(path)
         path_elements = self.ends5p3p_path_partial_elements(path, length_only='both', summarize=True)
-        printd("5p3p graph path elements:")
-        pprintd(path_elements)
+        # printd("5p3p graph path elements:")
+        # pprintd(path_elements)
 
         ## TODO: Check for secondary loops!
 
@@ -503,9 +503,9 @@ class GraphManager():
         # it is probably better to use domain.ds_length.
 
         if LRE_len > SRE_len:
-            print("LRE_len > SRE_len for path between %r and %r" % (domain1, domain2))
-            pprint(path)
-            pprint(path_elements)
+            # printd("LRE_len > SRE_len for path between %r and %r" % (domain1, domain2))
+            # pprintd(path)
+            # pprintd(path_elements)
             # The domains cannot reach each other.
             # Hybridization requires helical bending; Not implemented yet; just returning 0 meaning "impossible".
             # TODO: Implement hybridization via helical bending.

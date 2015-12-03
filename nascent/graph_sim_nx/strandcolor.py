@@ -50,7 +50,7 @@ class StrandColor():
         N_MAX_ABORT = 200
         n_tries = 0
         if strand.name not in self.st_spec_colors:
-            printd("last_hue: %s, self.mindist=%s" % (self.last_hue, self.mindist))
+            # printd("last_hue: %s, self.mindist=%s" % (self.last_hue, self.mindist))
             hue = random() if self.randomize else self.last_hue
             while any(abs(hue-h2) < self.mindist for h2 in self.used):
                 n_tries += 1
@@ -70,7 +70,7 @@ class StrandColor():
             self.last_hue = hue
             self.st_spec_colors[strand.name] = hue
             self.used.append(hue)
-            printd("Hue for strand %s: %s" % (strand, hue))
+            # printd("Hue for strand %s: %s" % (strand, hue))
             # For 0 < frac < 0.5, use frac*2 as value, max out at 1.
             # e.g. frac=1/4 (3 domains), val=0.5; frac=1/8 (7 domains), val=1/4, etc.
         else:
@@ -89,7 +89,7 @@ class StrandColor():
         hue = self.strand_color(strand)
         val = min((frac*2, 1.0))
         sat = min((2-frac*2, 1.0))
-        printd("Strand %s with frac %s yields hsv = %s" % (strand, frac, (hue, sat, val)))
+        # printd("Strand %s with frac %s yields hsv = %s" % (strand, frac, (hue, sat, val)))
         return hue, sat, val
 
     def domain_rgb(self, strand, frac):
@@ -97,7 +97,7 @@ class StrandColor():
         """
         hsv = self.domain_hsv(strand, frac)
         rgb = colorsys.hsv_to_rgb(*hsv)
-        printd("Strand %s with frac %s yields rgb = %s" % (strand, frac, rgb))
+        # printd("Strand %s with frac %s yields rgb = %s" % (strand, frac, rgb))
         return rgb
 
 
@@ -115,5 +115,5 @@ class StrandColorRandom(StrandColor):
                 bestidx, hue = max(candidates, key=lambda tup: min(abs(tup[1]-h2) for h2 in self.used))
             self.st_spec_colors[strand.name] = hue
             self.used.append(hue)
-        printd("Hue for strand %s: %s" % (strand, hue))
+        # printd("Hue for strand %s: %s" % (strand, hue))
         return hue

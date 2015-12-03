@@ -101,7 +101,7 @@ def thermodynamic_meltingcurve(T_start, T_finish, delta_T, volume,
             total_conc += conc_domain
             domains_total += len(domains)
             domain_stats[T]['dname'] = [D, conc_domain - D, conc_domain, len(domains), x]
-        cum_stats[T] = (hybridized, non_hybridized, total_conc, domains_total)
+        cum_stats[T] = [hybridized, non_hybridized, total_conc, domains_total]
         T += delta_T
     return cum_stats, domain_stats
 

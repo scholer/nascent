@@ -20,8 +20,7 @@
 
 from pprint import pprint
 
-# do_print = False
-do_print = True
+do_print = False
 
 
 def print_debug(*args, origin=None, **kwargs):
@@ -29,14 +28,10 @@ def print_debug(*args, origin=None, **kwargs):
     if do_print:
         print(*args, **kwargs)
 
+def pprint_debug(*args, **kwargs):
+    if do_print:
+        pprint(*args, **kwargs)
 
-def mute(*args, **kwargs):
-    pass
 
-
-if do_print:
-    pprintd = pprint
-    printd = print_debug
-else:
-    pprintd = mute
-    printd = mute
+pprintd = pprint_debug
+printd = print_debug

@@ -26,7 +26,7 @@ Module for
 
 import itertools
 import networkx as nx
-import numpy as np
+# import numpy as np
 import math
 
 # Relative imports
@@ -228,13 +228,26 @@ class Strand(nx.MultiGraph):
         """ Return whether any domain in strand is hybridized. """
         return any(domain.partner is not None for domain in self.domains)
 
+    def is_fully_hybridized(self):
+        """ Return whether all domains in strand are hybridized. """
+        return all(domain.partner is not None for domain in self.domains)
+
+    def n_domains_hybridized(self):
+        return sum(1 for domain in self.domains if domain.partner is not None)
+
+    def f_domains_hybridized(self, ):
+        #hybridized_domains = [domain for domain in self.domains if domain.partner is not None]
+        return self.n_domains_hybridized()/len(self.domains)
+
+
     def fqdn(self):
         """ Return Complex:Strand[Domain] """
         #return "%s:%s[%s]" % (self.complex, self.name, self.suid)
         return "%s:%s#%s" % (self.complex, self.name, self.suid)
 
     def __repr__(self):
-        return self.fqdn()
+        return "%s:%s#%s" % (self.complex, self.name, self.suid)
+        #return self.fqdn()
 
     def __str__(self):
         #return self.fqdn()

@@ -56,7 +56,7 @@ from math import exp #, log as ln
 from pprint import pprint
 import networkx as nx
 from networkx.algorithms.components import connected_components, connected_component_subgraphs
-import numpy as np
+# import numpy as np
 import pdb
 
 from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
@@ -622,8 +622,10 @@ class ReactionMgrGrouped(ReactionMgr):
         is_forming = reaction_spec[1]
         if is_forming:
             # a_j = c_j * x₁ * x₂
-            self.propensity_functions[reaction_spec] = c_j * \
-                np.prod([len(self.domain_state_subspecies[ds]) for ds in reaction_spec[0]])
+            self.propensity_functions[reaction_spec] = (c_j *
+                #np.prod([len(self.domain_state_subspecies[ds]) for ds in reaction_spec[0]])
+                (len(self.domain_state_subspecies[reaction_spec[0][0]]) *
+                 len(self.domain_state_subspecies[reaction_spec[0][1]])))
         else:
             # a_j = c_j * x₃ ,      x₃ is number of duplexes
             #self.propensity_functions[domspec_pair] = c_j * len(self.domain_state_subspecies[domspec_pair[0]])
@@ -684,10 +686,13 @@ class ReactionMgrGrouped(ReactionMgr):
         """
         print("Initializing propensity functions...")
         # domspec_pair (plural) is: frozenset({(domain1, cstate), (domain2, cstate)})
-        a = {reaction_spec: c_j * (np.prod([len(self.domain_state_subspecies[ds]) for ds in reaction_spec[0]])
+        a = {reaction_spec: (c_j * #(np.prod([len(self.domain_state_subspecies[ds]) for ds in reaction_spec[0]])
+                             len(self.domain_state_subspecies[reaction_spec[0][0]]) *
+                             len(self.domain_state_subspecies[reaction_spec[0][1]]))
                                    #if is_forming else len(self.domain_state_subspecies[reaction_spec[0][0]]))
                                    # reaction_spec[1] = is_forming
-                                   if reaction_spec[1] else len(self.domain_state_subspecies[next(iter(reaction_spec[0]))]))
+                            if reaction_spec[1] else
+                            len(self.domain_state_subspecies[next(iter(reaction_spec[0]))])
              for reaction_spec, c_j in self.possible_hybridization_reactions.items()}
         self.propensity_functions = a
         print(len(self.propensity_functions), "propensity functions initialized.")

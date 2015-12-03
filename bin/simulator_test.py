@@ -35,11 +35,11 @@ from pprint import pprint
 from collections import defaultdict, namedtuple
 import pdb
 
-try:
-    import rlcompleter
-    import readline
-except ImportError:
-    pass
+# try:
+#     import rlcompleter
+#     import readline
+# except ImportError:
+#     pass
 
 LIBPATH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, LIBPATH)
@@ -140,9 +140,10 @@ def test(simulator, usepdb=False, testcase=None, execfile=None):
         # --> KeyError in File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\graph_sim_nx\systemmgr.py", line 380, in update_possible_reactions:
         #    self.unhybridized_domains_by_name[d1.name].remove(d1)
 
-    elif usepdb:
+    else:
+    # elif usepdb:
         # Use the python debugger (includes readline since 3.3):
-        import pdb
+        # import pdb
         #pdb.run('simulator.simulate(T=350, n_steps_max=1, systime_max=1)', locals=locals())
         # Or start main script from console using:
         # python -m pdb simulator_test.py
@@ -176,14 +177,14 @@ def test(simulator, usepdb=False, testcase=None, execfile=None):
         # except TypeError:
         #     pdb.post_mortem()  # use while handling an exception.
         #pdb.pm()  # only use after execution, when sys.last_traceback has been set.
-    else:
-        readline.set_completer(rlcompleter.Completer(locals()).complete)
-        readline.parse_and_bind("tab: complete")
-        from importlib import reload
-        #newc, oldc = moves.hybridize(domb, domB)
-        # Simulate a single step:
-        n_done = simulator.simulate(T=350, n_steps_max=10, systime_max=100)
-        interact(local=locals())
+    # else:
+    #     readline.set_completer(rlcompleter.Completer(locals()).complete)
+    #     readline.parse_and_bind("tab: complete")
+    #     from importlib import reload
+    #     #newc, oldc = moves.hybridize(domb, domB)
+    #     # Simulate a single step:
+    #     n_done = simulator.simulate(T=350, n_steps_max=10, systime_max=100)
+    #     interact(local=locals())
 
     print("\n\nTEST RUN COMPLETE. n_done =", n_done)
     answer = input(("Type 'd' to enter debugger; "
@@ -275,7 +276,7 @@ def main():
     adhoc_testing = True
     usepdb = True
     do_run_repeatedly = True # False, True
-    enable_gephi_stream = True # False, True
+    enable_gephi_stream = False # False, True
     strand_defs_folder = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(nascent.__file__))), "testfiles")
     #structure = "duplex1"
@@ -395,6 +396,8 @@ def main():
                     "reaction_throttle": True, # True: default to c_j_throttle_factor = exp(-Nric/10)
                     "reaction_throttle_offset": 10,
                     "reaction_throttle_reset_on_temperature_change": True,
+                    "dispatcher_enabled": False, #enable_gephi_stream,
+                    "stats_writer_endabled": True,
                    }
     simulator = Simulator(volume=volume, strands=input_oligos, params=adhoc_params,
                           outputstatsfiles=outputstatsfile)

@@ -42,13 +42,15 @@ else:
     timer = time.time
 
 #import networkx as nx
-import numpy as np
+# import numpy as np
 
 
 #from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
 #from .thermodynamic_utils import thermodynamic_meltingcurve
 from .simulator import Simulator
 from .reactionmgr_grouped import ReactionMgrGrouped
+from .dispatcher import StateChangeDispatcher
+from .stats_manager import StatsWriter
 # N_AVOGADRO in /mol,
 # Universal Gas constant in cal/mol/K
 from .constants import (N_AVOGADRO, R,
@@ -136,7 +138,7 @@ class DM_Simulator(Simulator):
         strands = kwargs.pop('strands')
         if strands is not None:
             strands = copy.deepcopy(strands)
-        self.reactionmgr_grouped = ReactionMgrGrouped(params=params, strands=strands, **kwargs)
+        # self.reactionmgr_grouped = ReactionMgrGrouped(params=params, strands=strands, **kwargs)
         ### -- end making grouped reaction mgr --- ###
         self.time_per_T = params.get('time_per_T', 10) # seconds
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
@@ -163,44 +165,69 @@ class DM_Simulator(Simulator):
                                                'forming': 1,
                                                'interaction': STACKING_INTERACTION,
                                                'multi': False}
+        if params.get('stats_writer_enabled', True):
+            config = params['stats_writer_config'] if 'stats_writer_config' in params else params
+            self.stats_writer = StatsWriter(sysmgr=self.reactionmgr, simulator=None, config=config)
+        else:
+            self.stats_writer = None
+        if params.get('dispatcher_enabled', False):
+            dispatcher_config = params['dispatcher_config'] if 'dispatcher_config' in params else params
+            self.dispatcher = StateChangeDispatcher(config=dispatcher_config)
+            if params.get('simulator_init_dispatcher_domain_graph'):
+                self.dispatcher.init_graph(self.reactionmgr.domain_graph)
+        else:
+            self.dispatcher = None
 
 
     def simulate(self, T=None, n_steps_max=100000, simulation_time=None, systime_max=None):
         """
         Simulate at most n_steps number of rounds at temperature T.
         """
+        if n_steps_max is None:
+            n_steps_max = self.params["n_steps_per_T"]
+        if simulation_time is None:
+            simulation_time = self.params["time_per_T"]
         self.timings['simulation_start_time'] = timer()
         self.timings['step_start_time'] = self.timings['step_end_time'] = self.timings['simulation_start_time']
         if systime_max is None:
             systime_max = self.sim_system_time + simulation_time
 
         sysmgr = self.reactionmgr
-        sysmgr_grouped = self.reactionmgr_grouped
+        # sysmgr_grouped = self.reactionmgr_grouped
         if T is None:
             T = sysmgr.temperature
         else:
             if T != sysmgr.temperature:
                 print("Re-setting temperature (and temperature-dependent caches)...")
                 sysmgr.reset_temperature(T)
-        sysmgr_grouped.temperature = T
+        # sysmgr_grouped.temperature = T
         sleep_time = 0
 
         n_done = 0
 
         print("sysmgr.domain_pairs:")
-        pprintd(sysmgr.domain_pairs)
+        # pprintd(sysmgr.domain_pairs)
+
+        print("\n" + self.print_post_step_fmt)
+        # print(self.print_post_step_fmt.format(
+        #     self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr,
+        #     sleep_time=sleep_time),
+        #       end="")
+
+        if self.stats_writer:
+            self.stats_writer.write_stats(tau=0, sys_time=self.sim_system_time)
 
         while n_done < n_steps_max:
 
-            print("\n\n------ Step %03s -----------\n" % n_done)
+            # printd("\n\n------ Step %03s -----------\n" % n_done)
             sysmgr.check_system()
-            print(" - precheck OK.")
+            # printd(" - precheck OK.")
 
             # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_forming)}
             # sysmgr.propensity_functions is dict with              {domspec_pair: a_j}
-            printd(" ---- Reaction stats: ----")
+            # printd(" ---- Reaction stats: ----")
             #sysmgr.print_reaction_stats()
-            printd("\n".join(sysmgr.reaction_stats_strs()))
+            # printd("\n".join(sysmgr.reaction_stats_strs()))
 
             # Step 1. (I expect that propensity_functions is up-to-date)
             if not sysmgr.propensity_functions:
@@ -216,15 +243,18 @@ class DM_Simulator(Simulator):
                 a0_stacking = sum(stacking_propensities)
                 a0_sum = a0_hyb + a0_stacking
             else:
-                print("No stacking reactions!")
+                # printd("simulator.simulate: No stacking reactions!")
                 a0_sum = a0_hyb
 
             # Step 2: Generate values for τ and j:  - easy.
             r1, r2 = random.random(), random.random()
-            dt = ln(1/r1)/a0_sum
-            if systime_max and self.sim_system_time + dt > systime_max:
+            tau = ln(1/r1)/a0_sum
+            if systime_max and self.sim_system_time + tau > systime_max:
+                tau = systime_max - self.sim_system_time
                 self.sim_system_time = systime_max
                 print("\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
+                if self.stats_writer:
+                    self.stats_writer.write_stats(tau=tau, sys_time=self.sim_system_time)
                 return n_done
 
             # find j:
@@ -264,7 +294,7 @@ class DM_Simulator(Simulator):
             # 3b: Hybridize/dehybridize domains and Update graphs/stats/etc
 
             # 3a: Update system time:
-            self.sim_system_time += dt
+            self.sim_system_time += tau
 
             # 3b: Hybridize/dehybridize:
             if reaction_type == HYBRIDIZATION_INTERACTION:
@@ -305,57 +335,58 @@ class DM_Simulator(Simulator):
             elif reaction_type == STACKING_INTERACTION:
                 ## TODO: Consolidate stacking and hybridization
                 # reaction_spec == reaction_pair == stacking_pair == {(h1end3p, h2end5p), (h2end3p, h1end5p)}
-                print("Performing stacking reaction:")
-                pprint(reaction_spec)
-                pprint(sysmgr.reaction_attrs[reaction_spec])
+                # printd("Performing stacking reaction:")
+                # pprintd(reaction_spec)
+                # pprintd(sysmgr.reaction_attrs[reaction_spec])
                 c_j = sysmgr.possible_stacking_reactions[reaction_spec]
                 reaction_pair, result = sysmgr.stack_and_process(reaction_spec)
                 (h1end3p, h2end5p), (h2end3p, h1end5p) = reaction_pair
             else:
                 raise ValueError("Unexpected reaction_type value %r" % reaction_type)
-            printd("Result from sysmgr reaction:")
-            pprintd(result)
+            # printd("Result from sysmgr reaction:")
+            # pprintd(result)
 
             ## Check the system (while debugging)
             sysmgr.check_system()
-            print(" - post reaction_and_process check OK.")
+            # printd(" - post reaction_and_process check OK.")
 
 
             # Repeat for grouped system mgr:
-            mirror_grouped_system = False
-            if mirror_grouped_system:
-                domspec_pair = frozenset((d1.state_fingerprint(), d2.state_fingerprint()))
-                grouped_reaction_spec = (domspec_pair, reaction_attr)
-                print("\nRepeating reaction for grouped sysmgr; reaction_spec is:")
-                pprint(reaction_spec)
-                print("grouped_reaction_spec is:")
-                pprint(grouped_reaction_spec)
-                print("---- sysmgr reaction pathways: ----")
-                sysmgr.print_reaction_stats()
-                print("---- sysmgr_grouped reaction pathways: ----")
-                sysmgr_grouped.print_reaction_stats()
-                c_j_g = sysmgr_grouped.possible_hybridization_reactions[grouped_reaction_spec]
-                print("c_j, is_forming:", c_j, is_forming)
-                print("c_j_g:", c_j_g)
-                assert np.isclose(c_j_g, c_j)
-                print("React and process using grouped_reaction_spec %s:" % (grouped_reaction_spec,))
-                (d1_g, d2_g), result = sysmgr_grouped.react_and_process(*grouped_reaction_spec)
-                # the grouped sysmgr might select different domains for hybridizing, but they should
-                # have the same state, and the domspec distribution should be equivalent.
-                try:
-                    assert (d1_g.state_fingerprint() == d1.state_fingerprint() and \
-                            d2_g.state_fingerprint() == d2.state_fingerprint()) or \
-                           (d1_g.state_fingerprint() == d2.state_fingerprint() and \
-                            d2_g.state_fingerprint() == d1.state_fingerprint())
-                except AssertionError as e:
-                    print("\nReacted domain species for grouped system does not match that for ungrouped:")
-                    print("d1.state_fingerprint():", d1.state_fingerprint())
-                    print("d1_g.state_fingerprint():", d1_g.state_fingerprint())
-                    print("d2.state_fingerprint():", d2.state_fingerprint())
-                    print("d2_g.state_fingerprint():", d2_g.state_fingerprint())
-                    print("c_j, is_forming:", c_j, reaction_attr.is_forming)
-                    print("c_j_g:", c_j_g)
-                    raise e
+            # mirror_grouped_system = False
+            # if mirror_grouped_system:
+            #     domspec_pair = frozenset((d1.state_fingerprint(), d2.state_fingerprint()))
+            #     grouped_reaction_spec = (domspec_pair, reaction_attr)
+            #     print("\nRepeating reaction for grouped sysmgr; reaction_spec is:")
+            #     pprint(reaction_spec)
+            #     print("grouped_reaction_spec is:")
+            #     pprint(grouped_reaction_spec)
+            #     print("---- sysmgr reaction pathways: ----")
+            #     sysmgr.print_reaction_stats()
+            #     print("---- sysmgr_grouped reaction pathways: ----")
+            #     sysmgr_grouped.print_reaction_stats()
+            #     c_j_g = sysmgr_grouped.possible_hybridization_reactions[grouped_reaction_spec]
+            #     print("c_j, is_forming:", c_j, is_forming)
+            #     print("c_j_g:", c_j_g)
+            #     #assert np.isclose(c_j_g, c_j)
+            #     assert (c_j_g - c_j) < 1e-3 and (c_j_g - c_j)/c_j < 1e-5 and (c_j_g - c_j)/c_j_g < 1e-5
+            #     print("React and process using grouped_reaction_spec %s:" % (grouped_reaction_spec,))
+            #     (d1_g, d2_g), result = sysmgr_grouped.react_and_process(*grouped_reaction_spec)
+            #     # the grouped sysmgr might select different domains for hybridizing, but they should
+            #     # have the same state, and the domspec distribution should be equivalent.
+            #     try:
+            #         assert (d1_g.state_fingerprint() == d1.state_fingerprint() and \
+            #                 d2_g.state_fingerprint() == d2.state_fingerprint()) or \
+            #                (d1_g.state_fingerprint() == d2.state_fingerprint() and \
+            #                 d2_g.state_fingerprint() == d1.state_fingerprint())
+            #     except AssertionError as e:
+            #         print("\nReacted domain species for grouped system does not match that for ungrouped:")
+            #         print("d1.state_fingerprint():", d1.state_fingerprint())
+            #         print("d1_g.state_fingerprint():", d1_g.state_fingerprint())
+            #         print("d2.state_fingerprint():", d2.state_fingerprint())
+            #         print("d2_g.state_fingerprint():", d2_g.state_fingerprint())
+            #         print("c_j, is_forming:", c_j, reaction_attr.is_forming)
+            #         print("c_j_g:", c_j_g)
+            #         raise e
 
 
             ## Post-hybridization (and processing) assertions:
@@ -372,6 +403,12 @@ class DM_Simulator(Simulator):
                 print("set(sysmgr.propensity_functions.keys()):")
                 pprint(set(sysmgr.propensity_functions.keys()))
                 raise e
+
+            # 3b: Write stats:
+            if self.stats_writer:
+                # Strictly speaking we don't need to produce stats during the simulation; we can use the dispatcher
+                # to note the domain state changes and then re-create the stats after simulation.
+                self.stats_writer.write_stats(tau=tau, sys_time=self.sim_system_time)
 
             # 3c: Dispatch the state change
             if self.dispatcher:
@@ -393,7 +430,7 @@ class DM_Simulator(Simulator):
                 directive = self.state_change_hybridization_template.copy()
                 directive['T'] = sysmgr.temperature
                 directive['time'] = self.sim_system_time
-                directive['tau'] = dt
+                directive['tau'] = tau
                 directive['forming'] = int(reaction_attr.is_forming)
                 directive['interaction'] = reaction_attr.reaction_type
                 # Dispatcher is responsible for translating domain objects to model-agnostic (str repr) graph events.
@@ -431,8 +468,8 @@ class DM_Simulator(Simulator):
             ## FINISH OF AND LOOP TO STEP (1)
             n_done += 1
             self.N_steps += 1
-            self.system_stats['tau'] = dt
-            self.system_stats['tau_deque'].append(dt)
+            self.system_stats['tau'] = tau
+            self.system_stats['tau_deque'].append(tau)
             self.system_stats['tau_mean'] = sum(self.system_stats['tau_deque'])/len(self.system_stats['tau_deque'])
             # step_start_time: Real-world time when step was started.
             if self.step_sleep_factor:
@@ -444,7 +481,7 @@ class DM_Simulator(Simulator):
 
             if self.step_sleep_factor:
                 # Compensate for simulation calculation time:
-                sleep_time = (dt-self.timings['step_time'])*self.step_sleep_factor
+                sleep_time = (tau-self.timings['step_time'])*self.step_sleep_factor
 
             print(self.print_post_step_fmt.format(
                 self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr,
@@ -469,9 +506,9 @@ class DM_Simulator(Simulator):
                             "any other key to continue... "))
             if 'g' in answer:
                 sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
-                if mirror_grouped_system:
-                    sysmgr_grouped.draw_and_save_graphs(prefix="grouped",
-                                                        n="%s_%0.03fs" % (n_done, self.sim_system_time))
+                # if mirror_grouped_system:
+                #     sysmgr_grouped.draw_and_save_graphs(prefix="grouped",
+                #                                         n="%s_%0.03fs" % (n_done, self.sim_system_time))
             if 'q' in answer:
                 return
             if 'd' in answer:
