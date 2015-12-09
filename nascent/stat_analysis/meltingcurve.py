@@ -25,19 +25,22 @@ Module for plotting melting curves (or, in generaal, some value representing sta
 
 
 """
+import os
+import yaml
+
+from .plotting import load_pyplot
 
 
+## Melting curves:
 
-
-
-
-
-def plot_thermodynamic_meltingcurve(cumstatsfile, KtoC=True, linespec=':', **kwargs):
+def plot_thermodynamic_meltingcurve(cumstatsfile, KtoC=True, linespec=':', plotfilename=None, **kwargs):
     """
     Plot meltingcurve cumstatsfile.
     Format is:
-        cum_stats[T] = (hybridized, non_hybridized, total_conc, domains_total)
+        cum_stats[T] = (c_hybridized, c_unhybridized, total_conc, domains_total)
+    I.e. values are in molar concentrations.
     """
+    pyplot = load_pyplot()
     if isinstance(cumstatsfile, str):
         with open(cumstatsfile) as fd:
             cumstats = yaml.load(fd)
@@ -49,8 +52,10 @@ def plot_thermodynamic_meltingcurve(cumstatsfile, KtoC=True, linespec=':', **kwa
     label = kwargs.pop('label', os.path.splitext(os.path.basename(cumstatsfile))[0])
     if "dom_anneal_stats" in label:
         label = label.replace("dom_anneal_stats", "")
-        foldername = os.path.basename(os.path.dirname(os.path.abspath(
-            cumstatsfile)))
+        foldername = os.path.basename(os.path.dirname(os.path.abspath(cumstatsfile)))
         label = foldername + label
+    ax = pyplot.plot(Ts, f_hyb, linespec, label=label, **kwargs)
+    if plotfilename:
+        pyplot.savefig(plotfilename)
+    return ax
 
-    pyplot.plot(Ts, f_hyb, linespec, label=label, **kwargs)

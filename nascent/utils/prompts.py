@@ -31,3 +31,22 @@ def prompt_yes_no(prompt, default=None):
         if answer not in ('y', 'n'):
             print("Answer must start with Y/y or N/n. Please try again.")
     return answer
+
+
+def start_interact(local=None, readfunc=None, banner=None):
+    try:
+        import rlcompleter
+        import readline
+        readline.set_completer(rlcompleter.Completer(locals()).complete)
+        readline.parse_and_bind("tab: complete")
+    except ImportError:
+        pass
+    from importlib import reload
+    import pdb
+    import code #from code import interact
+    if local is None:
+        local = locals()
+    else:
+        local['reload'] = reload
+        local['pdb'] = pdb
+    code.interact(local=local, readfunc=readfunc, banner=banner)
