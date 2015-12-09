@@ -144,7 +144,7 @@ class DM_Simulator(Simulator):
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)
         self.step_sleep_factor = self.params.get('simulator_step_sleep_factor', 0)
-        self.print_post_step_fmt = ("\r{self.N_steps: 5} "
+        self.print_post_step_fmt = ("{self.N_steps: 5} "
                                     "[{self.sim_system_time:0.02e}"
                                     " {stats[tau]:0.02e}"
                                     " {stats[tau_mean]:0.02e}] "
@@ -208,14 +208,11 @@ class DM_Simulator(Simulator):
         print("sysmgr.domain_pairs:")
         # pprintd(sysmgr.domain_pairs)
 
-        print("\n" + self.print_post_step_fmt)
+        print(self.print_post_step_fmt)
         # print(self.print_post_step_fmt.format(
         #     self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr,
         #     sleep_time=sleep_time),
         #       end="")
-
-        if self.stats_writer:
-            self.stats_writer.write_stats(tau=0, sys_time=self.sim_system_time)
 
         while n_done < n_steps_max:
 
@@ -251,13 +248,22 @@ class DM_Simulator(Simulator):
             tau = ln(1/r1)/a0_sum
             if systime_max and self.sim_system_time + tau > systime_max:
                 tau = systime_max - self.sim_system_time
-                self.sim_system_time = systime_max
-                print("\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
                 if self.stats_writer:
                     self.stats_writer.write_stats(tau=tau, sys_time=self.sim_system_time)
+                self.sim_system_time = systime_max
+                print("\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
                 return n_done
 
-            # find j:
+            # NEW: Collecting stats *before* executing reaction, but *before* incrementing system_time.
+            # This way, tau represents the duration of the state which we are collecting for,
+            # while sys_time is still marks the logical *beginning* of the state (not the end time).
+            if self.stats_writer:
+                # Strictly speaking we don't need to produce stats during the simulation; we can use the dispatcher
+                # to note the domain state changes and then re-create the stats after simulation.
+                self.stats_writer.write_stats(tau=tau, sys_time=self.sim_system_time)
+
+
+            ## find which reaction j should fire:
             breaking_point = r2*a0_sum
             # a  0  a_0 a_1+a_2+a_3+a_4
             #    |---|---|---|---|---||---|---|---|---|---|
@@ -276,6 +282,8 @@ class DM_Simulator(Simulator):
             while sum_j < breaking_point:
                 j += 1
                 sum_j += a[j]
+
+
             # Propensity functions are only used to select which reaction path to fire.
             # Now that we have that, we just have to select a domain pair with domspec_pair
             # is a domspec_pair = {dom_spec1, dom_spec2} = {F₁, F₂}
@@ -340,7 +348,7 @@ class DM_Simulator(Simulator):
                 # pprintd(sysmgr.reaction_attrs[reaction_spec])
                 c_j = sysmgr.possible_stacking_reactions[reaction_spec]
                 reaction_pair, result = sysmgr.stack_and_process(reaction_spec)
-                (h1end3p, h2end5p), (h2end3p, h1end5p) = reaction_pair
+                # (h1end3p, h2end5p), (h2end3p, h1end5p) = reaction_pair
             else:
                 raise ValueError("Unexpected reaction_type value %r" % reaction_type)
             # printd("Result from sysmgr reaction:")
@@ -404,66 +412,11 @@ class DM_Simulator(Simulator):
                 pprint(set(sysmgr.propensity_functions.keys()))
                 raise e
 
-            # 3b: Write stats:
-            if self.stats_writer:
-                # Strictly speaking we don't need to produce stats during the simulation; we can use the dispatcher
-                # to note the domain state changes and then re-create the stats after simulation.
-                self.stats_writer.write_stats(tau=tau, sys_time=self.sim_system_time)
 
             # 3c: Dispatch the state change
             if self.dispatcher:
-                # The state_change received by dispatch() is either a dict with keys:
-                #     - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
-                #     - forming: 1=forming, 0=eliminating
-                #     - interaction: 1=backbone, 2=hybridization, 3=stacking (only for edge changes)
-                #     - time: Current system time (might be subjective to rounding errors).
-                #     - tau:  Change in system time between this directive and the former.
-                #     - T:    Current system temperature.
-                #     - multi: If True, interpret "nodes" as a list of pairs (u₁, u₂, ...) for NODE-altering directives,
-                #                 or (u₁, v₁, u₂, v₂, ...) for EDGE-altering directives.
-                #     - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
-                #               Nodes must currently be domains (which are forwarded to a suitable translator).
-                # The state-change directive can also be a list of state changes (use directive_is_list=True).
-                # TODO: Consider a model that ONLY uses DomainEnds and not domains. Hybridization domain_pairs
-                #       Are replaced with a domain ends tuple pair similar to stacking_pair (but obviously differnt):
-                #       {(d1end5p, d1end3p), (d2end5p, d2end3p)}
-                directive = self.state_change_hybridization_template.copy()
-                directive['T'] = sysmgr.temperature
-                directive['time'] = self.sim_system_time
-                directive['tau'] = tau
-                directive['forming'] = int(reaction_attr.is_forming)
-                directive['interaction'] = reaction_attr.reaction_type
-                # Dispatcher is responsible for translating domain objects to model-agnostic (str repr) graph events.
-                if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-                    directive['nodes'] = (d1, d2)
-                elif reaction_attr.reaction_type is STACKING_INTERACTION:
-                    # Note: This is different from the order of stacking_pair, (h1end3p, h2end5p), (h2end3p, h1end5p)
-                    # This specifies (source1, target1, source2, target2),
-                    # and implies connecting 3p of source1 with 5p of target1, etc.
-                    directive['nodes'] = (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain)
-                    # Tell the dispatcher that we have multiple pairs of edges in 'nodes':
-                    # self.multi_directive_support = config['dispatcher_multi_directive_support'] must be set to True:
-                    directive['multi_directive'] = True
-                if 'unstacking_results' in result:
-                    assert reaction_attr.is_forming is False
-                    directive = [directive]
-                    directive_is_list = True
-                    for (h1end3p, h2end5p), (h2end3p, h1end5p) in result['unstacking_results']:
-                        # IMPORTANT: For stacking interactions, domains must be given in the order of the stack:
-                        #            nodes = (dom1, dom2) means that dom1.end3p stacks with dom2.end5p !
-                        state_change = {'forming': int(reaction_attr.is_forming),
-                                        'time': self.sim_system_time,
-                                        'T': sysmgr.temperature,
-                                        'tau': 0,
-                                        #'nodes': zip(duplexend1, duplexend2[::-1]),
-                                        #'nodes': (h1end3p, h1end5p, h2end3p, h2end5p),
-                                        'nodes': (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain),
-                                        'multi_directive': True
-                                       }
-                        directive.append(state_change)
-                else:
-                    directive_is_list = False
-                self.dispatcher.dispatch(directive, directive_is_list=directive_is_list)
+                self.dispatch_state_change(tau, reaction_pair, reaction_attr, result)
+
 
             ## FINISH OF AND LOOP TO STEP (1)
             n_done += 1
@@ -486,33 +439,39 @@ class DM_Simulator(Simulator):
             print(self.print_post_step_fmt.format(
                 self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr,
                 sleep_time=sleep_time),
-                  end="")
+                  end="\r")
 
-            if n_done % 10000 == 0:
-                print(("Simulated %s of %s steps at T=%s K (%0.0f C). "+
-                       "%s state changes with %s selections in %s total steps.") %
-                      (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
+            # if n_done % 10000 == 0:
+            #     print(("Simulated %s of %s steps at T=%s K (%0.0f C). "+
+            #            "%s state changes with %s selections in %s total steps.") %
+            #           (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
 
 
+            ## SLEEP, if required: ##
             if self.step_sleep_factor and sleep_time > 0:
                 # Compensate for simulation calculation time:
                 # print("Sleeping for %s seconds before next step..." % sleep_time)
                 time.sleep(sleep_time)
                 self.timings['step_start_time'] = timer()
-            answer = 'c' or input(("\nReaction complete."
-                            "Type 'd' to enter debugger;"
-                            "'g' to save plot to file;"
-                            "'q' to quit;"
-                            "any other key to continue... "))
-            if 'g' in answer:
-                sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
-                # if mirror_grouped_system:
-                #     sysmgr_grouped.draw_and_save_graphs(prefix="grouped",
-                #                                         n="%s_%0.03fs" % (n_done, self.sim_system_time))
-            if 'q' in answer:
-                return
-            if 'd' in answer:
-                pdb.set_trace()
+
+            # answer = input(("\nReaction complete."
+            #          "Type 'd' to enter debugger;"
+            #          "'g' to save plot to file;"
+            #          "'q' to quit;"
+            #          "any other key to continue... "))
+            # if 'g' in answer:
+            #     sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
+            #     # if mirror_grouped_system:
+            #     #     sysmgr_grouped.draw_and_save_graphs(prefix="grouped",
+            #     #                                         n="%s_%0.03fs" % (n_done, self.sim_system_time))
+            # if 'q' in answer:
+            #     return
+            # if 'd' in answer:
+            #     pdb.set_trace()
+
+        ## Extended n_done above n_done_max. Should record stats? - No..
+        # if self.stats_writer:
+        #     self.stats_writer.write_stats(tau=0, sys_time=self.sim_system_time)
 
 
         # end while loop
@@ -546,3 +505,61 @@ class DM_Simulator(Simulator):
             self.save_stats_cache() # Save cache once per temperature
         print("Annealing complete! (%s)" % datetime.now().strftime("%Y-%m-%d %H:%M"))
         self.print_setup()
+
+
+    def dispatch_state_change(self, tau, reaction_pair, reaction_attr, result):
+        sysmgr = self.reactionmgr
+        # The state_change received by dispatch() is either a dict with keys:
+        #     - change_type: 0 = Add/remove NODE, 1=Add/remove EDGE.
+        #     - forming: 1=forming, 0=eliminating
+        #     - interaction: 1=backbone, 2=hybridization, 3=stacking (only for edge changes)
+        #     - time: Current system time (might be subjective to rounding errors).
+        #     - tau:  Change in system time between this directive and the former.
+        #     - T:    Current system temperature.
+        #     - multi: If True, interpret "nodes" as a list of pairs (u₁, u₂, ...) for NODE-altering directives,
+        #                 or (u₁, v₁, u₂, v₂, ...) for EDGE-altering directives.
+        #     - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
+        #               Nodes must currently be domains (which are forwarded to a suitable translator).
+        # The state-change directive can also be a list of state changes (use directive_is_list=True).
+        # TODO: Consider a model that ONLY uses DomainEnds and not domains. Hybridization domain_pairs
+        #       Are replaced with a domain ends tuple pair similar to stacking_pair (but obviously differnt):
+        #       {(d1end5p, d1end3p), (d2end5p, d2end3p)}
+        directive = self.state_change_hybridization_template.copy()
+        directive['T'] = sysmgr.temperature
+        directive['time'] = self.sim_system_time
+        directive['tau'] = tau
+        directive['forming'] = int(reaction_attr.is_forming)
+        directive['interaction'] = reaction_attr.reaction_type
+        # Dispatcher is responsible for translating domain objects to model-agnostic (str repr) graph events.
+        if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+            directive['nodes'] = reaction_pair # (d1, d2)
+        elif reaction_attr.reaction_type is STACKING_INTERACTION:
+            # Note: This is different from the order of stacking_pair, (h1end3p, h2end5p), (h2end3p, h1end5p)
+            # This specifies (source1, target1, source2, target2),
+            # and implies connecting 3p of source1 with 5p of target1, etc.
+            ## TODO: STACKING reaction_pair MIGHT CHANGE TO (h1end3p, h1end5p), (h2end3p, h2end5p)
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = reaction_pair
+            directive['nodes'] = (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain)
+            # Tell the dispatcher that we have multiple pairs of edges in 'nodes':
+            # self.multi_directive_support = config['dispatcher_multi_directive_support'] must be set to True:
+            directive['multi_directive'] = True
+        if 'unstacking_results' in result:
+            assert reaction_attr.is_forming is False
+            directive = [directive]
+            directive_is_list = True
+            for (h1end3p, h2end5p), (h2end3p, h1end5p) in result['unstacking_results']:
+                # IMPORTANT: For stacking interactions, domains must be given in the order of the stack:
+                #            nodes = (dom1, dom2) means that dom1.end3p stacks with dom2.end5p !
+                state_change = {'forming': int(reaction_attr.is_forming),
+                                'time': self.sim_system_time,
+                                'T': sysmgr.temperature,
+                                'tau': 0,
+                                #'nodes': zip(duplexend1, duplexend2[::-1]),
+                                #'nodes': (h1end3p, h1end5p, h2end3p, h2end5p),
+                                'nodes': (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain),
+                                'multi_directive': True
+                               }
+                directive.append(state_change)
+        else:
+            directive_is_list = False
+        self.dispatcher.dispatch(directive, directive_is_list=directive_is_list)

@@ -105,7 +105,7 @@ class ReactionMgr(ComponentMgr):
         # Base single-molecule activity of two free single reactants in volume.
         self.specific_bimolecular_activity = 1/self.volume/N_AVOGADRO # × M
         self.include_steric_repulsion = False # True
-        self.enable_intercomplex_stacking = params.get("enable_intercomplex_stacking", True)
+        self.enable_intercomplex_stacking = params.get("enable_intercomplex_stacking", False)
 
         self.reaction_update_pair_against_all = params.get("reaction_update_pair_against_all", True)
         self.reaction_throttle = params.get("reaction_throttle", False)
@@ -1015,6 +1015,7 @@ class ReactionMgr(ComponentMgr):
         # printd("Reacted pairs:", reacted_pairs)
         # printd("Reaction attrs:", reaction_attrs)
         if changed_domains is None:
+            # Update possible stacking reactions for *all* domains:
             changed_domains = list(self.domains)
 
         ## NOTE: The reaction could have been either stacking/unstacking OR HYBRIDIZATION/DEHYBRIDIZATION.
@@ -1133,15 +1134,20 @@ class ReactionMgr(ComponentMgr):
                 if h2end3p is h1end3p:
                     # Ends cannot stack to them self
                     continue
+                h1end5p = h2end3p.hyb_partner
+                h1s2 = h1end5p.domain.strand
+                h1c2 = h1s2.complex
+                if not self.enable_intercomplex_stacking and (h1c1 != h1c2 if h1c1 is not None else h1s1 != h1s2):
+                    # Interaction between different complexes (or strands):
+                    continue
                 if h2end3p.hyb_partner == h1end3p.stacked_upstream() and not self.enable_helix_bending:
                     # Don't allow duplex to hybridize to itself (opposite ends).
-                    #                h1end5p    h1end3p
-                    # Helix 1  -> 5'--------------------3' <-
-                    # Helix 2  -> 3'--------------------5' <-
+                    #                 h1end5p    h1end3p
+                    # This end --> 5'--------------------3' <-- cannot hybridize to this.
+                    # Helix 2   -> 3'--------------------5' <-
                     #                h2end3p    h2end5p
                     # printd("update_possible_stacking_reactions: Ignoring stacking between %r and %r" % (h1end3p, h2end3p))
                     continue
-                h1end5p = h2end3p.hyb_partner
                 ## Assertions:
                 assert all(end is not None for end in [h1end5p, h1end3p, h2end3p, h2end5p])
                 if h1end3p in self.ends5p3p_graph[h1end5p]:
@@ -1155,8 +1161,6 @@ class ReactionMgr(ComponentMgr):
 
                 stacking_pair = frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))
                 if stacking_pair not in updated_reactions: # self.possible_stacking_reactions:
-                    h1s2 = h1end5p.domain.strand
-                    h1c2 = h1s2.complex
                     is_intra = False
                     if h1c1 is not None and h1c1 is h1c2:
                         is_intra = 'complex'
