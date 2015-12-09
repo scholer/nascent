@@ -31,6 +31,7 @@ Possible refs:
 """
 
 import os
+import sys
 #import difflib
 from difflib import SequenceMatcher
 import networkx as nx
@@ -94,13 +95,17 @@ def domains_from_sequences(group1, group2=None, minoverlap=8, maxoverlap=32, mat
     Maybe first build a 1-level "parent, overlaps" bipartite tree,
     then process this, doing sub-division and making "agg" nodes?
     """
+    answer = ""
     # Basic, 2-level bipartite directed graphs:
+    strands = group1 + (group2 if group2 is not None else [])
+
     ptoc, ctop, rcgraph, overlaps = overlap_graphs(group1, group2=group2, ptoc=None, ctop=None, rcgraph=None,
                                                    minoverlap=minoverlap, maxoverlap=maxoverlap,
                                                    match_self=match_self)
     ptoc.graph['graph'] = {'rankdir': 'LR'}
     fn = os.path.join(os.path.abspath('.'), "seq_analysis_1_bipartite.dot")
-    make_graphviz_graph(fn, ptoc, rcgraph, add_same_rank=True, add_labels=True)
+    # make_graphviz_graph(fn, ptoc, rcgraph, add_same_rank=True, add_labels=True)
+
     # nx.write_dot(ptoc, fn)
     # fn = os.path.join(os.path.abspath('.'), "seq_analysis_bipartite_1.agraph.dot")
     # nx_agraph.write_dot(ptoc, fn)
@@ -110,24 +115,42 @@ def domains_from_sequences(group1, group2=None, minoverlap=8, maxoverlap=32, mat
     # pyplot.savefig(fn)
     # webbrowser.open(fn)
 
-    """
-    AAARGH. I want to just abort the split. But I need to propagate the "abort split" information to:
-    1) The immediate neighbor fragment that should still be split, but
-        (a) The edge to the smaller sub-fragment should be removed/disabled, but the edge to other sub-fragments
-            should remain.
-        (b) The reverse complements also has to be changed, releasing the base for use elsewhere.
-    """
-    strands = group1 + (group2 if group2 is not None else [])
+    ## Annotate fragment competitors:
+    #answer = input("\nPress enter to annotate fragment base competitors...")
+    if answer and answer[0].lower() == 'q': return
+    fcompg = annotate_fragment_competitors(ptoc, ctop, rcgraph, strands, fcompg=None)
+    fn = os.path.join(os.path.abspath('.'), "seq_analysis_2-3_competitors.dot")
+    # make_graphviz_graph(fn, fcompg, ptoc, rcgraph, add_same_rank=True, add_labels=True)
+
+
     ### Re-partition fragments overlapping the same strand with an amount less than a specified limit:
-    input("\nPress enter to re-partition fragments with minor overlaps...")
+    # answer = input("\nPress enter to re-partition fragments with minor overlaps or type 'q' to abort...")
+    if answer and answer[0].lower() == 'q': return
     find_compl(ptoc, rcgraph) # find complementary nodes in ptoc and add edges between these in rcgraph.
     repartition_overlapping_fragments(ptoc, ctop, rcgraph, strands, overlap_limit=4)
     make_graphviz_labels(ptoc)
     fn = os.path.join(os.path.abspath('.'), "seq_analysis_2_repartitioned.dot")
     make_graphviz_graph(fn, ptoc, rcgraph, add_same_rank=True, add_labels=True)
 
+
+    ## Remove short fragments (caused by re-partitioning):
+    answer = input("\nPress enter to remove short fragments reduced by re-partitioning...")
+    if answer and answer[0].lower() == 'q': return
+    remove_short_fragments(ptoc, ctop, rcgraph, limit=5)
+    fn = os.path.join(os.path.abspath('.'), "seq_analysis_2-2_short_removed.dot")
+    make_graphviz_graph(fn, ptoc, rcgraph, add_same_rank=True, add_labels=True)
+
+
+    ## Annotate fragment competitors:
+    answer = input("\nPress enter to annotate fragment base competitors...")
+    if answer and answer[0].lower() == 'q': return
+    fcompg = annotate_fragment_competitors(ptoc, ctop, rcgraph, strands, fcompg=None)
+    fn = os.path.join(os.path.abspath('.'), "seq_analysis_2-3_competitors.dot")
+    make_graphviz_graph(fn, fcompg, ptoc, rcgraph, add_same_rank=True, add_labels=True)
+
     ## Find overlapping fragments and split the overlaps to separate domains:
-    input("\nPress enter to split remaining overlapping fragments...")
+    answer = input("\nPress enter to split remaining overlapping fragments...")
+    if answer and answer[0].lower() == 'q': return
     split_overlapping_fragments(ptoc, ctop, rcgraph, strands)
     fn = os.path.join(os.path.abspath('.'), "seq_analysis_3_subfragmented.dot")
     make_graphviz_graph(fn, ptoc, rcgraph, add_same_rank=True, add_labels=True)
@@ -154,7 +177,8 @@ def domains_from_sequences(group1, group2=None, minoverlap=8, maxoverlap=32, mat
 
 
     ## Add single/un-paired sequence nodes to graphs:
-    input("\nPress enter to add unpaired strand domains...")
+    answer = input("\nPress enter to add unpaired strand domains...")
+    if answer and answer[0].lower() == 'q': return
     for strand in itertools.chain(group1, group2 if group2 is not None else []):
         pseq = strand['seq']
         # Only have to consider sense, not rcompl:
@@ -188,6 +212,7 @@ def domains_from_sequences(group1, group2=None, minoverlap=8, maxoverlap=32, mat
     # make_graphviz_labels(ptoc)
     make_graphviz_graph(fn, ptoc, rcgraph, add_same_rank=True, add_labels=True)
     # pdb.set_trace()
+    return ptoc, ctop, rcgraph
 
 
 
@@ -276,22 +301,54 @@ def repartition_overlapping_fragments(ptoc, ctop, rcgraph, strands, overlap_limi
             e1, e2, overlap_size = overlapping_edges
             assert edge_overlap_size(e1, e2)
             assert e1[1]['offset'] < e2[1]['offset']
-            print("\nTwo or more fragments are overlapping on strand %s:\n  %s" % (strand['Name'], strand['seq']))
-            print("   " + "-"*e2[1]['offset'] + "".join(str(i) for i in range(0, overlap_size+1)))
-            # print("   " + "-"*e2[1]['offset'] + "".join('\\' for i in range(0, overlap_size+1)))
+            (f1seq, f1attr, e1attr), (f2seq, f2attr, e2attr) = [(e[0], ptoc.node[e[0]], e[1]) for e in (e1, e2)]
+            e1_competition_score = 0
+            e2_competition_score = 0
+            print("\nTwo or more fragments are overlapping on strand %s:\n   %s" % (strand['Name'], strand['seq']))
+            if e1[0] in rcgraph.node and len(rcgraph[e1[0]]) > 0:
+                assert len(rcgraph[e1[0]]) == 1
+                rseq = next(iter(rcgraph[e1[0]].keys()))
+                rattr = ptoc.node[rseq]
+                if 'base_competitors_count' in rattr:
+                    e1_competition_score += sum(rattr['base_competitors_count'])/2/len(rseq)
+                    print("   " + " "*e1[1]['offset'] + "".join(str(i) for i in rattr['base_competitors_count'][::-1]))
+            if 'base_competitors_count' in f1attr:
+                print("   " + " "*e1[1]['offset'] + "".join(str(i) for i in f1attr['base_competitors_count']))
+                e1_competition_score += sum(f1attr['base_competitors_count'])/len(f1seq)
+            # print("  " + "-"*e2[1]['offset'] + "".join('\\' for i in range(0, overlap_size+1)))
             for i, (fseq, eattrs) in enumerate((e1, e2), 1):
-                print("e%s" % i, " "*eattrs['offset'], fseq)
-            print("However, the overlap is less than the specified overlap_limit %s." % overlap_limit)
+                print(("e%s " % i) + " "*eattrs['offset'] + fseq)
+            if 'base_competitors_count' in f2attr:
+                print("   " + "-"*e2[1]['offset'] + "".join(str(i) for i in f2attr['base_competitors_count']))
+                e2_competition_score += sum(f2attr['base_competitors_count'])/len(f2seq)
+            if e2[0] in rcgraph.node and len(rcgraph[e2[0]]) > 0:
+                assert len(rcgraph[e2[0]]) == 1
+                rseq = next(iter(rcgraph[e2[0]].keys()))
+                rattr = ptoc.node[rseq]
+                if 'base_competitors_count' in rattr:
+                    e2_competition_score += sum(rattr['base_competitors_count'])/2/len(rseq)
+                    print("   " + " "*e2[1]['offset'] + "".join(str(i) for i in rattr['base_competitors_count'][::-1]))
+            print("   " + "-"*(e2[1]['offset']-1) + "".join('^' for i in range(0, overlap_size+1)))
+            print("   " + "-"*(e2[1]['offset']-1) + "".join(str(i) for i in range(0, overlap_size+1)))
+            print("The overlap is less than the specified overlap_limit %s." % overlap_limit)
             print("What fragment do you want to partition this fragment to?",
                   "(Type e1 or e2 or a number to split the overlap in the middle.",
                   "Type s to skip this for now, type 'b' to break to next strand.) ")
-            answer = ""
+            if (e1_competition_score > 0 or e2_competition_score > 0) and e1_competition_score != e2_competition_score:
+                answer = min(((e1_competition_score, 'e1'), (e2_competition_score, 'e2')))[1]
+            else:
+                answer = ""
+            # pdb.set_trace()
+            answer = input("Input any of 'e1' / 'e2' / 0...N / 's' / 'b' " +
+                           ("[default: %s]" % answer if answer else "") + " : ") or answer
             while not answer:
                 answer = input()
             if answer.lower()[0] == 'b':
                 break
             elif answer.lower()[0] == 's':
                 continue
+            elif answer.lower()[0] == 'q':
+                sys.exit(1)
             save, remove = [], []
 
             #e1_size = 0 if answer == 'e1' else (overlap_size if answer == 'e2' else int(answer))
@@ -319,13 +376,22 @@ def repartition_overlapping_fragments(ptoc, ctop, rcgraph, strands, overlap_limi
 
             for (fseq, eattr), fslice, pslice in remove:
                 # pstart, pend = pslice
+                fattr = ptoc.node[fseq]
                 fslice, pslice = slice(*fslice), slice(*pslice)
                 assert fseq[fslice] == pseq[pslice]
                 fseq_new = fseq[fslice]
                 ## Add new node and edge from pseq:
-                ptoc.add_node(fseq_new, length=len(fseq_new), rank=1)
-                ctop.add_node(fseq_new, length=len(fseq_new), rank=1)
-                revc.add_node(fseq_new, length=len(fseq_new), rank=1)
+                nattrs = {'length': len(fseq_new),
+                          'rank': 1}
+                if 'base_competitors' in fattr:
+                    nattrs['base_competitors'] = fattr['base_competitors'][fslice]
+                if 'base_competitors_count' in fattr:
+                    nattrs['base_competitors_count'] = fattr['base_competitors_count'][fslice]
+                ## TODO: Instead of removing old node and adding new, just update the node+edge attributes.
+                ## - use nx.relabel_nodes(G, mapping, copy=False)
+                ptoc.add_node(fseq_new, attr_dict=nattrs)
+                ctop.add_node(fseq_new, attr_dict=nattrs)
+                revc.add_node(fseq_new, attr_dict=nattrs)
                 # Add edge from parent strand to new/shortened fragment seq node:
                 ptoc.add_edge(pseq, fseq_new, offset=pslice.start, end=pslice.stop, rcompl=eattr['rcompl'])
                 ctop.add_edge(fseq_new, pseq, offset=pslice.start, end=pslice.stop, rcompl=eattr['rcompl'])
@@ -346,6 +412,7 @@ def repartition_overlapping_fragments(ptoc, ctop, rcgraph, strands, overlap_limi
                 if len(rcgraph[fseq]) > 0:
                     assert len(rcgraph[fseq]) == 1
                     rseq = next(iter(rcgraph[fseq].keys()))
+                    rattr = ptoc.node[rseq]
                     rseq_parents = list(ctop[rseq].items())
                     rfslice = slice((-fslice.stop if fslice.stop else None), (-fslice.start if fslice.start else None))
                     rseq_new = rseq[rfslice]
@@ -359,9 +426,15 @@ def repartition_overlapping_fragments(ptoc, ctop, rcgraph, strands, overlap_limi
                         ctop.remove_node(rseq)
                         revc.remove_node(rseq)
                     ## Add reverse complement node
-                    ptoc.add_node(rseq_new, length=len(rseq_new), rank=1)
-                    ctop.add_node(rseq_new, length=len(rseq_new), rank=1)
-                    revc.add_node(rseq_new, length=len(rseq_new), rank=1)
+                    nattrs = {'length': len(rseq_new),
+                              'rank': 1}
+                    if 'base_competitors' in rattr:
+                        nattrs['base_competitors'] = rattr['base_competitors'][rfslice]
+                    if 'base_competitors_count' in rattr:
+                        nattrs['base_competitors_count'] = rattr['base_competitors_count'][rfslice]
+                    ptoc.add_node(rseq_new, attr_dict=nattrs)
+                    ctop.add_node(rseq_new, attr_dict=nattrs)
+                    revc.add_node(rseq_new, attr_dict=nattrs)
                     ## Connect new fseq and rseq in rcgraph:
                     revc.add_edge(fseq_new, rseq_new, rcompl=True)
                     revc.add_edge(rseq_new, fseq_new, rcompl=True)
@@ -387,6 +460,43 @@ def repartition_overlapping_fragments(ptoc, ctop, rcgraph, strands, overlap_limi
     print("Strand fragments overlap re-partition complete.")
 
 
+def remove_short_fragments(ptoc, ctop, rcgraph, limit=5):
+    """
+    Remove fragments shorter than :limit: from the graphs.
+    """
+    revc = rcgraph
+    for short_leaf in short_leaf_node_gen(ptoc, limit):
+        print("Removing short fragment %s" % (short_leaf, ))
+        ptoc.remove_node(short_leaf)
+        ctop.remove_node(short_leaf)
+        if short_leaf in rcgraph.node:
+            if len(rcgraph[short_leaf]) > 0:
+                assert len(rcgraph[short_leaf]) == 1
+                rseq = list(rcgraph[short_leaf])[0]
+                print(" - also removing short complementary fragment %s" % (rseq, ))
+                ptoc.remove_node(rseq)
+                ctop.remove_node(rseq)
+                revc.remove_node(rseq)
+            revc.remove_node(short_leaf)
+        # short_leaf = get_short_leaf_node(ptoc, limit)
+
+
+def leaf_node_gen(ptoc, include_unbound=False):
+    nodes = ptoc.nodes()
+    for node in nodes:
+        if ptoc.out_degree(node) == 0 and (ptoc.in_degree(node) > 0 or include_unbound):
+            yield node
+
+
+
+def short_leaf_node_gen(ptoc, limit=5):
+    """ Can be optimized as a single-run generator. """
+    nodes = ptoc.nodes_iter()
+    yield next(seq for seq in nodes
+               if len(seq) < limit and ptoc.out_degree(seq) == 0 and ptoc.in_degree(seq) > 0)
+
+
+
 def has_overlap_shorter_than(edges, overlap_limit=4):
     edges = [(fseq, eattr) for fseq, eattr in edges if eattr['rcompl'] is False]
     edges = sorted(edges, key=lambda e: e[1]['offset'])
@@ -404,6 +514,61 @@ def edge_overlap_size(e1, e2):
     if end1 <= start2:
         return None
     return end1 - start2
+
+
+def annotate_fragment_competitors(ptoc, ctop, rcgraph, strands, fcompg=None):
+    """
+    For the strands that a fragment binds to (i.e. ctop edges with rcompl=True)
+    find other fragments that also binds to the same parts of those strands.
+    """
+    if fcompg is None:
+        #fcompg = nx.MultiDiGraph()
+        fcompg = nx.DiGraph()
+        fcompg.graph['graph'] = {'rankdir': 'LR'}
+    for fseq in leaf_node_gen(ptoc):
+        fattr = ptoc.node[fseq]
+        if 'base_competitors_count' not in fattr:
+            fattr['base_competitors_count'] = [0]*len(fseq)
+        if 'base_competitors' not in fattr:
+            fattr['base_competitors'] = [set() for _ in range(len(fseq))]
+        fbcc = fattr['base_competitors_count']
+        fbcomp = fattr['base_competitors']
+        for pseq in ctop[fseq]:
+            eattr = ptoc[pseq][fseq]
+            if eattr.get('rcompl') is True:
+                # We only want to consider sense fragments:
+                continue
+            fpoffset, fpend = eattr['offset'], eattr['end']
+            for fseq2, eattr2 in ptoc[pseq].items():
+                if fseq2 == fseq or ptoc[pseq][fseq2].get('rcompl') is True:
+                    # We only want to consider sense fragments:
+                    continue
+                poffset2, pend2 = eattr2['offset'], eattr2['end']
+                overlap_size = edge_overlap_size((fseq, eattr), (fseq2, eattr2))
+                if overlap_size: # it overlaps
+                    # fragment index where the overlap starts. starts at base fseq[0].
+                    # fpoffset and poffset2 idxs are all relative to parent seq.
+                    # By subtracting fpoffset we get idx relative to fragment fseq.
+                    overlap_fstart = max((0, poffset2-fpoffset)) # 0 if poffset2 <= fpoffset else poffset2 - fpoffset
+                    # offset and end can be negative for rcompl edges:
+                    assert pend2 > 0
+                    #overlap_fend = overlap_size if pend2 >= fpend else overlap_size - (fpend - pend2)
+                    overlap_fend = min((pend2-fpoffset, fpend-fpoffset))
+                    for bidx in range(overlap_fstart, overlap_fend):
+                        fbcc[bidx] += 1
+                        fbcomp[bidx].add(fseq2)
+                        #fcompg.add_edge(fseq, fseq2, bidx=bidx)
+                    fcompg.add_edge(fseq, fseq2, overlap_fstart=overlap_fstart, overlap_fend=overlap_fend)
+    return fcompg
+
+
+def clear_fragment_competition_annotations(ptoc):
+    for node, fattr in ptoc.nodes(data=True):
+        if 'base_competitors_count' in fattr:
+            del fattr['base_competitors_count']
+        if 'base_competitors' in fattr:
+            del fattr['base_competitors']
+
 
 
 def split_overlapping_fragments(ptoc, ctop, rcgraph, strands):
@@ -450,6 +615,17 @@ def split_overlapping_fragments(ptoc, ctop, rcgraph, strands):
         for idx, fset in base_to_fragments.items():
             # fset is a set of tuples, one tuple for each fragment present at this base idx.
             if len(fset) > 1:
+                # first check whether any tups are unnecessary:
+                # Actually, might as well do this in a separate function before doing this...
+                # obsolete = set()
+                # for tup in fset:
+                #     other_tups = [otup for otup in fset if otup != fset]
+                #     for otup in other_tups:
+                #         # offset and end:
+                #         if otup[2] < tup[2] and otup[3] > tup[3]:
+                #             obsolete.add(tup)
+                # if len(obsolete) > 0:
+                #     fset -= obsolete
                 for tup in fset: # tup = (fseq, pseq, offset, end)
                     # if dont_split_fseq:
                     #     if tup[0] == dont_split_fseq:
@@ -478,13 +654,15 @@ def split_overlapping_fragments(ptoc, ctop, rcgraph, strands):
         if len(break_idx) <= 2:
             # Can happen if we have one domain that is fully covered by another domain.
             # This can happen after re-partitioning fragments.
-            ## TODO: There might be some bugs here; I'll weed them out as/when/if-needed.
-            for oseq, opseq, ofstart, ofend, obreaking in other_frags:
-                if ofstart < fstart and ofend > fend:
-                    # other_fragment fully covers frag on pseq:
-                    assert pseq == opseq
-                    ptoc.remove_edge(pseq, fseq)
-                    ctop.remove_edge(fseq, pseq)
+            # There might be some bugs here; I'll weed them out as/when/if-needed.
+            # Edit: Doing this in a separate "cleaning" function...
+            # for oseq, opseq, ofstart, ofend, obreaking in other_frags:
+            #     if ofstart < fstart and ofend > fend:
+            #         # other_fragment fully covers frag on pseq:
+            #         assert pseq == opseq
+            #         ptoc.remove_edge(pseq, fseq)
+            #         ctop.remove_edge(fseq, pseq)
+            pass
         else:
             for new_start, new_end in zip(break_idx, break_idx[1:]):
                 sf_seq = fseq[new_start-fstart:new_end-fstart]
@@ -595,7 +773,6 @@ def name_domain(ptoc, rcgraph, domain, name, rcname=None,
 
 
 
-
 def invert_regions(regions, base=None):
     """ This would have been easier using a bitarray... """
     if base is None:
@@ -654,16 +831,21 @@ def unify_regions(start1, end1, start2, end2):
 
 
 def make_graphviz_graph(filename, G, *more, prog="dot", outputtype="png", open_png=True,
-                        add_same_rank=False, add_labels=False, add_style=True):
+                        add_same_rank=False, add_labels=False, add_style=True, add_rank_dir=None):
     """
     Make a graphviz dot file and process it with :prog: to produce render the graph as an image.
     :add_labels: can be True or a non-empty dict. If it is a non-empty dict,
                  **add_labels is passed to make_graphviz_labels.
     """
+    if add_rank_dir:
+        # should be one of "TB", "LR", "BT", "RL", c.f. http://www.graphviz.org/doc/info/attrs.html
+        G.graph['graph'] = {'rankdir': add_rank_dir}
     if more:
         print("Merging %s with %s before parsing with graphviz..." % (G, more))
         G = G.copy()
         for g in more:
+            if G.is_multigraph() and not g.is_multigraph():
+                g = nx.MultiDiGraph(g) if G.is_directed() else nx.MultiGraph(g)
             G.add_nodes_from(g.nodes(data=True))
             G.add_edges_from(g.edges(data=True))
     if add_labels:
@@ -672,24 +854,58 @@ def make_graphviz_graph(filename, G, *more, prog="dot", outputtype="png", open_p
         make_graphviz_labels(G, **add_labels)
     if add_style:
         apply_style(G, add_style)
+    err = None
     if add_same_rank:
         rank_groups = defaultdict(list)
         for node, attrs in G.nodes(data=True):
             if 'rank' in attrs:
                 rank_groups[attrs['rank']].append(node)
-        # In pygraphviz Agraph:
-        A = nx.to_agraph(G)
-        for rank, nodes in rank_groups.items():
-            if len(nodes) > 1:
-                A.add_subgraph(nodes, rank="same")
-        A.write(filename)
+        if add_same_rank == 'pydot' or G.is_multigraph():
+            # Use the pydot interface to graphviz:
+            P = nx.to_pydot(G)
+            # from networkx.drawing.nx_pydot import load_pydot
+            # pydot = load_pydot()
+            # DOESN'T WORK
+            # for rank, seqs in rank_groups.items():
+            #     S = pydot.Subgraph(rank='same')
+            #     for seq in seqs:
+            #         nodes = P.get_node(seq) # returns a list of nodes with the given name.
+            #         if len(nodes) != 1:
+            #             pdb.set_trace()
+            #         node = nodes[0]
+            #         # We get multiple nodes with the same pydot 'sequence' identifier
+            #         #node = pydot.Node(seq) # This makes dot stop working during write_dot...
+            #         S.add_node(node)
+            #     P.add_subgraph(S)
+            P.write_dot(filename) # same as P.write(filename, format='dot', prog=None). Default prog is 'dot'.
+            is_ok = P.write_png(filename + "." + outputtype, prog='dot') # returns True on success.
+        else:
+            # Gohlke's pygraphviz for Windows doesn't seem to support strict=False.
+            # Use the pygraphviz Agraph interface to graphviz:
+            A = nx.to_agraph(G)
+            for nodes in rank_groups.values():
+                if len(nodes) > 1:
+                    A.add_subgraph(nodes, rank="same")
+            A.write(filename)
+            # Use pygraphviz to invoke graphviz dot (simply does a call with subprocess module...)
+            # returns None if written to file; returns data if path=None; raises exception if error.
+            try:
+                A.draw(path=filename + "." + outputtype, format='png', prog='dot')
+            except OSError as e:
+                err, is_ok = e, False
+            else:
+                is_ok = True
     else:
         nx.write_dot(G, filename) # uses pydot by default
-    cmd = [prog, "-T%s" % outputtype, "-O", filename]
-    err = subprocess.call(cmd) # use check_output if you need the output
-    if err == 0:
+        cmd = [prog, "-T%s" % outputtype, "-O", filename]
+        err = subprocess.call(cmd) # use check_output if you need the output
+        is_ok = not err
+    if is_ok:
         if open_png:
             webbrowser.open(filename + "." + outputtype)
+    else:
+        print("Graphviz graph drawing not successful:", is_ok, err)
+
 
 def apply_style(G, style=None):
     """
@@ -718,10 +934,13 @@ def make_graphviz_labels(G, edge_labels=True, xlabel_key='Name'):
     """ Add labels (node and edge label/xlabel attrs) to graph. """
     if edge_labels is True:
         for s, t, eattr in G.edges(data=True):
-            eattr['label'] = "".join(str(v) for v in
-                                     [eattr['offset'] if 'offset' in eattr else "",
-                                      (", %s" % eattr['end']) if 'end' in eattr else "",
-                                      " (rev)" if eattr['rcompl'] else ""])
+            eattr['label'] = "".join(
+                str(v) for v in
+                [eattr['offset'] if 'offset' in eattr else "",
+                 (", %s" % eattr['end']) if 'end' in eattr else "",
+                 " (rev)" if 'rcompl' in eattr and eattr['rcompl'] else "",
+                 (" at %s" % eattr['bidx']) if 'bidx' in eattr else "",
+                 (" %s-%s" % (eattr['overlap_fstart'], eattr['overlap_fend'])) if 'overlap_fstart' in eattr else ""])
     if xlabel_key:
         for n in G.nodes():
             if xlabel_key in G.node[n]:
@@ -763,11 +982,40 @@ def find_overlaps(seq1, seq2):
     return blocks
 
 
+def export_strands(strands, path, ptoc=None, fields=('Name', 'domain_names', 'domain_seqs'),
+                   header=None, sep="\t", sep2=", ",
+                   list_fields={'domain_names': 'Domains', 'domain_seqs': 'Sequence'}):
+    """
+    :strands:     List of dicts, one for each strand, with fields describing what to be exported.
+    :path:        Write to this file.
+    :ptoc:        If field names are not found in the strand dict, fall back to this graph for determining field values.
+    :fields:      List of fields to export.
+    :header:      If given, use this as header for each field column instead of the names given in fields/list_fields.
+    :sep:, :sep2: Separators used as sep.join(fields) or sep2.join(list) for each strand in strands.
+    :list_fields: dict with key: value pairs.
+                  Keys are fields where strand[field] is a list to be converted to a string via sep2.join.
+                  Values are the used as header name in the file (Can be None to just use the original field name).
+    """
+    if header is None:
+        header = [list_fields.get(field) or field for field in fields]
+    with open(path, 'w') as fp:
+        fp.write(sep.join(header) + "\n")
+        for strand in strands:
+            for key in list_fields:
+                if key not in strand:
+                    strand[key] = ptoc.node[strand['seq']][key]
+            fp.write(sep.join(sep2.join(strand[field]) if field in list_fields else strand[field]
+                              for field in fields) + "\n")
+
+
+
 def main():
     import re
     modre = re.compile(r"(?P<mod5p>\/\w+\/)?(?P<seq>[ATGC]*)(?P<mod3p>\/\w+\/)?")
     """
     """
+    filename = "oligos.txt"
+    basename, ext = os.path.splitext(filename)
     lines = """
 Name	Sequence
 AJB023	/5DiGN/TTTTTTTTTTCGTGTAGCCAATTAGACTGA
@@ -787,7 +1035,11 @@ BN049	GTC GTC TGC GTG ACT TGG ACC TTA CAG TTG TGC ACT CAG TCT AAT TGG CTA CAC GA
         sd.update(match.groupdict())
         sd.pop('Sequence')
 
-    domains_from_sequences(strands)
+    ptoc, ctop, rcgraph = domains_from_sequences(strands)
+
+    path = basename + "_stdoms" + ext
+    export_strands(strands, path, ptoc=ptoc)
+
 
 
 
