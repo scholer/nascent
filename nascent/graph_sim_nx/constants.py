@@ -69,6 +69,17 @@ ds_kuhn_length = 100 # nm
 HELIX_STACKING_DIST = ds_rise_per_bp
 # Distance / backbone contour length from the 5p end of one domain to the 3p end of an unstacked downstream domain.
 # A distance of 0.66954 nm gives an activity of 1 (M):
+# Uh, calculated how? Currently, graph_manager calculates effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2),
+# which for mean_sq_ee_dist = 0.66954**2 = 0.44828 gives effective_volume_nm3 = 0.90974 and an activity of 1.825 !
+# effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2) <=>
+# 3/(2 * math.pi) * effective_volume_nm3**(2/3) = mean_sq_ee_dist,
+# For activity of 1, effective_volume_nm3 = AVOGADRO_VOLUME_NM3, so:
+# mean_sq_ee_dist = 3/(2 * math.pi) * AVOGADRO_VOLUME_NM3**(2/3) = 0.669546718045122
+# - and HELIX_XOVER_DIST = sqrt(mean_sq_ee_dist) = 0.818
+# Unless, of course, we include both ss-backbone connections in the path, and get:
+# mean_sq_ee_dist = 2 * HELIX_XOVER_DIST**2, thus:
+# HELIX_XOVER_DIST = sqrt(mean_sq_ee_dist/2) = 0.57859
+
 HELIX_XOVER_DIST = 0.66954  # 1 # nm
 HELIX_WIDTH = 2      # nm.
 

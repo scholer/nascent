@@ -20,12 +20,38 @@
 
 """
 
+Formats:
+* text/csv
+* json
+* yaml
+* msgpack
 
 
 """
 
 import pdb
+import yaml
+from collections import Counter
+try:
+    import msgpack
+except ImportError as e:
+    print("Error importing msgpack library: %s" % e)
+    print(" - msgpack output not available to stats writer.")
 
+
+from nascent.graph_sim_nx.reactionmgr import ReactionAttrs
+
+
+def simplify(data, _list=list, _set=set):
+    if isinstance(data, dict):
+        # cannot simplify if k is frozenset... :(
+        return {simplify(k, _list=tuple, _set=frozenset): simplify(v, _list=_list, _set=_set)
+                         for k, v in data.items()}
+    if isinstance(data, (tuple, list)):
+        return _list(simplify(v, _list=_list, _set=_set) for v in data)
+    if isinstance(data, (set, frozenset)):
+        return _set(simplify(v, _list=tuple, _set=frozenset) for v in data)
+    return str(data)
 
 
 class StatsWriter():
@@ -38,7 +64,7 @@ class StatsWriter():
         self.sysmgr = sysmgr
         self.simulator = simulator
         self.config = config
-
+        self.open_files = []
 
 
         self.stats_field_sep = config.get('stats_field_sep', '\t')
@@ -82,7 +108,8 @@ class StatsWriter():
         self.stats_per_domain_file = config.get('stats_per_domain_file')
         if self.stats_per_domain_file:
             print("Writing stats_per_domain_file to file:", self.stats_per_domain_file)
-            self.stats_per_domain_file = open(self.stats_per_domain_file, 'w')
+            self.stats_per_domain_file = fh = open(self.stats_per_domain_file, 'w')
+            self.open_files.append(fh)
             # Has two headers, the first is for the "outer" fields: [sys-specs, domA, domB, ...]
             # The second header line is for the "inner" fields: [tau, sim_system_time, ...], [n_hybridized, ...]
             header1 = self.stats_field_sep.join(["sysfields"] + self.stats_per_domain_species)
@@ -93,13 +120,26 @@ class StatsWriter():
         self.stats_per_strand_file = config.get('stats_per_strand_file')
         if self.stats_per_strand_file:
             print("Writing stats_per_strand_file to file:", self.stats_per_strand_file)
-            self.stats_per_strand_file = open(self.stats_per_strand_file, 'w')
+            self.stats_per_strand_file = fh = open(self.stats_per_strand_file, 'w')
+            self.open_files.append(fh)
             # Has two headers, the first is for the "outer" fields: [sys-specs, domA, domB, ...]
             # The second header line is for the "inner" fields: [tau, sim_system_time, ...], [n_hybridized, ...]
             header1 = self.stats_field_sep.join(["sysfields"] + self.stats_per_strand_species)
             header2 = self.stats_field_sep2.join(self.stats_per_strand_sysfields +
                                                  self.stats_per_strand_fields*len(self.stats_per_strand_species))
             self.stats_per_strand_file.write(header1+"\n"+header2+"\n")
+
+        self.stats_post_simulation_file = config.get('stats_post_simulation_file')
+
+        self.complex_state_count_file = config.get('complex_state_count_file')
+        if self.complex_state_count_file:
+            self.complex_state_count_file = open(self.complex_state_count_file, 'wb') # msgpack - open in binary mode
+            self.open_files.append(self.complex_state_count_file)
+
+
+    def close_all(self):
+        for fh in self.open_files:
+            fh.close()
 
 
     def write_stats(self, tau, sys_time):
@@ -252,6 +292,49 @@ class StatsWriter():
         #pdb.set_trace()
 
 
+    def write_complex_state_count(self, ):
+        """
+        What to record?
+        For each complex:
+        - N_strands, N_domains, N_domains_hybridized
+        - Complex state
+        Globally:
+        - Complex state encounters (only register changes).
+        - Complex states at time t.
+        """
+        sysmgr = self.sysmgr
+        complex_state_count = dict(Counter([c.state_fingerprint() for c in sysmgr.complexes]))
+        msgpack.pack(self.complex_state_count_file, complex_state_count)
+
+
+    def load_complex_state_count(self, fn):
+        with open(fn) as fp:
+            data = list(msgpack.Unpacker(fp, encoding='utf-8'))
+        return data
+
+
+    def write_post_simulation_stats(self):
+        if self.stats_post_simulation_file is None:
+            print("statsmgr.stats_post_simulation_file is None, cannot collect post simulation stats...")
+            return
+        sysmgr = self.sysmgr
+        simulator = self.simulator
+        stats = {}
+        # remove defaultdict, etc:
+        stats['reaction_throttle_cache'] = sysmgr.reaction_throttle_cache
+        stats['sysmgr_cache'] = sysmgr.cache
+        stats['reaction_attrs'] = sysmgr.reaction_attrs
+        stats['reaction_invocation_count'] = sysmgr.reaction_invocation_count
+        stats = simplify(stats)
+        with open(self.stats_post_simulation_file, 'a') as fp:
+            # dump yaml as list to make it easy to append.
+            # otherwise, use msgpack format.
+            before = fp.tell()
+            yaml.dump([stats], fp)
+            n_bytes = fp.tell() - before
+        print("\nwrite_post_simulation_stats:", n_bytes, "bytes written to file", self.stats_post_simulation_file)
+
+
 
 class StatsReader():
 
@@ -340,6 +423,3 @@ class StatsReader():
                       {name: dict(zip(headers[1:], domvalues)) for name, domvalues in zip(names, row[1:])})
                      for row in rows]
         return stats
-
-
-

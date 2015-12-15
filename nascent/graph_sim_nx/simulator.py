@@ -122,7 +122,9 @@ class Simulator():
         print("\n".join("- {:10}: {:0.3g} uM (N={})".format(name, len(entries)*c*1e6, len(entries))
                         for name, entries in sysmgr.strands_by_name.items()), file=fp)
         print("Concentration of each domain is: %0.3g uM" % (c*1e6), file=fp)
-        print("Domain pairing map:", ", ".join("->".join(kv) for kv in sysmgr.domain_pairs.items()), file=fp)
+        print("Domain pairing map:",
+              #", ".join("->".join(kv) for kv in sysmgr.domain_pairs.items()), file=fp)
+              sysmgr.domain_pairs, file=fp)
         print("Total number of strands:", sysmgr.N_strands, file=fp)
         print(" - number of different strands:", len(sysmgr.strands_by_name), file=fp)
         print("Total number of domains:", sysmgr.N_domains, file=fp)
@@ -292,6 +294,9 @@ class Simulator():
         - self.domains_by_name  # including the number of domains for concentration
         - self.domain_pairs
         - self.domain_dHdS
+        Returns a list/ordered dict of
+            temperature : [c_hybridized, c_non_hybridized, total_conc, domains_total]
+            where c_hybridized, c_non_hybridized, and total_conc are in units of M = mol/L.
         """
         sysmgr = self.reactionmgr
         if delta_T is None:

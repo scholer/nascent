@@ -35,8 +35,10 @@ def load_pyplot(backend='agg'):
     return pyplot
 
 
-def plot_tot_vs_time(stats, fields=('f_hybridized_domains',), add_average=True, backend="agg", #run_prefixes=None,
-                     ax=None, figsize=None, filename=None, labels=None, linestyles=None, colors=None, markers=None,
+def plot_tot_vs_time(stats, fields=('f_hybridized_domains',), add_average=False, backend="agg", #run_prefixes=None,
+                     kind='line', ax=None, figsize=None, filename=None,
+                     labels=None, linestyles=None, colors=None, markers=None,
+                     x=None, # x='duration_cum', # Don't need to specify x if we have an index..
                      **kwargs):
     """
     Plot "total" stats versus time. (As opposed to plotting per-domain stats).
@@ -63,14 +65,29 @@ def plot_tot_vs_time(stats, fields=('f_hybridized_domains',), add_average=True, 
     for i, field in enumerate(fields):
         for key, arg in customization:
             if arg:
-                pltargs[key] = arg[i]
+                try:
+                    pltargs[key] = arg[i]
+                except IndexError:
+                    print("Could not set pltargs[%s] = %s[%s]: arg only has %s elements." %
+                          (key, arg, i, len(arg)))
         if field not in stats:
             print("field %s not in stats; existing keys: %s" % (field, stats.keys()))
         if 'label' in pltargs and pltargs['label'] is None:
             del pltargs['label']
         pltargs.update(kwargs)
         print("pltargs:", pltargs)
-        ax = stats.plot(x="sim_system_time", y=field, **pltargs)
+        #import pdb; pdb.set_trace()
+        # Issue: label doesn't work with scatter plot.
+        # scatter and line plots work by two quite different ways:
+        # * line makes a copy of df, modifies the df copy changing the y-series name to <label>,
+        #   then plots using pandas.tools.plotting.LinePlot
+        # * scatter uses pandas.tools.plotting.ScatterPlot(df, x, y, **kwargs)
+        #   ScatterPlot._make_plot ONLY adds legend label and handle if self.legend = True (from legend kwargs):
+        #       if self.legend and hasattr(self, 'label'):
+        #           label = self.label
+        # x = 'duration_cum' or "sim_system_time" or "system_time_end"  # ("sim_system_time" should equal duration_cum)
+        ax = stats.plot(kind=kind, x=x,
+                        y=field, **pltargs)  #
         pltargs = {'ax': ax}
     pyplot.xlabel(kwargs.pop("xlabel", "Simulation time / s"))
     if filename:

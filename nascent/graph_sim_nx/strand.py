@@ -58,8 +58,9 @@ class Strand(nx.MultiGraph):
         # a graph's attributes are simply a dict stored in Graph.graph member
         self.uuid = next(sequential_uuid_gen)   # sequential number unique across all objects
         self.suid = next(make_sequential_id)    # sequential number unique across strands
+        self.complex = start_complex
         super().__init__(name=name,
-                         complex=start_complex,
+                         #complex=start_complex,
                          suid=self.suid,
                         )
         #self.name = name  # Is a native Graph property, linked to self.graph
@@ -203,13 +204,13 @@ class Strand(nx.MultiGraph):
         #         sum(dom.length for dom in domains[i+1:j])
 
 
-    @property
-    def complex(self):
-        return self.graph['complex']
-
-    @complex.setter
-    def complex(self, cmplx):
-        self.graph['complex'] = cmplx
+    # @property
+    # def complex(self):
+    #     return self.graph['complex']
+    #
+    # @complex.setter
+    # def complex(self, cmplx):
+    #     self.graph['complex'] = cmplx
 
     # 'name' is already a built-in property of nx.Graph objects
     # @property

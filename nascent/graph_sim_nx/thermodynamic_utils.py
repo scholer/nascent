@@ -36,6 +36,8 @@ def thermodynamic_meltingcurve(T_start, T_finish, delta_T, volume,
                                domains_by_name, domain_pairs, domain_dHdS):
     """
     This function currently only supports one mapping in domain_pairs:
+    Returns a list/ordered dict of
+        temperature : [hybridized, non_hybridized, total_conc, domains_total]
     """
     # from collections import OrderedDict
     cum_stats = {} #OrderedDict()       # Has T: <fraction of duplexed domains>

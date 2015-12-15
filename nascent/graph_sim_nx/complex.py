@@ -522,7 +522,7 @@ class Complex(nx.MultiDiGraph):
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()  ## TODO: Implement stacking
                 )) % 100000  # TODO: Remove modulus when done debugging.
-            self._historic_fingerprints.append((self._state_fingerprint,))
+            self._historic_fingerprints.append((self._state_fingerprint,))  # TODO: Remove when done debugging.
             # self.history.append("state_fingerprint: Calculated fingerprint: %r" % (self._state_fingerprint,))
         return self._state_fingerprint
 

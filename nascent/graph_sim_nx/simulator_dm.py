@@ -136,8 +136,8 @@ class DM_Simulator(Simulator):
         ### Set up a "grouped" system manager for testing: ###
         # Make sure the strands, etc are all copied before you make a new system:
         strands = kwargs.pop('strands')
-        if strands is not None:
-            strands = copy.deepcopy(strands)
+        # if strands is not None:
+        #     strands = copy.deepcopy(strands)
         # self.reactionmgr_grouped = ReactionMgrGrouped(params=params, strands=strands, **kwargs)
         ### -- end making grouped reaction mgr --- ###
         self.time_per_T = params.get('time_per_T', 10) # seconds
@@ -204,9 +204,10 @@ class DM_Simulator(Simulator):
         sleep_time = 0
 
         n_done = 0
+        tau = 0
 
         print("sysmgr.domain_pairs:")
-        # pprintd(sysmgr.domain_pairs)
+        pprint(sysmgr.domain_pairs)
 
         print(self.print_post_step_fmt)
         # print(self.print_post_step_fmt.format(
@@ -230,11 +231,16 @@ class DM_Simulator(Simulator):
             if not sysmgr.propensity_functions:
                 print("\n\nERROR: sysmgr.propensity_functions is:",
                       sysmgr.propensity_functions, " - ABORTING SIMULATION.\n\n")
+                pdb.set_trace()
+                sysmgr.update_possible_hybridization_reactions(changed_domains=None)
                 return
-            reaction_specs, propensity_functions = zip(*sysmgr.propensity_functions.items())
-            assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
+            reaction_specs, propensity_functions = zip(*sysmgr.propensity_functions.items())  # hybridization rxs only
+            # This assertion is not needed for ungrouped reactions, since propensity_functions
+            # *equals* propensity constants (propensity_functions = possible_hybridization_reactions)
+            # assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
             # reaction_specs: list of possible reaction_specs
             a0_hyb = sum(propensity_functions)
+            # Add stacking reactions, if we have any:
             if len(sysmgr.stacking_propensity_functions) > 0:
                 stacking_pairs, stacking_propensities = zip(*sysmgr.stacking_propensity_functions.items())
                 a0_stacking = sum(stacking_propensities)
@@ -269,7 +275,7 @@ class DM_Simulator(Simulator):
             #    |---|---|---|---|---||---|---|---|---|---|
             # j    0   1   2   3   4    0   1   2   3   4
             j = 0 # python 0-based index: a[0] = j_1
-            if breaking_point <= a0_hyb:
+            if breaking_point <= a0_hyb:  # Quick check: Hybridization reaction or stacking reaction?
                 reaction_type = HYBRIDIZATION_INTERACTION
                 a = propensity_functions # propensity_functions[j]: propensity for reaction[j]
                 Rxs = reaction_specs
@@ -328,7 +334,7 @@ class DM_Simulator(Simulator):
                                    (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex)
                         assert d1.partner is None and d2.partner is None
 
-                if reaction_attr.is_forming != is_forming or reaction_attr.is_intra != is_intra:
+                if reaction_attr.is_forming != is_forming or reaction_attr.is_intra != is_intra: # CHECK
                     print("Expected reaction attr", reaction_attr,
                           "does not match actual reaction attributes is_forming=%s, is_intra=%s" %
                           (is_forming, is_intra))

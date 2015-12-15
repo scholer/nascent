@@ -101,6 +101,7 @@ class ComponentMgr(GraphManager):
         # Edit: I've made a proper SuperComplex class. Edit2: I've dropped using supercomplexes for now.
         # self.supercomplexes = set()
         # complexes are assigned sequential complex-unique IDs upon instantiation, no need to keep track of order here.
+        # Since we remove obsolete (degraded) complexes in arbitrary order, we don't want a regular list.
         self.complexes = set()
         self.removed_complexes = [] # But it might be interesting to keep track of deletion order.
         self.strands = strands
@@ -146,11 +147,11 @@ class ComponentMgr(GraphManager):
             # partners_species = set(chain(pair for pair in domain_pairs if dA in pair)) - {dA}
             # However, might as well only do this once and save the list!
             # Also, if you change domain_pairs mapping, remember to adjust domain_dHdS cache as well.
-            domain_pairs = {d.name: d.name.lower() if d.name == d.name.upper() else d.name.upper()
+            domain_pairs = {d.name: [d.name.lower()] if d.name == d.name.upper() else [d.name.upper()]
                             for d in self.domains_list}
             # remove pairs without partner:
-            domain_pairs = {d1name: d2name for d1name, d2name in domain_pairs.items()
-                            if d2name in self.domains_by_name}
+            domain_pairs = {d1name: d2names for d1name, d2names in domain_pairs.items()
+                            if d2names[0] in self.domains_by_name}
         # allow self-complementarity?
         assert not any(k == v for k, v in domain_pairs.items())
         self.domain_pairs = domain_pairs
@@ -766,7 +767,8 @@ class ComponentMgr(GraphManager):
                   file=self.hyb_dehyb_file)
             print("assert h2end5p.domain.domain_strand_specie == ", h2end5p.domain.domain_strand_specie,
                   file=self.hyb_dehyb_file)
-            print("sysmgr.hybridize(domain1, domain2)", file=self.hyb_dehyb_file)
+            print("sysmgr.stack(h1end3p, h2end5p, h2end3p, h1end5p, join_complex=%s)" % join_complex,
+                  file=self.hyb_dehyb_file)
         stacking_tuple = ((h1end3p, h2end5p), (h2end3p, h1end5p))
         stacking_pair = frozenset(stacking_tuple)
         ## Variable unpacking:
@@ -876,7 +878,8 @@ class ComponentMgr(GraphManager):
                   file=self.hyb_dehyb_file)
             print("assert h2end5p.domain.domain_strand_specie ==", h2end5p.domain.domain_strand_specie,
                   file=self.hyb_dehyb_file)
-            print("sysmgr.hybridize(domain1, domain2)", file=self.hyb_dehyb_file)
+            print("sysmgr.unstack(h1end3p, h2end5p, h2end3p, h1end5p, break_complex=%s)" % break_complex,
+                  file=self.hyb_dehyb_file)
 
         stacking_tuple = ((h1end3p, h2end5p), (h2end3p, h1end5p))
         stacking_pair = frozenset(stacking_tuple)
@@ -923,7 +926,7 @@ class ComponentMgr(GraphManager):
             result = self.break_complex_at(stacking_pair=stacking_tuple)
         else:
             # Manually update complex domain graph, but do not process/break the complex into two (if applicable).
-            assert False # checking that this does not happen during testing..
+            # assert False # checking that this does not happen during testing..
             if c1 is not None:
                 # c1.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
                 # c1._hybridization_fingerprint = None

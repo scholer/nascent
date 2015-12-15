@@ -74,13 +74,15 @@ def main():
         os.path.abspath(nascent.__file__))), "testfiles")
     scriptdir = os.path.dirname(os.path.abspath(__file__))
     structure = "duplex2"
+    structure = "duplex_16bp-d2" # "duplex2"
 
     #n_strand_copies_default = 400
     #n_strand_copies_default = 100
     # n_strand_copies_default = 40
-    n_strand_copies_default = 20
+    #n_strand_copies_default = 20
     # n_strand_copies_default = 10
     # n_strand_copies_default = 2
+    n_strand_copies_default = 1
 
     # Load strand def and check the strands:
     #strand_defs_file = os.path.join(strand_defs_folder, "strand_defs_{}.txt".format(structure))
@@ -155,33 +157,37 @@ def main():
               # Sleep factor*tau after each DM simulation step: 0 = Do not wait, Higher = Wait longer.
               "simulator_step_sleep_factor": 0, # 0, 1, 0.5, 5...
               # A filename str or True to save to working directory.
-              "save_invoked_reactions_to_file": True, # True or False
+              "save_invoked_reactions_to_file": False, # True or False
               # A filename str or True to save to working directory.
-              "save_hybdehyb_to_file": True, # True or False
+              "save_hybdehyb_to_file": False, # True or False
               # Enable or disable bending of single helices:
               "enable_helix_bending": False,
               # Merge complexes upon stacking and break if unstacked (if no hybridization interactions):
               "stacking_joins_complexes": True,
               # Allow ends in one complex to stack against ends in another complex:
-              "enable_intercomplex_stacking": True,
+              "enable_intercomplex_stacking": False,
               # Re-calculate changed domain reactions against all other (complementary) domains,
               # or only re-calculate for pairs against other changed domains?
               "reaction_update_pair_against_all": True,
               # Nric = normalized_reaction_invocation_count = sysmgr.reaction_invocation_count[reaction_spec]/len(sysmgr.domains_by_name[d.name])
               "reaction_throttle": False, # True: default to c_j_throttle_factor = exp(-Nric/10)
-              "reaction_throttle_offset": 10,
+              # Use a reaction throttle cache, decrementing the throttle when reaction is triggered, rather than calculated in calculate_c_j from Nric
+              "reaction_throttle_use_cache": True,
+              "reaction_throttle_offset": 0,
               "reaction_throttle_reset_on_temperature_change": True,
               "dispatcher_enabled": False,  # True to use a dispatcher to save and visualize graph changes.
               "dispatcher_config": dispatcher_config,
               "stats_total_file": outputfn(statstype="time_totstats", ext="txt"),
               "stats_per_domain_file": outputfn(statstype="time_domain_stats", ext="txt"),
-              "stats_per_strand_file": outputfn(statstype="time_strand_stats", ext="txt"),
+              "stats_per_strand_file": outputfn(statstype="time_strand_stats", ext="txt"), #
+              "stats_post_simulation_file": outputfn(statstype="post_simulation_stats", ext="yaml"), #
              }
     with open(outputfn(statstype="config", ext="yaml"), 'w') as fp:
         yaml.dump(params, fp)
     simulator = Simulator(volume=volume, strands=input_oligos, params=params)
     # sysmgr = simulator.reactionmgr
 
+    simulator.stats_writer.write_post_simulation_stats()
 
     # Perform calculations and start simulation
     try:
@@ -239,7 +245,8 @@ def main():
                 print("\nTotal Time Top 10:")
                 s.sort_stats('time').print_stats(20)
             else:
-                simulator.simulate(T=330, n_steps_max=10000, systime_max=100)
+                # pdb.set_trace()
+                simulator.simulate(T=330, n_steps_max=400000, systime_max=100)
 
     except KeyboardInterrupt:
         print("\n\nABORT: KeyboardInterrupt.\n\n")
@@ -261,6 +268,9 @@ def main():
     #     #     return
 
     # simulator.save_stats_cache()
+
+    simulator.stats_writer.write_post_simulation_stats()
+    simulator.stats_writer.close_all() # Close all open files...
 
     Tm_filename = outputfn(statstype="energies", ext="yaml")
     with open(Tm_filename, 'w') as fp:

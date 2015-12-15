@@ -154,6 +154,7 @@ class GraphManager():
         self.ends5p3p_graph = ends5p3p_graph or nx.MultiGraph()
         self.domain_graph = domain_graph or nx.MultiGraph()
         self.strand_graph = strand_graph or nx.MultiGraph()
+        self.reaction_graphs = nx.MultiGraph() # Can we have multiple edges?
         if strands:
             # TODO: Add strand-node attrs to strand-graph:
             # TODO: Add "Label" attr to all nodes (for Gephi)
@@ -203,7 +204,7 @@ class GraphManager():
 
     def ends5p3p_path_partial_elements(self, path, length_only=False, summarize=False):
         """
-        Returns a list of structural elements based on a 5p3p-level path (list of 5p3p ends).
+        Returns a list of structural elements based on a 5p3p-level path (list of DomainEnd nodes).
 
         For this, I will experiment with primitive list-based representations rather than making full
         element objects.
@@ -283,7 +284,9 @@ class GraphManager():
 
 
     def ends5p3p_shortest_path(self, end5p3p1, end5p3p2):
-        """
+        """ :end5p3p1:, :end5p3p2: DomainEnd nodes (either End5p or End3p),
+        calculates path from node1 to node2 using ends5p3p_graph. The returned path is a list
+        starting with node1 and ending with node2, and has the form: [node1, <all nodes in between, ...>, node2]
         TODO: This should certainly be cached.
         TODO: Verify shortest path for end3p as well?
         """
@@ -449,19 +452,35 @@ class GraphManager():
             domain1, domain2 = elem1, elem2
             d1end5p, d2end5p = domain1.end5p, domain2.end5p
             d1end3p, d2end3p = domain1.end3p, domain2.end3p
-        else:
+            path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
+            slice_start = 1 if path[1] == d1end3p else 0
+            slice_end = -1 if path[-2] == d2end3p else None
+            if slice_start == 1 or slice_end is not None:
+                path = path[slice_start:slice_end]
+        elif isinstance(elem1, DomainEnd):
             d1end5p, d2end5p = elem1, elem2
-            domain1, domain2 = d1end5p.domain, d2end5p.domain
-        path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
+            # domain1, domain2 = d1end5p.domain, d2end5p.domain # only used for debugging
+            path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
+        else:
+            # TODO: Consolidate this for domain hybridization and end stacking
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = elem1, elem2
+            # import pdb; pdb.set_trace()
+            path = self.ends5p3p_shortest_path(h1end3p, h2end3p)
+            slice_start = 1 if path[1] == h2end5p else 0
+            slice_end = -1 if path[-2] == h1end5p else None
+            if slice_start == 1 or slice_end is not None:
+                path = path[slice_start:slice_end]
+        ## TODO: Check if d1end3p or d2end3p is in the shortest_path and adjust accordingly.
         # printd("5p3p graph shortest path from %s to %s:" % (d1end5p, d2end5p))
         # pprintd(path)
         path_elements = self.ends5p3p_path_partial_elements(path, length_only='both', summarize=True)
         # printd("5p3p graph path elements:")
         # pprintd(path_elements)
+        # import pdb; pdb.set_trace()
 
-        ## TODO: Check for secondary loops!
+        ## TODO: CHECK FOR SECONDARY LOOPS!
 
-        # list of [(stiffness, total-length), ...]
+        # path_elements is a list of tuples with: [(stiffness, total-length, sum-of-squared-lengths), ...]
         # For rigid, double-helical elements, element length, l, is N_bp * 0.34 nm.
         # For single-stranded elements, we estimate the end-to-end distance by splitting the strand into
         #   N = N_nt*0.6nm/1.8nm segments, each segment being the Kuhn length 1.8 nm of ssDNA,
@@ -471,26 +490,42 @@ class GraphManager():
         #         = N_nt * lˢˢ * λˢˢ = N_nt * 1.08 nm²
         # Why use stiffness as first maximum criteria??
         try:
+            # LRE: "Longest Rigid Element"; "SRE": "Sum of Remaining Elements".
             _, LRE_len, LRE_len_sq, LRE_idx = max((stiffness, elem_length, elem_len_sq, i)
                                                   for i, (stiffness, (elem_length, elem_len_sq))
                                                   in enumerate(path_elements)
                                                   if stiffness > 0)
+            if LRE_len <= HELIX_WIDTH:
+                # LRE is a helix; this is within the "interaction radius" and is ignored.
+                # TODO: This is really just a quick hack; more thought should go into this.
+                LRE_len, LRE_len_sq = 0, 0
         except ValueError:
             # No stiff elements:
-            LRE_len = 0
-            LRE_len_sq = 0
+            LRE_len, LRE_len_sq = 0, 0
             SRE_len = sum(elem_length for (stiffness, (elem_length, elem_len_sq)) in path_elements if stiffness == 0)
             SRE_len_sq = sum(elem_len_sq for (stiffness, (elem_length, elem_len_sq)) in path_elements if stiffness == 0)
         else:
             #LRE = path_elements[LRE_idx] # .pop(LRE_idx)
             # Exclude LRE when calculating SRE length:
             if len(path_elements) > 1:
-                SRE_lengths, SRE_sq_lengths = zip(*[(elem_length, elem_len_sq)
-                                                    for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
-                                                    for stiffness, (elem_length, elem_len_sq) in sub_path])
+                # SRE_lengths, SRE_sq_lengths = ...
+                SRE_lengths_and_sq = [(elem_length, elem_len_sq)
+                                      for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+                                      for stiffness, (elem_length, elem_len_sq) in sub_path]
                 # SRE_len_sq = sum(elem_len_sq for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
                 #               for stiffness, (elem_length, elem_len_sq) in sub_path)
-                SRE_len, SRE_len_sq = sum(SRE_lengths), sum(SRE_sq_lengths)
+                ## HACK: If path is [ss-backbone-connection, duplex-hybridization-width, ss-backbone-connection] then
+                ## we (probably?) have two domains on the same helix connected by hybridization of neighboring domains.
+                ## In that case, we need to get an activity of 1, either by increasing the interaction radius, or
+                ## by decreasing the path. For now, I will just decrease the path.
+                ## NOTE that this may give a very inacurate activity for hair-pins!
+                if len(SRE_lengths_and_sq) > 1:
+                    if SRE_lengths_and_sq[-1][0] == HELIX_XOVER_DIST:
+                        SRE_lengths_and_sq.pop()
+                    elif SRE_lengths_and_sq[0] == HELIX_XOVER_DIST:
+                        SRE_lengths_and_sq.pop(0)
+                SRE_len = sum(tup[0] for tup in SRE_lengths_and_sq)
+                SRE_len_sq = sum(tup[1] for tup in SRE_lengths_and_sq)
             else:
                 # SRE_lengths, SRE_sq_lengths = [], []
                 SRE_len, SRE_len_sq = 0, 0
@@ -551,7 +586,7 @@ class GraphManager():
         # For LRE_len_sq == SRE_len_sq, this gives us exp(-3*LRE_len_sq / (2*SRE_len_sq)) = 1/e = 0.22.
         # For example 1, this will give us:
         # exp(-3*LRE_len_sq / (2*SRE_len_sq)) = 0.02.
-        LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq)) if LRE_len_sq else 1
+        LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq)) if LRE_len_sq > 0 else 1
 
         gamma_corr = 1
         if LRE_len_sq > SRE_len_sq:
@@ -564,6 +599,9 @@ class GraphManager():
         # We already have the squared length, Nᵢbᵢ², so we just need to sum:
 
         mean_sq_ee_dist = LRE_len_sq + SRE_len_sq       # unit of nm
+        if mean_sq_ee_dist <= HELIX_XOVER_DIST**2:
+            # Ensure that activity is not too high:
+            return 1
 
         ## Regarding "effective volume" vs P_loop/P_v0: ##
         # Using "effective volume" is more intuitive than P^rc_loop/P^rc_v0.
@@ -609,7 +647,7 @@ class GraphManager():
         # TODO: Currently not accounting for bending or zipping energy.
         # TODO: Account for secondary (and tertiary?) loops
         if activity < 1:
-            print("Low activity, %s - printing locals():" % activity)
+            print("Activity %s less than 1 - printing locals():" % activity)
             pprint(locals())
         return activity
 

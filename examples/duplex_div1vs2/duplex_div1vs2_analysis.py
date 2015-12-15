@@ -71,18 +71,26 @@ def main():
     plot_tot_hyb = True
     plot_tot_stacked = False
     plot_melting_curve = False
-    structure = "duplex_16bp-d2" # "duplex2"
-    # structure = "duplex2"
 
     # stats, statsfolders = load_stats()
-    runidxs = [-1] #
-    runidxs = [-1, -2]
-    runidxs = [-1, -2, -3]
-    runidxs = [-1, -2, -3, -4, -5]
-    # runidxs = [-2, -3, -4, -5]
-    runidxs = [-4, -5]
-    stats, statsfolders = load_multiple_stats(runidxs=runidxs, basedir=scriptdir, structure=structure, process=True)
-    statsfolder = statsfolders[0]
+    structure_runidxs = {"duplex_16bp-d1": [-1], "duplex_16bp-d2": [-1]}
+    line_colors = dict(zip(structure_runidxs.keys(), 'rgbcmk'[:len(structure_runidxs)]))
+    structure_stats = {}
+    for structure, runidxs in structure_runidxs.items():
+        structure_stats[structure] = dict(zip(('stats', 'statsfolders'),
+                                              load_multiple_stats(runidxs=runidxs, basedir=scriptdir,
+                                                                  structure=structure, process=True)),
+                                          runidxs=runidxs)
+        structure_stats[structure]['color'] = line_colors[structure]
+    # structure_stats[structure] = {'runidxs': runidxs}
+    # structure_stats = {structure:
+    #                    for structure, runidxs in structure_runidxs.items()}
+    #
+    # structure_stats = {structure: load_multiple_stats(runidxs=runidxs, basedir=scriptdir,
+    #                                                   structure=structure, process=True)
+    #                    for structure, runidxs in structure_runidxs.items()}
+    #stats, statsfolders = load_multiple_stats(runidxs=runidxs, basedir=scriptdir, process=True)
+    #statsfolder = statsfolders[0]
 
     ## Process (returns a Pandas DataFrame):
     # shift_tau_for_duration is for older stats where stats were collected *after* changing state.
@@ -92,6 +100,7 @@ def main():
     pyplot = load_pyplot()
 
     ## Plot fraction of hybridized domains:
+
     if plot_tot_hyb:
         ax = None
         # Instead of passing plot parameters through via function args, consider using the
@@ -99,46 +108,24 @@ def main():
         # with pd.plot_params.use('logx', False):
         # "Specific lines can be excluded from the automatic legend element selection by defining a label
         # starting with an underscore."
-        for runstats, runidx, color in zip(stats, runidxs, 'rgbcmk'[:len(stats)]):
-            plotfilename = os.path.join(statsfolder, "f_hybridized_domains_avg_vs_time.png")
-            # labels, markers, colors, etc all match up against the equivalent data field.
-            fields=('f_hybridized_domains_avg', 'f_partially_hybridized_strands_avg', 'f_fully_hybridized_strands_avg')
-            fields=('f_partially_hybridized_strands_avg', 'f_fully_hybridized_strands_avg')
-            ax = plot_tot_vs_time(runstats, filename=None, #plotfilename,
-                                  ax=ax,
-                                  #x='duration_cum',
-                                  #x='system_time_end',
-                                  figsize=(16, 10),
-                                  #linestyles=("-", "None"),
-                                  colors=color*5,
-                                  #kind='line',
-                                  #kind='scatter',
-                                  # fields=('f_hybridized_domains_avg',),
-                                  fields=fields,
-                                  # fields=('f_hybridized_domains_rolling', 'f_hybridized_domains'),# , ''),
-                                  #labels=("f_hyb_dom run %s" % runidx, ),
-                                  #labels=("f_hyb_dom run %s" % runidx, 'f_hybridized_domains'),
-                                  #labels=("_", "f_hyb_dom run %s" % runidx),
-                                  #markers='o.',
-                                  marker="o",
-                                  markersize=3,
-                                  markeredgecolor='None',
-                                  #markeredgewidth=0.2,
-                                  #markerfacecolor='r',
-                                  legend=True,
-                                  alpha=0.3,
-                                  linewidth=0.5,
-                                 )
+        for structure, data in structure_stats.items():
+            #runidxs = structure_runidxs[structure]
+            runidxs = data['runidxs']
+            stats = data['stats']
+            color = data['color']
+            for runstats, runidx in zip(stats, runidxs):
+                #plotfilename = os.path.join(statsfolder, "f_hybridized_domains_avg_vs_time.png")
+                ax = plot_tot_vs_time(runstats, filename=None, #plotfilename,
+                                      ax=ax, linestyles=":-", colors=color*2,
+                                      labels=("_", "%s run %s" % (structure, runidx)),
+                                      legend=False
+                                     )
         # import pdb
         # pdb.set_trace()
-        # handles, labels = zip(*[(hdl, lbl) for hdl, lbl in zip(*ax.get_legend_handles_labels())
-        #                         if "avg" not in lbl and lbl[0] != "_"])
-        # ax.legend(handles=handles, labels=labels, loc=None) # loc="lower right")
-        # ax.xlim(0, 100) # ax has no xlim attribute...
-        #pyplot.xlim(0, 200)
-        pyplot.xlim(xmin=-0.05)
-        pyplot.ylim(ymin=-0.05)
-        # pyplot.ylim(ymin=0, ymax=1.0)
+        handles, labels = zip(*[(hdl, lbl) for hdl, lbl in zip(*ax.get_legend_handles_labels())
+                                if "avg" not in lbl and lbl[0] != "_"])
+        pyplot.legend(handles=handles, labels=labels, loc="lower right")
+        plotfilename = os.path.join(scriptdir, "f_hybridized_domains_avg_vs_time.png")
         pyplot.savefig(plotfilename)
         webbrowser.open(plotfilename)
 

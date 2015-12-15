@@ -1,0 +1,84 @@
+
+
+
+
+
+## Overview: ##
+
+Methods:
+* Tau leaping
+* Naive throttle
+
+
+
+## Tau leaping: ##
+
+Tau leaping:
+* Do not update propensity functions after every reaction; instead, wait a given number of reactions,
+    before completely re-computing the propensity functions.
+* Approximate changes in propensity functions by a Poisson random variable.
+* Requires the leap condition to be true: "during time [t, t+tau), no propensity functions suffers an
+    "appreciable change" in its value.
+* Cons: We have high coorperativity - The leap condition may never be true!
+
+
+
+Tau leaping refs:
+* http://www.cs.ucsb.edu/~cse/Files/NewTau052.pdf
+* https://people.maths.ox.ac.uk/erban/Education/StochReacDiff.pdf
+* http://www.slideshare.net/csgillespie/the-27257701  (No, not DAN Gillespie).
+* https://github.com/csgillespie/talks
+* https://en.wikipedia.org/wiki/Tau-leaping
+
+
+
+## Naive rate constant throttle: ##
+
+Approach I:
+* Keep track of reaction invocations and throttle reaction rate constant, k, based on that.
+* Doesn't work for cycles with multiple reaction pathways, especially if any point is irriversible.
+
+Approach I, Example:
+* A ---> B,  (k = k1 )
+* B ---> A,  (k = k21)
+* B ---> A,  (k = k22)
+* K = [B]/[A] = k1 / (k21 + k22)
+* kN = exp(-N)*k0
+* After N=100 cycles, k1 has been fired 100 times, k21 and k22 has been fired 50 times each.
+* K = exp(-100)*k1 / (exp(-50)*k21 + exp(-50)*k22) = exp(-100)/exp(-50) * (k1/(k21+k22)) = exp(-N) * K.
+* Clearly, doesn't work.
+
+Approach II:
+* Keep track of state occurences, i.e. the number of times we are in a certain state,
+    and throttle based on that.
+* We don't want to calculate state hashes for "potential" reaction states, so must throttle
+    must rely on current "start" state, not the "end" state.
+* Could be exactly the same, if we have an intermediate.
+
+Approach II, Example:
+* A ---> B,  (k = k1 )
+* B ---> C1,  (k = k21)
+* B ---> C2,  (k = k22)
+* C1 ---> A,  (k = k31)
+* C2 ---> A,  (k = k32)
+* K(BA) = [B]/[A] =
+* k = exp(-N)*k0
+* After 100 cycles, we have been in state A and B 100 times, and 50 times in C1 and C2.
+* k1N = exp(-100)*k1
+
+
+Multiple coupled equilibria:
+* http://bilbo.chm.uri.edu/CHM112/lectures/lecture8.htm
+* http://www.ncbi.nlm.nih.gov/books/NBK21503/
+* http://www.acsu.buffalo.edu/~koudelka/Binding_constant_lectures.pdf
+* http://chemwiki.ucdavis.edu/Physical_Chemistry/Equilibria/Chemical_Equilibria/Calculating_an_Equilibrium_Concentration
+* https://en.wikipedia.org/wiki/Equilibrium_constant, https://en.wikipedia.org/wiki/Chemical_equilibrium
+
+
+For reaction A <- -> B,
+* A --> B  (k₊₁)
+* B --> A  (k₋₁)
+* d[A]/dt = k₋₁[B] - k₊₁[A]
+* d[B]/dt = k₋₁[A] - k₊₁[B]
+* dA/dt = dB/dt = 0:
+* k₋₁[B] = k₊₁[A]  <=> [B]/[A] = k₊₁/k₋₁
