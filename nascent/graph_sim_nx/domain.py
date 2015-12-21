@@ -335,6 +335,10 @@ class DomainEnd():
         ## TODO: Many of these attributes are essentially duplicated in the ends5p3p system graph.
         ## Consider consolidating these in some way.
 
+    @property
+    def strand(self):
+        return self.domain.strand
+
     def state_fingerprint(self):
         return (self.domain.state_fingerprint(), self.end)
 

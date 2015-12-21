@@ -159,7 +159,7 @@ def main():
               # A filename str or True to save to working directory.
               "save_invoked_reactions_to_file": False, # True or False
               # A filename str or True to save to working directory.
-              "save_hybdehyb_to_file": False, # True or False
+              "save_hybdehyb_to_file": True, # True or False
               # Enable or disable bending of single helices:
               "enable_helix_bending": False,
               # Merge complexes upon stacking and break if unstacked (if no hybridization interactions):

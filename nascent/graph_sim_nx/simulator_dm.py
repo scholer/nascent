@@ -87,7 +87,7 @@ class DM_Simulator(Simulator):
             Contains up-to-date hybridization and dehybridization reactions
             dict, keyed by domspec_pair = {domain1-state, domain2-state}
             This is "R" and "R_j" in Gillespie's formulas
-        - propensity_functions[domspec_pair] = actual propensity for reaction between domain1 and domain2
+        - hybridization_propensity_functions[domspec_pair] = actual propensity for reaction between domain1 and domain2
             with domain-states domspec_pair = {domain1-state, domain2-state}
             This is "a" or "a(x)" in Gillespie's formulas.
 
@@ -167,7 +167,7 @@ class DM_Simulator(Simulator):
                                                'multi': False}
         if params.get('stats_writer_enabled', True):
             config = params['stats_writer_config'] if 'stats_writer_config' in params else params
-            self.stats_writer = StatsWriter(sysmgr=self.reactionmgr, simulator=None, config=config)
+            self.stats_writer = StatsWriter(sysmgr=self.reactionmgr, simulator=self, config=config)
         else:
             self.stats_writer = None
         if params.get('dispatcher_enabled', False):
@@ -222,24 +222,32 @@ class DM_Simulator(Simulator):
             # printd(" - precheck OK.")
 
             # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_forming)}
-            # sysmgr.propensity_functions is dict with              {domspec_pair: a_j}
+            # sysmgr.hybridization_propensity_functions is dict with              {domspec_pair: a_j}
             # printd(" ---- Reaction stats: ----")
             #sysmgr.print_reaction_stats()
             # printd("\n".join(sysmgr.reaction_stats_strs()))
 
-            # Step 1. (I expect that propensity_functions is up-to-date)
-            if not sysmgr.propensity_functions:
-                print("\n\nERROR: sysmgr.propensity_functions is:",
-                      sysmgr.propensity_functions, " - ABORTING SIMULATION.\n\n")
+            # Step 1. (I expect that hybridization_propensity_functions is up-to-date)
+            if len(sysmgr.hybridization_propensity_functions) + len(sysmgr.stacking_propensity_functions) == 0:
+                print("\n\nERROR: sysmgr.hybridization_propensity_functions is:",
+                      sysmgr.hybridization_propensity_functions,
+                      "and sysmgr.stacking_propensity_functions is:",
+                      sysmgr.stacking_propensity_functions,
+                      " - ABORTING SIMULATION.\n\n")
                 pdb.set_trace()
                 sysmgr.update_possible_hybridization_reactions(changed_domains=None)
                 return
-            reaction_specs, propensity_functions = zip(*sysmgr.propensity_functions.items())  # hybridization rxs only
-            # This assertion is not needed for ungrouped reactions, since propensity_functions
-            # *equals* propensity constants (propensity_functions = possible_hybridization_reactions)
-            # assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
-            # reaction_specs: list of possible reaction_specs
-            a0_hyb = sum(propensity_functions)
+            # For ungrouped simulation, hybridization_propensity_functions is just
+            #   possible_hybridization_reactions + possible_stacking_reactions + ...
+            if len(sysmgr.hybridization_propensity_functions) > 0:
+                reaction_specs, hybridization_propensity_functions = zip(*sysmgr.hybridization_propensity_functions.items())  # hybridization rxs only
+                # This assertion is not needed for ungrouped reactions, since hybridization_propensity_functions
+                # *equals* propensity constants (hybridization_propensity_functions = possible_hybridization_reactions)
+                # assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
+                # reaction_specs: list of possible reaction_specs
+                a0_hyb = sum(hybridization_propensity_functions)
+            else:
+                a0_hyb = 0
             # Add stacking reactions, if we have any:
             if len(sysmgr.stacking_propensity_functions) > 0:
                 stacking_pairs, stacking_propensities = zip(*sysmgr.stacking_propensity_functions.items())
@@ -277,12 +285,12 @@ class DM_Simulator(Simulator):
             j = 0 # python 0-based index: a[0] = j_1
             if breaking_point <= a0_hyb:  # Quick check: Hybridization reaction or stacking reaction?
                 reaction_type = HYBRIDIZATION_INTERACTION
-                a = propensity_functions # propensity_functions[j]: propensity for reaction[j]
+                a = hybridization_propensity_functions # hybridization_propensity_functions[j]: propensity for reaction[j]
                 Rxs = reaction_specs
                 sum_j = a[j]
             else:
                 reaction_type = STACKING_INTERACTION
-                a = stacking_propensities # propensity_functions[j]: propensity for reaction[j]
+                a = stacking_propensities # hybridization_propensity_functions[j]: propensity for reaction[j]
                 Rxs = stacking_pairs
                 sum_j = a0_hyb + a[0]
             while sum_j < breaking_point:
@@ -311,7 +319,7 @@ class DM_Simulator(Simulator):
             self.sim_system_time += tau
 
             ## 3b: Perform reaction and update reactions:
-            print("\n\nPerforming reaction:", reaction_spec, reaction_attr)
+            # print("\n\nPerforming reaction:", reaction_spec, reaction_attr)
             if reaction_type == HYBRIDIZATION_INTERACTION:
                 c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
                 # Determine reaction attributes:
@@ -341,10 +349,10 @@ class DM_Simulator(Simulator):
                           (is_forming, is_intra))
                 # reverted to reaction_spec = domain_pair for ungrouped reactions. A domain instance should only
                 # have ONE way (is_forming?, is_intra?) to react with another domain instance.
-                reaction_pair, result = sysmgr.react_and_process(domain_pair, reaction_attr)
+                reaction_pair, result = sysmgr.hybridize_and_process(domain_pair, reaction_attr)
                 assert (d1, d2) == tuple(reaction_pair) or (d2, d1) == tuple(reaction_pair)
 
-                ## TODO: react_and_process dehybridization can have side-effect of unstacking duplex ends.
+                ## TODO: hybridize_and_process dehybridization can have side-effect of unstacking duplex ends.
                 ##          THIS MUST BE PROPAGATED TO THE DISPATCHER!
 
             elif reaction_type == STACKING_INTERACTION:
@@ -385,7 +393,7 @@ class DM_Simulator(Simulator):
             #     #assert np.isclose(c_j_g, c_j)
             #     assert (c_j_g - c_j) < 1e-3 and (c_j_g - c_j)/c_j < 1e-5 and (c_j_g - c_j)/c_j_g < 1e-5
             #     print("React and process using grouped_reaction_spec %s:" % (grouped_reaction_spec,))
-            #     (d1_g, d2_g), result = sysmgr_grouped.react_and_process(*grouped_reaction_spec)
+            #     (d1_g, d2_g), result = sysmgr_grouped.hybridize_and_process(*grouped_reaction_spec)
             #     # the grouped sysmgr might select different domains for hybridizing, but they should
             #     # have the same state, and the domspec distribution should be equivalent.
             #     try:
@@ -408,15 +416,15 @@ class DM_Simulator(Simulator):
             try:
                 # assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
                 # After processing, we do not expect the old reaction_specs to be the same as the new...
-                assert set(sysmgr.propensity_functions.keys()) == set(sysmgr.possible_hybridization_reactions.keys())
+                assert set(sysmgr.hybridization_propensity_functions.keys()) == set(sysmgr.possible_hybridization_reactions.keys())
             except AssertionError as e:
                 print("\n\n", repr(e), sep="")
                 print("set(reaction_specs):")
                 pprint(set(reaction_specs))
                 print("set(sysmgr.possible_hybridization_reactions.keys()):")
                 pprint(set(sysmgr.possible_hybridization_reactions.keys()))
-                print("set(sysmgr.propensity_functions.keys()):")
-                pprint(set(sysmgr.propensity_functions.keys()))
+                print("set(sysmgr.hybridization_propensity_functions.keys()):")
+                pprint(set(sysmgr.hybridization_propensity_functions.keys()))
                 raise e
 
 

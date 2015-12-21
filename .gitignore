@@ -60,7 +60,7 @@ target/
 *.komodoproject
 
 # Other:
-notebooks/*
+# notebooks/*
 litt/*
 nascent/nascent_sim/testfiles
 .ipynb_checkpoints/

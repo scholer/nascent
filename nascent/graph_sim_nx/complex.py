@@ -157,8 +157,12 @@ class Complex(nx.MultiDiGraph):
         self._historic_strands = []
         self._historic_fingerprints = [0]
         # edit: deque are not good for arbitrary access, using a list
-        self.reaction_deque = [0]    # deque(maxlen=reaction_deque_size)
-        self.reaction_deque_size = reaction_deque_size
+        self.reaction_deque = deque([0], maxlen=reaction_deque_size)
+        #self.reaction_deque = [0]    # deque(maxlen=reaction_deque_size)
+        # self.reaction_deque_size = reaction_deque_size
+        self.reaction_count = Counter()
+        self.reaction_throttle_cache = {}
+        self.previous_reaction_attrs = {}
         self.N_strand_changes = 0
         self.icid_radius = 5
         # Use domain instance instead of in_complex_identifier. Caching efficiency will decrease.
@@ -525,7 +529,7 @@ class Complex(nx.MultiDiGraph):
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()  ## TODO: Implement stacking
                 )) % 100000  # TODO: Remove modulus when done debugging.
-            print("\nRe-calculated state fingerprint for %r: %s" % (self, self._state_fingerprint))
+            # print("\nRe-calculated state fingerprint for %r: %s" % (self, self._state_fingerprint))
             #pdb.set_trace()
             # historic fingerprints are now added only through assert_state_change:
             # self._historic_fingerprints.append((self._state_fingerprint,))  # TODO: Remove when done debugging.
@@ -563,7 +567,7 @@ class Complex(nx.MultiDiGraph):
                 domain.state_change_reset(reset_complex=False)
             #pdb.set_trace()
 
-    def assert_state_change(self, reaction_spec_pair, reset=False):
+    def assert_state_change(self, reaction_spec_pair, reaction_attr, reset=False):
         """
         Will
         1) Make a new state_fingerprint and add it to historic_fingerprints list,
@@ -599,32 +603,43 @@ class Complex(nx.MultiDiGraph):
         assert state_fingerprint != self._historic_fingerprints[-1]
         assert reaction_spec_pair != self.reaction_deque[-1]
         self._historic_fingerprints.append(state_fingerprint)
-        print("assert_state_change invoked for %r with reaction_spec_pair %s" % (self, reaction_spec_pair))
-        pprint(locals())
-        print("historic fingerprints:", self._historic_fingerprints)
-        print("reaction deque: ", self.reaction_deque)
-        # pdb.set_trace()
-        if reaction_spec_pair in self.reaction_deque[-self.reaction_deque_size:]:
-            # Using x in list is about 40% faster than list.index(x) - note: deque don't have an index because deques are not for random access.
-            # This is a little complex since we want to make sure we have the highest index.
-            # Note: list.index(x) is very slow if x is at the end of a large list - time complexity O(n)
-            #highest_idx = self.reaction_deque[-self.reaction_deque_size:-1:-1]
-            # change slice start to -2 if :reaction_pair: has already been added!
-            highest_idx = self.reaction_deque[-1:-self.reaction_deque_size-1:-1].index(reaction_spec_pair) - 1
-            # While loop solution is much slower especially if several loops are required.
-            highest_idx2 = self.reaction_deque_size
-            while True:
-                try:
-                    highest_idx2 = self.reaction_deque.index(reaction_spec_pair, highest_idx2)
-                except ValueError:
-                    break
-            assert highest_idx2 == len(self.reaction_deque) - highest_idx
-            assert self.reaction_deque[highest_idx2] == self.reaction_deque[highest_idx] == reaction_spec_pair
-            self.reaction_deque.append(reaction_spec_pair)
-            return self.reaction_deque[highest_idx:]
+        # print("assert_state_change invoked for %r with reaction_spec_pair %s" % (self, reaction_spec_pair))
+        # pprint(locals())
+        # print("historic fingerprints:", self._historic_fingerprints)
+        # print("reaction deque: ", self.reaction_deque)
+
+        ## Check reaction_attrs:
+        if reaction_spec_pair in self.previous_reaction_attrs:
+            assert self.previous_reaction_attrs[reaction_spec_pair] == reaction_attr
         else:
-            self.reaction_deque.append(reaction_spec_pair)
-            return None
+            self.previous_reaction_attrs[reaction_spec_pair] = reaction_attr
+
+        ## Increment reaction count:
+        self.reaction_count[reaction_spec_pair] += 1
+
+        # pdb.set_trace()
+        ## Detect reaction cycle:
+        # if reaction_spec_pair in self.reaction_deque[-self.reaction_deque_size:]:
+        #     # Using x in list is about 40% faster than list.index(x) - note: deque don't have an index because deques are not for random access.
+        #     # This is a little complex since we want to make sure we have the highest index.
+        #     # Note: list.index(x) is very slow if x is at the end of a large list - time complexity O(n)
+        #     #highest_idx = self.reaction_deque[-self.reaction_deque_size:-1:-1]
+        #     # change slice start to -2 if :reaction_pair: has already been added!
+        #     highest_idx = self.reaction_deque[-1:-self.reaction_deque_size-1:-1].index(reaction_spec_pair) - 1
+        #     # While loop solution is much slower especially if several loops are required.
+        #     highest_idx2 = self.reaction_deque_size
+        #     while True:
+        #         try:
+        #             highest_idx2 = self.reaction_deque.index(reaction_spec_pair, highest_idx2)
+        #         except ValueError:
+        #             break
+        #     assert highest_idx2 == len(self.reaction_deque) - highest_idx
+        #     assert self.reaction_deque[highest_idx2] == self.reaction_deque[highest_idx] == reaction_spec_pair
+        #     self.reaction_deque.append(reaction_spec_pair)
+        #     return self.reaction_deque[highest_idx:]
+        # else:
+        #     self.reaction_deque.append(reaction_spec_pair)
+        #     return None
 
 
 

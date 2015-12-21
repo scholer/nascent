@@ -106,7 +106,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
             Contains up-to-date hybridization and dehybridization reactions
             dict, keyed by doms_specs = {domain1-state, domain2-state}
             This is "R" and "R_j" in Gillespie's formulas
-        - propensity_functions[doms_specs] = actual propensity for reaction between domain1 and domain2
+        - hybridization_propensity_functions[doms_specs] = actual propensity for reaction between domain1 and domain2
             with domain-states doms_specs = {domain1-state, domain2-state}
             This is "a" or "a(x)" in Gillespie's formulas.
 
@@ -197,17 +197,17 @@ class DM_SimulatorUngrouped(DM_Simulator):
             print("\n\n------ Step %03s -----------\n" % n_done)
 
             # sysmgr.possible_hybridization_reactions is dict with  {doms_specs: (c_j, is_forming)}
-            # sysmgr.propensity_functions is dict with              {doms_specs: a_j}
+            # sysmgr.hybridization_propensity_functions is dict with              {doms_specs: a_j}
 
-            # Step 1. (I expect that propensity_functions is up-to-date)
-            if not sysmgr.propensity_functions:
-                print("\n\nERROR: sysmgr.propensity_functions is:",
-                      sysmgr.propensity_functions, " - ABORTING SIMULATION.\n\n")
-            reaction_specs, propensity_functions = zip(*sysmgr.propensity_functions.items())
+            # Step 1. (I expect that hybridization_propensity_functions is up-to-date)
+            if not sysmgr.hybridization_propensity_functions:
+                print("\n\nERROR: sysmgr.hybridization_propensity_functions is:",
+                      sysmgr.hybridization_propensity_functions, " - ABORTING SIMULATION.\n\n")
+            reaction_specs, hybridization_propensity_functions = zip(*sysmgr.hybridization_propensity_functions.items())
             assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
             # reaction_specs: list of possible reaction_specs
-            a = propensity_functions # propensity_functions[j]: propensity for reaction[j]
-            a0_sum = sum(propensity_functions)
+            a = hybridization_propensity_functions # hybridization_propensity_functions[j]: propensity for reaction[j]
+            a0_sum = sum(hybridization_propensity_functions)
 
             # Step 2: Generate values for τ and j:  - easy.
             r1, r2 = random.random(), random.random()
@@ -243,21 +243,21 @@ class DM_SimulatorUngrouped(DM_Simulator):
 
             # 3b: Hybridize/dehybridize:
             c_j, is_forming = sysmgr.possible_hybridization_reactions[reaction_spec]
-            d1, d2 = sysmgr.react_and_process(reaction_spec, is_forming)
+            d1, d2 = sysmgr.hybridize_and_process(reaction_spec, is_forming)
 
             ## Post-hybridization assertions:
             try:
                 # assert set(reaction_specs) == set(sysmgr.possible_hybridization_reactions.keys())
                 # After processing, we do not expect the old reaction_specs to be the same as the new...
-                assert set(sysmgr.propensity_functions.keys()) == set(sysmgr.possible_hybridization_reactions.keys())
+                assert set(sysmgr.hybridization_propensity_functions.keys()) == set(sysmgr.possible_hybridization_reactions.keys())
             except AssertionError as e:
                 print("\n\n", repr(e), sep="")
                 print("set(reaction_specs):")
                 pprint(set(reaction_specs))
                 print("set(sysmgr.possible_hybridization_reactions.keys()):")
                 pprint(set(sysmgr.possible_hybridization_reactions.keys()))
-                print("set(sysmgr.propensity_functions.keys()):")
-                pprint(set(sysmgr.propensity_functions.keys()))
+                print("set(sysmgr.hybridization_propensity_functions.keys()):")
+                pprint(set(sysmgr.hybridization_propensity_functions.keys()))
                 raise e
 
             # 3c: Dispatch the state change

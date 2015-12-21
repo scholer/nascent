@@ -123,7 +123,7 @@ class ReactionMgrGrouped(ReactionMgr):
         # - possible_hybridization_reactions[reaction_spec] => c_j  ('is_forming' is now part of reaction_spec)
         # - depleted_hybridization_reactions[reaction_spec] => c_j
         # - hybridization_reactions_by_domspec[domspec]     => reaction_spec
-        # - propensity_functions[reaction_spec]             => a_j
+        # - hybridization_propensity_functions[reaction_spec]             => a_j
         # In general, where the un-grouped super-class uses pairs of {domain1, domain2} instances,
         # this class uses pairs of {domspec1, domspec2} domain species.
         # ("domspec" usually refer to a domain state "fingerprint" that is identical for
@@ -147,7 +147,7 @@ class ReactionMgrGrouped(ReactionMgr):
 
         # Propensity functions:  aj(x)
         # {(domain1, cstate), (domain2, cstate)} => a
-        self.propensity_functions = {} # Indexed by indexed by ({domain1, domain2}, is_hyb, is_intra)
+        self.hybridization_propensity_functions = {} # Indexed by indexed by ({domain1, domain2}, is_hyb, is_intra)
         if strands:
             self.init_all_propensity_functions()
 
@@ -253,7 +253,7 @@ class ReactionMgrGrouped(ReactionMgr):
         pprint(changed_domains)
 
         ### INITIAL ASSERTIONS. FAIL FAST AND FAIL HARD. ###
-        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+        assert set(self.hybridization_propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
         generated_reactions_by_domspec_map = self.map_reaction_specs_by_domspec()
 
@@ -266,7 +266,7 @@ class ReactionMgrGrouped(ReactionMgr):
             pdb.set_trace()
 
         n_possible_start = len(self.possible_hybridization_reactions)
-        n_propensity_start = len(self.propensity_functions)
+        n_propensity_start = len(self.hybridization_propensity_functions)
         n_species_start = len(self.domain_state_subspecies)
 
         # Add changed domains to new species
@@ -344,7 +344,7 @@ class ReactionMgrGrouped(ReactionMgr):
         ## but only depends on whether the domain is stacked or not.
         ## E.g. fingerprint = (domain_species_name, (end5p.stack_partner is not None, end3p.stack_partner is not None)
 
-        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+        assert set(self.hybridization_propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
 
         ## Consideration: Do we really need to check for depleated states all the time?? Maybe just do it
@@ -362,8 +362,8 @@ class ReactionMgrGrouped(ReactionMgr):
                 try:
                     print("Deleting reaction_spec %s from possible_hybridization_reactions..." % (reaction_spec,))
                     del self.possible_hybridization_reactions[reaction_spec]
-                    print("Deleting reaction_spec %s from propensity_functions..." % (reaction_spec,))
-                    del self.propensity_functions[reaction_spec]
+                    print("Deleting reaction_spec %s from hybridization_propensity_functions..." % (reaction_spec,))
+                    del self.hybridization_propensity_functions[reaction_spec]
                     domspec2 = next(F for F in domspec_pair if F != domspec)
                     print("Removing reaction_spec from hybridization_reactions_by_domspec[domspec1/2]...")
                     #self.hybridization_reactions_by_domspec[domspec].remove(reaction_spec) # We have already deleted.
@@ -376,12 +376,12 @@ class ReactionMgrGrouped(ReactionMgr):
                 self.N_state_depletions += 1
 
         ## TODO: Check that domspecs in hybridization_reactions_by_domspec matches possible_hybridization_reactions
-        ##       and propensity_functions.
-        ## TODO: Consider consolidating possible_hybridization_reactions and propensity_functions to a single dict:
+        ##       and hybridization_propensity_functions.
+        ## TODO: Consider consolidating possible_hybridization_reactions and hybridization_propensity_functions to a single dict:
         ##          {{F1, F2}: is_forming, c_j, a_j}
         ##          However, that would make it harder to (a) do expansions, or (b) know if a_j has been calculated.
 
-        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+        assert set(self.hybridization_propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
 
         # Keep track of which reaction paths we have already updates so we won't re-calculate them.
@@ -480,10 +480,10 @@ class ReactionMgrGrouped(ReactionMgr):
                         print("domain2, domain2.name:", domain2, ",", domain2.name)
                         pdb.set_trace()
 
-        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+        assert set(self.hybridization_propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
         ## Changed domains states (i.e. only a change in number of domains in that state)
-        ## Just update propensity_functions for those domspec
+        ## Just update hybridization_propensity_functions for those domspec
         for domspec in changed_domspecs: #| new_domspecs:
             ## TODO: Make sure we do not calculate the full product "matrix", but only one of the symmetric halfs.
             # print(("Re-evaluating propensity for all hybridization reactions involving domspec "
@@ -497,10 +497,10 @@ class ReactionMgrGrouped(ReactionMgr):
                     self.recalculate_propensity_function(reaction_spec)
                     updated_reactions.add(reaction_spec)
 
-        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+        assert set(self.hybridization_propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
         n_possible_end = len(self.possible_hybridization_reactions)
-        n_propensity_end = len(self.propensity_functions)
+        n_propensity_end = len(self.hybridization_propensity_functions)
         n_species_end = len(self.domain_state_subspecies)
         print_debug_info = False
 
@@ -527,14 +527,14 @@ class ReactionMgrGrouped(ReactionMgr):
             print("is_forming:", is_forming)
             print("self.possible_hybridization_reactions: (%s elements)" % len(self.possible_hybridization_reactions))
             pprint(list(self.possible_hybridization_reactions))
-            print("self.propensity_functions: (%s elements)" % len(self.propensity_functions))
-            pprint(list(self.propensity_functions))
+            print("self.hybridization_propensity_functions: (%s elements)" % len(self.hybridization_propensity_functions))
+            pprint(list(self.hybridization_propensity_functions))
             print("Shared keys: (%s elements)" %
-                  len(set(self.possible_hybridization_reactions.keys()) & set(self.propensity_functions.keys())))
-            pprint(list(set(self.possible_hybridization_reactions.keys()) & set(self.propensity_functions.keys())))
+                  len(set(self.possible_hybridization_reactions.keys()) & set(self.hybridization_propensity_functions.keys())))
+            pprint(list(set(self.possible_hybridization_reactions.keys()) & set(self.hybridization_propensity_functions.keys())))
             print("Differing keys: (symmetric difference, %s elements)" %
-                  len(set(self.possible_hybridization_reactions.keys()) ^ set(self.propensity_functions.keys())))
-            pprint(list(set(self.possible_hybridization_reactions.keys()) ^ set(self.propensity_functions.keys())))
+                  len(set(self.possible_hybridization_reactions.keys()) ^ set(self.hybridization_propensity_functions.keys())))
+            pprint(list(set(self.possible_hybridization_reactions.keys()) ^ set(self.hybridization_propensity_functions.keys())))
 
             print("self.depleted_hybridization_reactions: (%s elements)" % len(self.depleted_hybridization_reactions))
             pprint(list(self.depleted_hybridization_reactions.keys()))
@@ -554,7 +554,7 @@ class ReactionMgrGrouped(ReactionMgr):
             pprint(self.hybridization_reactions_by_domspec)
             pdb.set_trace()
 
-        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+        assert set(self.hybridization_propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
         self.print_reaction_stats()
 
@@ -571,9 +571,9 @@ class ReactionMgrGrouped(ReactionMgr):
                                      domspec2[0]),
                   (": %0.03e x%02s x%02s = %03e" % (
                       c_j, len(self.domain_state_subspecies[domspec1]), len(self.domain_state_subspecies[domspec2]),
-                      self.propensity_functions[reaction_spec])
+                      self.hybridization_propensity_functions[reaction_spec])
                   ) if is_forming else (":   %0.03e x%02s   = %03e" % (
-                      c_j, len(self.domain_state_subspecies[domspec1]), self.propensity_functions[reaction_spec]))
+                      c_j, len(self.domain_state_subspecies[domspec1]), self.hybridization_propensity_functions[reaction_spec]))
                  )
 
 
@@ -611,8 +611,8 @@ class ReactionMgrGrouped(ReactionMgr):
             print("KeyError %s for self.possible_hybridization_reactions[%s]" % (e, reaction_spec,))
             print("self.possible_hybridization_reactions: (%s elements)" % len(self.possible_hybridization_reactions))
             pprint(list(self.possible_hybridization_reactions))
-            print("self.propensity_functions: (%s elements)" % len(self.propensity_functions))
-            pprint(list(self.propensity_functions))
+            print("self.hybridization_propensity_functions: (%s elements)" % len(self.hybridization_propensity_functions))
+            pprint(list(self.hybridization_propensity_functions))
             print("self.domain_state_subspecies.keys(): (%s elements)" % len(self.domain_state_subspecies))
             pprint({k: len(v) for k, v in self.domain_state_subspecies.items()})
             print("self.hybridization_reactions_by_domspec:")
@@ -622,14 +622,14 @@ class ReactionMgrGrouped(ReactionMgr):
         is_forming = reaction_spec[1]
         if is_forming:
             # a_j = c_j * x₁ * x₂
-            self.propensity_functions[reaction_spec] = (c_j *
+            self.hybridization_propensity_functions[reaction_spec] = (c_j *
                 #np.prod([len(self.domain_state_subspecies[ds]) for ds in reaction_spec[0]])
                 (len(self.domain_state_subspecies[reaction_spec[0][0]]) *
                  len(self.domain_state_subspecies[reaction_spec[0][1]])))
         else:
             # a_j = c_j * x₃ ,      x₃ is number of duplexes
-            #self.propensity_functions[domspec_pair] = c_j * len(self.domain_state_subspecies[domspec_pair[0]])
-            self.propensity_functions[reaction_spec] = \
+            #self.hybridization_propensity_functions[domspec_pair] = c_j * len(self.domain_state_subspecies[domspec_pair[0]])
+            self.hybridization_propensity_functions[reaction_spec] = \
                 c_j * len(self.domain_state_subspecies[next(iter(reaction_spec[0]))])
 
 
@@ -694,13 +694,13 @@ class ReactionMgrGrouped(ReactionMgr):
                             if reaction_spec[1] else
                             len(self.domain_state_subspecies[next(iter(reaction_spec[0]))])
              for reaction_spec, c_j in self.possible_hybridization_reactions.items()}
-        self.propensity_functions = a
-        print(len(self.propensity_functions), "propensity functions initialized.")
+        self.hybridization_propensity_functions = a
+        print(len(self.hybridization_propensity_functions), "propensity functions initialized.")
 
 
 
 
-    def react_and_process(self, domspec_pair, reaction_attr):
+    def hybridize_and_process(self, domspec_pair, reaction_attr):
         """
         Will select a random pair of domain instances from the domain species pair
         for hybridization reaction, or a random duplex in case of dehybridization reactions.
@@ -766,10 +766,10 @@ class ReactionMgrGrouped(ReactionMgr):
 
 
 
-        # 4: Update/re-calculate possible_hybridization_reactions and propensity_functions
+        # 4: Update/re-calculate possible_hybridization_reactions and hybridization_propensity_functions
         # - domain_state_subspecies  - this is basically x̄ ← x̄ + νj
         # - possible_hybridization_reactions
-        # - propensity_functions
+        # - hybridization_propensity_functions
         # Note: If evaluating whether an object is boolean False, the steps include:
         # - Does it have a __len__ attribute? - Yes? Return bool(len(obj))
         # Whereas evaluating whether "obj is None" is about 10 times faster.
@@ -847,7 +847,7 @@ class ReactionMgrGrouped(ReactionMgr):
         print("changed_domains specie_state_fingerprint():")
         pprint([(d, d.state_fingerprint()) for d in changed_domains])
 
-        assert set(self.propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
+        assert set(self.hybridization_propensity_functions.keys()) == set(self.possible_hybridization_reactions.keys())
 
         # Return the selected domains that were actually hybridized/dehybridized
         return (d1, d2), result

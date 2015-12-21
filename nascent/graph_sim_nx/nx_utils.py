@@ -28,6 +28,7 @@ import networkx as nx
 matplotlib_initialized = False
 
 def init_matplotlib():
+    global matplotlib_initialized
     if not matplotlib_initialized:
         import matplotlib
         matplotlib.use('agg') # agg for png; 'svg' for svg, 'pdf' for pdf, etc.
@@ -46,6 +47,8 @@ def layout_graph(g, pos=None, layout=nx.layout.spring_layout, save_pos_as_attr=F
     For graphviz layout, to use existing positions as starting positions for layout calculation,
     save node pos as node attribute before invoking layout function.
     """
+    if pos is None:
+        pos = nx.get_node_attributes(g, 'pos')
     if layout == "graphviz":
         # Use graphviz for layout; requires pygraphviz
         try:
@@ -70,6 +73,10 @@ def layout_graph(g, pos=None, layout=nx.layout.spring_layout, save_pos_as_attr=F
             layout = getattr(nx.layout, layout) # pylint: disable=E1101
         pos = layout(g)
     if save_pos_as_attr:
+        for node, v in pos.items():
+            # pos can sometimes be numpy.ndarray; make sure we save a regular python list.
+            # edit: gefx format assumes list attributes to be "dynamic" data [val, start, end]; use tuple instead.
+            pos[node] = tuple(v)
         nx.set_node_attributes(g, 'pos', pos)
     return pos
 

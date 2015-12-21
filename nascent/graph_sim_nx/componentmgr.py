@@ -457,6 +457,9 @@ class ComponentMgr(GraphManager):
         assert domain2.partner == domain1 != None
         assert domain1.end3p.hyb_partner is domain2.end5p and domain2.end5p.hyb_partner is domain1.end3p
         assert domain2.end3p.hyb_partner is domain1.end5p and domain1.end5p.hyb_partner is domain2.end3p
+        ## Edit/new: Domains CANNOT dehybridize if they are stacked
+        assert all(end.stack_partner is None for end in
+                   (domain1.end3p, domain1.end5p, domain2.end3p, domain2.end5p))
 
         # dset = frozenset((domain1, domain2))
         #sset = frozenset(domain1.strand, domain2.strand)
@@ -491,6 +494,7 @@ class ComponentMgr(GraphManager):
                 self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 0  # ss backbone has zero stiffness
 
         ## If domain is stacked, break the stacking interaction before breaking complex:
+        ## Edit/new: Domains CANNOT dehybridize if they are stacked
         unstacking_results = {}
         for d, h2d in ((domain1, domain2), (domain2, domain1)):
             h1end3p = d.end3p
@@ -539,7 +543,7 @@ class ComponentMgr(GraphManager):
 
         result['unstacking_results'] = unstacking_results
         # We return unstacking_results as a dict of: {<ends four-tuple>: result), ....}
-        # for use in ReactionMgr.react_and_process which invokes ReactionMgr.update_possible_stacking_reactions(...)
+        # for use in ReactionMgr.hybridize_and_process which invokes ReactionMgr.update_possible_stacking_reactions(...)
 
         if self.hyb_dehyb_file:
             print("print('- dehybridize complete.')", file=self.hyb_dehyb_file)

@@ -329,13 +329,14 @@ class StatsWriter():
         return data
 
 
-    def write_post_simulation_stats(self):
+    def write_post_simulation_stats(self, systime=None):
         if self.stats_post_simulation_file is None:
             print("statsmgr.stats_post_simulation_file is None, cannot collect post simulation stats...")
             return
         sysmgr = self.sysmgr
         simulator = self.simulator
-        systime = simulator.sim_system_time
+        if systime is None:
+            systime = simulator.sim_system_time
         stats = {}
         # remove defaultdict, etc:
         stats['reaction_throttle_cache'] = sysmgr.reaction_throttle_cache
