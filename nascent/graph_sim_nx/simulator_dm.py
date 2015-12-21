@@ -303,14 +303,15 @@ class DM_Simulator(Simulator):
             # For ungrouped reactions, reaction_spec is just the reaction pair.
             reaction_attr = sysmgr.reaction_attrs[reaction_spec]
 
-            # 3. Effect the next reaction by updating time and counts (replacing t ← t + τ and x̄ ← x̄ + νj).
-            # 3a: Update system time.
-            # 3b: Hybridize/dehybridize domains and Update graphs/stats/etc
+            ## 3. Effect the next reaction by updating time and counts (replacing t ← t + τ and x̄ ← x̄ + νj).
+            ## 3a: Update system time.
+            ## 3b: Hybridize/dehybridize domains and Update graphs/stats/etc
 
-            # 3a: Update system time:
+            ## 3a: Update system time:
             self.sim_system_time += tau
 
-            # 3b: Hybridize/dehybridize:
+            ## 3b: Perform reaction and update reactions:
+            print("\n\nPerforming reaction:", reaction_spec, reaction_attr)
             if reaction_type == HYBRIDIZATION_INTERACTION:
                 c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
                 # Determine reaction attributes:

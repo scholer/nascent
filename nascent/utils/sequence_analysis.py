@@ -27,6 +27,8 @@ Possible refs:
 * https://github.com/joaks1/partition_summary
 * https://github.com/htailor/simulation_dna, https://github.com/htailor/new_simulation_dna
 
+Consider using Directed Acyclic Word Graphs (DAWG):
+* https://github.com/kmike/DAWG
 
 """
 
@@ -1046,5 +1048,3 @@ BN049	GTC GTC TGC GTG ACT TGG ACC TTA CAG TTG TGC ACT CAG TCT AAT TGG CTA CAC GA
 
 if __name__ == '__main__':
     main()
-
-

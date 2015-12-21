@@ -1,0 +1,3 @@
+Strand	Domains	Sequence
+s1	B	GGCACGACAGGTTTCC
+s2	b	GGAAACCTGTCGTGCC

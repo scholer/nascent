@@ -29,9 +29,11 @@ Formats:
 
 """
 
+import os
 import pdb
-import yaml
 from collections import Counter
+import yaml
+import networkx as nx
 try:
     import msgpack
 except ImportError as e:
@@ -40,6 +42,7 @@ except ImportError as e:
 
 
 from nascent.graph_sim_nx.reactionmgr import ReactionAttrs
+from .nx_utils import draw_graph_and_save, layout_graph
 
 
 def simplify(data, _list=list, _set=set):
@@ -98,6 +101,7 @@ class StatsWriter():
                                                      ['tau', 'sim_system_time', 'temperature'])
 
 
+        ## General "total" stats (for each step, file is kept open)
         self.stats_total_file = config.get('stats_total_file')
         if self.stats_total_file:
             print("Writing stats_total_file to file:", self.stats_total_file)
@@ -105,6 +109,7 @@ class StatsWriter():
             header = self.stats_field_sep.join(self.stats_total_fields)
             self.stats_total_file.write(header+"\n")
 
+        ## Per-domain stats (for each step, file is kept open)
         self.stats_per_domain_file = config.get('stats_per_domain_file')
         if self.stats_per_domain_file:
             print("Writing stats_per_domain_file to file:", self.stats_per_domain_file)
@@ -117,6 +122,7 @@ class StatsWriter():
                                                  self.stats_per_domain_fields*len(self.stats_per_domain_species))
             self.stats_per_domain_file.write(header1+"\n"+header2+"\n")
 
+        ## Per-strand stats (for each step)
         self.stats_per_strand_file = config.get('stats_per_strand_file')
         if self.stats_per_strand_file:
             print("Writing stats_per_strand_file to file:", self.stats_per_strand_file)
@@ -129,12 +135,22 @@ class StatsWriter():
                                                  self.stats_per_strand_fields*len(self.stats_per_strand_species))
             self.stats_per_strand_file.write(header1+"\n"+header2+"\n")
 
-        self.stats_post_simulation_file = config.get('stats_post_simulation_file')
-
+        ## Collect complex_state_count (for each step)
         self.complex_state_count_file = config.get('complex_state_count_file')
         if self.complex_state_count_file:
             self.complex_state_count_file = open(self.complex_state_count_file, 'wb') # msgpack - open in binary mode
             self.open_files.append(self.complex_state_count_file)
+
+
+        #### Post-simulation stats: ####
+
+        ## Collected to a single file using msgpack, each entry is a single end-of-simulation dict.
+        self.stats_post_simulation_file = config.get('stats_post_simulation_file')
+
+        ## Reaction graph
+        self.reaction_graph_output_directory = config.get('reaction_graph_output_directory')
+        self.reaction_graph_output_fnfmt = config.get('reaction_graph_output_fnfmt')
+        self.reaction_graph_output_formats = config.get('reaction_graph_output_formats')
 
 
     def close_all(self):
@@ -319,6 +335,7 @@ class StatsWriter():
             return
         sysmgr = self.sysmgr
         simulator = self.simulator
+        systime = simulator.sim_system_time
         stats = {}
         # remove defaultdict, etc:
         stats['reaction_throttle_cache'] = sysmgr.reaction_throttle_cache
@@ -333,6 +350,24 @@ class StatsWriter():
             yaml.dump([stats], fp)
             n_bytes = fp.tell() - before
         print("\nwrite_post_simulation_stats:", n_bytes, "bytes written to file", self.stats_post_simulation_file)
+
+
+    def save_reaction_graph(self, **kwargs):
+
+        # self.reaction_graph_output_directory = config.get('reaction_graph_output_directory')
+        # self.reaction_graph_output_fnfmt = config.get('reaction_graph_output_fnfmt')
+        # self.reaction_graph_output_formats = config.get('reaction_graph_output_formats')
+        g = self.sysmgr.reaction_graph
+        systime = self.simulator.sim_system_time
+        output_funcs = {method: getattr(nx, "write_"+method)
+                        for method in ("yaml", "edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek")}
+        output_funcs['png'] = draw_graph_and_save
+        for ext in self.reaction_graph_output_formats:
+            path = os.path.join(self.reaction_graph_output_directory,
+                                self.reaction_graph_output_fnfmt.format(ext=ext, systime=systime, **kwargs))
+            # e.g. nx.write_gexf(g, path) or draw_graph_and_save(g, path)
+            output_funcs[ext](g, path)
+
 
 
 

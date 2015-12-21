@@ -108,7 +108,7 @@ class Complex(nx.MultiDiGraph):
                         or four domais if they are stacked.
         junctionI graph: Like helixI, but represents N-way junctions, e.g. a Holliday junction.
     """
-    def __init__(self, data=None, strands=None, origin="o"):
+    def __init__(self, data=None, strands=None, origin="o", reaction_deque_size=5): #, reaction_spec_pair=None):
         self.cuid = next(make_sequential_id)
         self.uuid = next(sequential_uuid_gen)   # Universally unique id; mostly used for debugging.
         super().__init__(data=data, cuid=self.cuid)
@@ -155,7 +155,10 @@ class Complex(nx.MultiDiGraph):
 
         ## DEBUG attributes: ##
         self._historic_strands = []
-        self._historic_fingerprints = []
+        self._historic_fingerprints = [0]
+        # edit: deque are not good for arbitrary access, using a list
+        self.reaction_deque = [0]    # deque(maxlen=reaction_deque_size)
+        self.reaction_deque_size = reaction_deque_size
         self.N_strand_changes = 0
         self.icid_radius = 5
         # Use domain instance instead of in_complex_identifier. Caching efficiency will decrease.
@@ -286,7 +289,7 @@ class Complex(nx.MultiDiGraph):
         # if sys.version_info > (3, 2):
         #     return totlimit
 
-    @state_should_change
+    # @state_should_change
     def add_strand(self, strand, update_graph=False):
         """ We keep track of strands for use with fingerprinting, etc. """
         # printd("%r: Adding strand %r..." % (self, strand))
@@ -311,7 +314,7 @@ class Complex(nx.MultiDiGraph):
         self.reset_state_fingerprint()
 
 
-    @state_should_change
+    # @state_should_change
     def remove_strand(self, strand, update_graph=False, update_edge_pairs=True):
         """ We keep track of strands for use with fingerprinting, etc. """
         # printd("%r: Removing strand %r..." % (self, strand))
@@ -347,7 +350,7 @@ class Complex(nx.MultiDiGraph):
         return all_removed_hybridization_pairs, all_removed_stacking_pairs
 
 
-    @state_should_change
+    # @state_should_change
     def add_strands(self, strands, update_graph=False):
         """ Strands must be a set. """
         # printd("%r: Adding strands %s..." % (self, strands))
@@ -373,7 +376,7 @@ class Complex(nx.MultiDiGraph):
         # # self.history.append("add_strands: Adding strands %s (update_graph=%s)" % (strands, update_graph))
 
 
-    @state_should_change
+    # @state_should_change
     def remove_strands(self, strands, update_graph=False, update_edge_pairs=True):
         """ Strands must be a set. """
         # printd("%r: Removing strands %s..." % (self, strands))
@@ -412,7 +415,7 @@ class Complex(nx.MultiDiGraph):
         return all_removed_hybridization_pairs, all_removed_stacking_pairs
 
 
-    @state_should_change
+    # @state_should_change
     def add_hybridization_edge(self, domain_pair):
         # self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
         domain1, domain2 = domain_pair
@@ -423,7 +426,7 @@ class Complex(nx.MultiDiGraph):
         self._hybridization_fingerprint = None
         self._state_fingerprint = None
 
-    @state_should_change
+    # @state_should_change
     def remove_hybridization_edge(self, domain_pair):
         # self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
         domain1, domain2 = domain_pair
@@ -434,7 +437,7 @@ class Complex(nx.MultiDiGraph):
         self._hybridization_fingerprint = None
         self._state_fingerprint = None
 
-    @state_should_change
+    # @state_should_change
     def add_stacking_edge(self, stacking_pair):
         """
         Stacking pair must be tuple ((h1end3p, h2end5p), (h2end3p, h1end5p))
@@ -449,7 +452,7 @@ class Complex(nx.MultiDiGraph):
         self._stacking_fingerprint = None
         self._state_fingerprint = None
 
-    @state_should_change
+    # @state_should_change
     def remove_stacking_edge(self, stacking_pair):
         # self.history.append("remove_stacking_edge: stacking_pair = %s" % (stacking_pair,))
         (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
@@ -522,7 +525,10 @@ class Complex(nx.MultiDiGraph):
                 self.hybridization_fingerprint(),
                 self.stacking_fingerprint()  ## TODO: Implement stacking
                 )) % 100000  # TODO: Remove modulus when done debugging.
-            self._historic_fingerprints.append((self._state_fingerprint,))  # TODO: Remove when done debugging.
+            print("\nRe-calculated state fingerprint for %r: %s" % (self, self._state_fingerprint))
+            #pdb.set_trace()
+            # historic fingerprints are now added only through assert_state_change:
+            # self._historic_fingerprints.append((self._state_fingerprint,))  # TODO: Remove when done debugging.
             # self.history.append("state_fingerprint: Calculated fingerprint: %r" % (self._state_fingerprint,))
         return self._state_fingerprint
 
@@ -556,6 +562,70 @@ class Complex(nx.MultiDiGraph):
             for domain in self.nodes():
                 domain.state_change_reset(reset_complex=False)
             #pdb.set_trace()
+
+    def assert_state_change(self, reaction_spec_pair, reset=False):
+        """
+        Will
+        1) Make a new state_fingerprint and add it to historic_fingerprints list,
+            asserting that the state really has changed.
+        2) Append reaction_pair to reaction_deque and check for reaction cycles.
+
+        Arguments:
+        :reaction_spec_pair: The reaction_spec_pair for the reaction that caused the change to this new state.
+
+        Returns:
+        If a micro-cycle containing reaction_pair is found, return a slice of reaction_deque with reaction_pairs:
+            [reaction_pair, pair2, pair3, ..., reaction_pair]
+        where reaction_pair is the same reaction pair as the one provided as first arg, :reaction_pair:
+
+        Otherwise, returns None.
+
+        Regarding reaction micro-cycles, do we record complex states:
+            state1 -> state2 -> state1
+        or reaction_pairs:
+            pair1 -> pair2 -> pair1
+        or both:
+                   pair1        pair2
+            state1 ----> state2 ----> state1
+        I think reaction_pairs are the most useful, since that is what we want to throttle.
+
+        This method is invoked after every reaction. Performance is important.
+        Consider using a heap or blist instead of standard list:
+            http://kmike.ru/python-data-structures/
+        """
+        if reset:
+            self.reset_state_fingerprint()
+        state_fingerprint = self.state_fingerprint()
+        assert state_fingerprint != self._historic_fingerprints[-1]
+        assert reaction_spec_pair != self.reaction_deque[-1]
+        self._historic_fingerprints.append(state_fingerprint)
+        print("assert_state_change invoked for %r with reaction_spec_pair %s" % (self, reaction_spec_pair))
+        pprint(locals())
+        print("historic fingerprints:", self._historic_fingerprints)
+        print("reaction deque: ", self.reaction_deque)
+        # pdb.set_trace()
+        if reaction_spec_pair in self.reaction_deque[-self.reaction_deque_size:]:
+            # Using x in list is about 40% faster than list.index(x) - note: deque don't have an index because deques are not for random access.
+            # This is a little complex since we want to make sure we have the highest index.
+            # Note: list.index(x) is very slow if x is at the end of a large list - time complexity O(n)
+            #highest_idx = self.reaction_deque[-self.reaction_deque_size:-1:-1]
+            # change slice start to -2 if :reaction_pair: has already been added!
+            highest_idx = self.reaction_deque[-1:-self.reaction_deque_size-1:-1].index(reaction_spec_pair) - 1
+            # While loop solution is much slower especially if several loops are required.
+            highest_idx2 = self.reaction_deque_size
+            while True:
+                try:
+                    highest_idx2 = self.reaction_deque.index(reaction_spec_pair, highest_idx2)
+                except ValueError:
+                    break
+            assert highest_idx2 == len(self.reaction_deque) - highest_idx
+            assert self.reaction_deque[highest_idx2] == self.reaction_deque[highest_idx] == reaction_spec_pair
+            self.reaction_deque.append(reaction_spec_pair)
+            return self.reaction_deque[highest_idx:]
+        else:
+            self.reaction_deque.append(reaction_spec_pair)
+            return None
+
 
 
     def get_all_fingerprints(self):

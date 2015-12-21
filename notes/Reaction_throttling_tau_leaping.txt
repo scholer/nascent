@@ -37,6 +37,7 @@ Tau leaping refs:
 Approach I:
 * Keep track of reaction invocations and throttle reaction rate constant, k, based on that.
 * Doesn't work for cycles with multiple reaction pathways, especially if any point is irriversible.
+* Solution: Make sure all reactions are single-step and reversible.
 
 Approach I, Example:
 * A ---> B,  (k = k1 )

@@ -1,0 +1,3 @@
+Strand	Domains	Sequence
+s1/1	a/1	GGCACGACAGGTTTCC
+s2/1	A/1	GGAAACCTGTCGTGCC

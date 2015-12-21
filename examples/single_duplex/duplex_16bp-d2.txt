@@ -1,0 +1,3 @@
+Strand	Domains	Sequence
+s1/2	a/2,b/2	GGCACGAC,AGGTTTCC
+s2/2	B/2,A/2	GGAAACCT,GTCGTGCC

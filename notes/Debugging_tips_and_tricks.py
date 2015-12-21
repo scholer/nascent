@@ -55,4 +55,13 @@ Memory profiling libs:
 * memory_profiler - https://github.com/fabianp/memory_profiler, https://pypi.python.org/pypi/memory_profiler (most mature and standard).
 *
 
+
+
+Check stacking:
+"""
+print("  %s -: :- %s \n  %s -: :- %s  " % (h1end3p, h1end5p, h2end5p, h2end3p))
+
+"""
+
+
 """

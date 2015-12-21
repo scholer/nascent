@@ -58,7 +58,7 @@ Reactions: (this could be a separate object, but for now system state and reacti
 import os
 #import random
 from collections import defaultdict, namedtuple, Counter, deque
-from itertools import zip_longest
+from itertools import zip_longest, chain
 # Using namedtuple is quite slow in CPython, but faster than dicts in PyPy.
 # (Attribute accessing namedtuple.a is faster than dict['a']; not sure about instantiation.)
 #import math
@@ -79,7 +79,7 @@ from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION,
 from .constants import REACTION_NAMES
 # from .complex import Complex
 from .componentmgr import ComponentMgr
-from .nx_utils import draw_graph_and_save
+from .nx_utils import draw_graph_and_save, layout_graph
 from .debug import printd, pprintd
 from .domain import Domain, DomainEnd
 ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
@@ -119,6 +119,21 @@ class ReactionMgr(ComponentMgr):
         ## Stacking reaction parameters:
         self.stacking_rate_constant = params.get('stacking_rate_constant', 1e5)
         self.enable_intercomplex_stacking = params.get("enable_intercomplex_stacking", False)
+
+        ## Reaction graph:
+        self.reaction_graph = nx.MultiDiGraph() # Can we have multiple edges?
+        self.reaction_graph.add_node(0) # The "null" node from which all new complexes emerge.
+        self.reaction_graph_complexes_directory = params.get("reaction_graph_complexes_directory")
+        if self.reaction_graph_complexes_directory is not None:
+            if not os.path.exists(self.reaction_graph_complexes_directory):
+                print("Creating directory for complex files:", self.reaction_graph_complexes_directory)
+                os.makedirs(self.reaction_graph_complexes_directory)
+            assert os.path.isdir(self.reaction_graph_complexes_directory)
+        # each element is a tuple of (reaction_pair, reaction_pair, ...)
+        self.reaction_microcycles_slice_size = params.get("reaction_microcycles_slice_size")
+        self.known_reaction_cycles = set()
+        self.reaction_cycles_count = Counter()
+        self.reaction_cycles_by_pair = defaultdict(set)   # reaction_pair: [list of micro-cycles]
 
 
         ## Reaction throttle:  (doesn't work, yet)
@@ -163,6 +178,8 @@ class ReactionMgr(ComponentMgr):
         #       so if you have the memory for it, go for the faster tuples which takes 2x memory.
         # Note: Whenever I use "name", I'm refering to the name of the specie - domain or strand specie.
         self.cache['domain_hybridization_energy'] = self.domain_dHdS = {} # indexed simply as Sᵢ or {S₁, S₂} ?
+
+        #self.cache['seen_complexes']
 
         ## Relative activity - used to moderate the activity of domains based on their accessibility in a complex.
         # Note: Not sure whether to use this or use a "loop energy" type of activation energy.
@@ -402,7 +419,7 @@ class ReactionMgr(ComponentMgr):
             # For d1, d2, old_domspec yields the new domspec instead!
             # printd("Re-setting and re-calculating state_fingerprint for %s - old is: %s"
             #       % (domain, domain._specie_state_fingerprint))
-            domain.state_change_reset()
+            domain.state_change_reset() # TODO: Reduce complex state reset and checking.
             new_domspec = domain.state_fingerprint()
             if new_domspec == old_domspec and reacted_pair is not None:
                 c = domain.strand.complex
@@ -1083,6 +1100,11 @@ class ReactionMgr(ComponentMgr):
             print("-----------------")
 
 
+        # Invoke post_reaction_processing after reaction, before updating reactions/propensity constants/functions:
+        # Note that we give reaction_spec_pair, not reaction_pair/stacking_pair:
+        self.post_reaction_processing(reaction_spec_pair, reaction_attr, result)
+
+
         ## Update reactions for changed domains:
         self.update_possible_hybridization_reactions(changed_domains, reacted_pair=domain_pair, reaction_attr=reaction_attr)
         # Only provide reacted_pairs if a reaction really has occured:
@@ -1347,9 +1369,11 @@ class ReactionMgr(ComponentMgr):
 
         reaction_attr = self.reaction_attrs[stacking_pair]
         if reaction_spec_pair is None:
-            reaction_spec_pair = frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))
+            reaction_spec_pair = frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+                                            (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
         else:
-            assert reaction_spec_pair == frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))
+            assert reaction_spec_pair == frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
+                                                    (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
         reaction_str = ("" if reaction_attr.is_forming else "de-") + reaction_attr.reaction_type
 
         self.reaction_invocation_count[(reaction_spec_pair, reaction_attr)] += 1
@@ -1416,8 +1440,11 @@ class ReactionMgr(ComponentMgr):
             # printd("stack_and_process: sysmgr.removed_complexes:")
             # pprintd(self.removed_complexes)
 
-
         assert all(isinstance(domain, Domain) for domain in changed_domains)
+
+        # Invoke post_reaction_processing after reaction, before updating reactions/propensity constants/functions:
+        # Note that we give reaction_spec_pair, not reaction_pair/stacking_pair:
+        self.post_reaction_processing(reaction_spec_pair, reaction_attr, result)
 
         # Update hybridization reactions:
         self.update_possible_hybridization_reactions(
@@ -1433,6 +1460,101 @@ class ReactionMgr(ComponentMgr):
             h2end3p.domain.strand.complex.reset_state_fingerprint()
 
         return stacking_pair, result
+
+
+    def post_reaction_processing(self, reacted_spec_pair, reaction_attr, reaction_result):
+        """
+        :reacted_pair:  A frozenset of either {domain1, domain2} or {(h1end3p, h2end5p), (h2end3p, h1end5p)}.
+        :reaction_attr: A namedtuple with (reaction_type, is_forming, is_intra).
+        :reaction_result: A result dict with keys 'changed_complexes', 'new_complexes', 'obsolete_complexes',
+                        'free_strands', etc.
+        """
+        edge_key = (reacted_spec_pair, reaction_attr)
+        changed_complexes = chain(*[lst
+                                    for lst in (reaction_result['changed_complexes'], reaction_result['new_complexes'])
+                                    if lst is not None and len(lst) > 0])
+        for cmplx in changed_complexes:
+            # We should not do this for new complexes!
+            # Actually, we do need to add the new complex to the reaction_graph, and make the reaction_spec_pair edge.
+            # for cmplx in reaction_result['changed_complexes']:
+
+            micro_cycle = cmplx.assert_state_change(reacted_spec_pair)
+
+            ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
+            source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]
+
+            ## Update reaction_graph:
+            if target not in self.reaction_graph.node:
+                # Add complex node to reaction_graph and write complex graph/state to file.
+                self.record_new_complex_state(cmplx, target)
+            else:
+                self.reaction_graph.node[target]['encounters'] += 1  # could also be size?
+            assert source in self.reaction_graph
+            assert target in self.reaction_graph
+            # Can probably just add edge and increment afterwards... maybe
+            if target not in self.reaction_graph[source] \
+                or edge_key not in self.reaction_graph[source][target]:
+                # weight = recurrences:
+                self.reaction_graph.add_edge(source, target, key=edge_key, weight=1)
+            else:
+                self.reaction_graph[source][target][edge_key]['weight'] += 1
+
+            ## Detect/process reaction micro-cycles:
+            if micro_cycle is not None:
+                micro_cycle = tuple(micro_cycle)
+                if micro_cycle not in self.known_reaction_cycles:
+                    self.known_reaction_cycles.add(micro_cycle)
+                    for pair in micro_cycle[1:]:
+                        self.reaction_cycles_by_pair[pair].add(micro_cycle)
+                self.reaction_cycles_count[micro_cycle] += 1
+
+
+    def record_new_complex_state(self, cmplx, state_fingerprint=None):
+        """
+        :cmplx: A complex in a state that have not been seen before.
+        # nx.write_yaml(cmplx, path) # records *all* objects in the yaml file. Too much.
+        # alternatives:
+        # write_(multiline_)edgelist,
+        gexf - doesn't work, has problem with python types (tuples, etc) node/edge attrs,
+                only works with keys in xml_type: int, float, bool, list, dict. (Edit: Added tuple to be the same as list.)
+        gml - doesn't work with objects as attr values.
+        graphml - doesn't support tuples (again, change xml_type)
+        GIS Shapefile - write_shp requires OGR: http://www.gdal.org/
+        In order of file size:
+        * adjlist
+        * edgelist
+        * multiline_adjlist
+        * pajek
+        * gexf
+        * yaml
+        doesnt_work = ("gml", "graphml", "shp", )
+        """
+        if state_fingerprint is None:
+            state_fingerprint = cmplx.state_fingerprint()
+        else:
+            assert state_fingerprint == cmplx.state_fingerprint()
+        self.reaction_graph.add_node(state_fingerprint, encounters=1)
+        if self.reaction_graph_complexes_directory is not None:
+            # Save complex to file:
+            # https://networkx.github.io/documentation/latest/reference/readwrite.html
+            for method in ("yaml", "edgelist", "adjlist", "multiline_adjlist",
+                           "gexf", "pajek"):
+                path = os.path.join(self.reaction_graph_complexes_directory,
+                                    "%s.%s" % (state_fingerprint, method))
+                write_function = getattr(nx, "write_" + method)
+                write_function(cmplx, path)
+            # create a graph visualization:
+            path = os.path.join(self.reaction_graph_complexes_directory,
+                                "%s.%s" % (state_fingerprint, "png"))
+            # start_pos = cmplx.graph['pos'] # edit: saving 'pos' directly in node attr dict:
+            start_pos = nx.get_node_attributes(cmplx, 'pos')
+            pos = layout_graph(cmplx, pos=start_pos)
+            # cmplx.graph['pos'] = pos
+            nx.set_node_attributes(cmplx, 'pos', pos)
+            draw_graph_and_save(cmplx, path, pos=pos)
+
+
+
 
 
     def unstacking_rate_constant(self, h1end3p, h2end3p, T=None):

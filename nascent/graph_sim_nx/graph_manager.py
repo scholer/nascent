@@ -154,7 +154,6 @@ class GraphManager():
         self.ends5p3p_graph = ends5p3p_graph or nx.MultiGraph()
         self.domain_graph = domain_graph or nx.MultiGraph()
         self.strand_graph = strand_graph or nx.MultiGraph()
-        self.reaction_graphs = nx.MultiGraph() # Can we have multiple edges?
         if strands:
             # TODO: Add strand-node attrs to strand-graph:
             # TODO: Add "Label" attr to all nodes (for Gephi)

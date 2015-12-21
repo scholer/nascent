@@ -63,3 +63,4 @@ target/
 notebooks/*
 litt/*
 nascent/nascent_sim/testfiles
+.ipynb_checkpoints/

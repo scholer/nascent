@@ -181,6 +181,14 @@ def main():
               "stats_per_domain_file": outputfn(statstype="time_domain_stats", ext="txt"),
               "stats_per_strand_file": outputfn(statstype="time_strand_stats", ext="txt"), #
               "stats_post_simulation_file": outputfn(statstype="post_simulation_stats", ext="yaml"), #
+              # complexes - these are saved by reactionmgr as new complex assemblies (states) are encountered.
+              "reaction_graph_complexes_directory": os.path.join(statsfolder, "complexes"), #
+              # reaction_graph - are saved by statsmgr after every simulation.
+              "reaction_graph_output_directory": os.path.join(statsfolder, "reaction_graph"), #
+              "reaction_graph_output_fnfmt": "reaction_graph_{systime}.{ext}", #
+              "reaction_graph_output_formats": "png",
+              # How far back to look when looking for reaction microcycles:
+              "reaction_microcycles_slice_size": 5,
              }
     with open(outputfn(statstype="config", ext="yaml"), 'w') as fp:
         yaml.dump(params, fp)
@@ -246,7 +254,8 @@ def main():
                 s.sort_stats('time').print_stats(20)
             else:
                 # pdb.set_trace()
-                simulator.simulate(T=330, n_steps_max=400000, systime_max=100)
+                # simulator.simulate(T=330, n_steps_max=400000, systime_max=100)
+                simulator.simulate(T=330, n_steps_max=400, systime_max=100)
 
     except KeyboardInterrupt:
         print("\n\nABORT: KeyboardInterrupt.\n\n")
