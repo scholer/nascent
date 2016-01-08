@@ -26,6 +26,7 @@ General stats loading and processing module.
 """
 import os
 import pandas as pd
+from pprint import pprint
 
 from nascent.graph_sim_nx.stats_manager import StatsReader
 
@@ -105,10 +106,17 @@ def process_stats(stats, shift_tau_for_duration=False, shift_systime_for_end=Tru
     if shift_tau_for_duration:
         df['duration'] = df['tau'].shift(-1)
     if shift_systime_for_end:
-        df['system_time_end'] = df['sim_system_time'].shift(-1)
+        try:
+            df['system_time_end'] = df['sim_system_time'].shift(-1)
+        except KeyError as e:
+            print(type(e), e)
+            print("df.keys():")
+            pprint(df.keys())
+            print(df.head())
+            raise e
 
-    df['duration_s'] = pd.to_timedelta(df['tau'], unit="s")
-    df.set_index('duration_s', drop=True, append=False, inplace=True)
+    # df['duration_s'] = pd.to_timedelta(df['tau'], unit="s")
+    # df.set_index('duration_s', drop=True, append=False, inplace=True)
 
     df['f_hybridized_domains'] = df['n_hybridized_domains'] / df['N_domains']
     df['f_stacked_ends'] = df['n_stacked_ends'] / df['N_domains'] / 2

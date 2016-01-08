@@ -285,7 +285,23 @@ class ComponentMgr(GraphManager):
 
 
     def join_complex_at(self, domain_pair=None, stacking_pair=None, edge_kwargs=None):
-        """ Join one or more complexes, by forming one or more edges. """
+        """
+        Join one or more complexes, by forming one or more edges.
+        Return result dict with:
+        result = {'changed_complexes': None,
+                  'new_complexes': None,
+                  'obsolete_complexes': None,
+                  'free_strands': None,
+                  'case': None}
+        Case is any of:
+            Case 0 : intRA-STRAND hybridization.
+            Case 1 : IntRA-complex hybridization
+            Case 2 : IntER-complex hybridization between two complexes. Merge the two complexs:
+            Case 3a: domain2/strand2 is not in a complex; use c1
+            Case 3b: domain1/strand1 is not in a complex; use c2
+            Case 4 : Neither strands are in existing complex; create new complex
+
+        """
         if domain_pair is None and stacking_pair is None:
             raise ValueError("Must provide either domain_pair or stacking_pair.")
         if domain_pair is not None and stacking_pair is not None:
@@ -559,6 +575,20 @@ class ComponentMgr(GraphManager):
         Note: This only deals with the complex (although it uses system graphs for analysis).
         Make sure to break edges in system graphs before calling this method to determine and
         process complex breakage.
+
+        Old:
+            ## Case 0: No complexes; Intra-strand (e.g. hairpin) de-hybridization.
+            ## Case 1/(a) Two smaller complexes - must create a new complex for detached domain:
+            ## Case 2/(b) One complex and one unhybridized strand - no need to do much further
+            ## Case 3/(c) Two unhybridized strands
+
+        Edit, new, to conform to join_complex_at(...):
+            CASE 0: NO COMPLEX PRESENT, intra-strand reaction.
+            Case 1: The two strands are still connected: No need to do anything further
+            Case 2 Two smaller complexes - must create a new complex for detached domain:
+            Case 3 One complex and one unhybridized strand - no need to do much further
+            Case 4 Two unhybridized strands
+
         """
         if domain_pair is None and stacking_pair is None:
             raise ValueError("Must provide either domain_pair or stacking_pair.")
@@ -633,10 +663,11 @@ class ComponentMgr(GraphManager):
         dom1_cc_oligos = nx.node_connected_component(self.strand_graph, strand1)
         # Could also use nx.connected_components_subgraphs(c)
 
+        ## Case 1: The two strands are still connected: No need to do anything further
         if strand2 in dom1_cc_oligos:
             ## The two strands are still connected: No need to do anything further
             c.history.append("( - break_complex_at: complex is still intact.)")
-            result['case'] = 0
+            result['case'] = 1
             result['changed_complexes'] = [c]
             # printd("Dehybridize case 0: Complex still intact.")
             return result
@@ -646,9 +677,9 @@ class ComponentMgr(GraphManager):
         c.reset_state_fingerprint()
 
         ## Need to split up. Three cases:
-        ## Case (a) Two smaller complexes - must create a new complex for detached domain:
-        ## Case (b) One complex and one unhybridized strand - no need to do much further
-        ## Case (c) Two unhybridized strands
+        ## Case 2(a) Two smaller complexes - must create a new complex for detached domain:
+        ## Case 3(b) One complex and one unhybridized strand - no need to do much further
+        ## Case 4(c) Two unhybridized strands
 
         dom2_cc_oligos = nx.node_connected_component(self.strand_graph, strand2)
         assert strand2 not in dom1_cc_oligos
@@ -660,7 +691,7 @@ class ComponentMgr(GraphManager):
         assert len(c.strands) == dom1_cc_size + dom2_cc_size
 
         if dom2_cc_size > 1 and dom1_cc_size > 1:
-            # Case (a) Two smaller complexes - must create a new complex for detached domain:
+            ## Case 2(a) Two smaller complexes - must create a new complex for detached domain:
             # Determine which of the complex fragments is the major and which is the minor:
             ## TODO: I don't really need the domain-graph, the strand-level should suffice.
             ## (although it is a good check to have while debuggin...)
@@ -696,11 +727,12 @@ class ComponentMgr(GraphManager):
             # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
             # printd(" - graph_minor nodes:", graph_minor.nodes())
             c.history.append(" - break_complex_at: minor complex %r with %s strands broken off." % (c_new, new_complex_oligos))
-            result['case'] = 1
+            # Case 2: Two smaller complexes - must create a new complex for detached domain:
+            result['case'] = 2
             result['changed_complexes'] = [c]
             result['new_complexes'] = [c_new]
         elif dom2_cc_size > 1 or dom1_cc_size > 1:
-            # Case (b) one complex and one unhybridized strand - no need to do much further
+            ## Case 3(b) one complex and one unhybridized strand - no need to do much further
             # Which-ever complex has more than 1 strands is the major complex:
             domain_minor = domain1 if dom1_cc_size == 1 else domain2
             c.history.append("break_complex_at: Breaking off strand...")
@@ -708,12 +740,12 @@ class ComponentMgr(GraphManager):
             # printd("Dehybridize case (b) - De-hybridization caused a free strand to split away:")
             # printd(" - Free strand: %s, nodes = %s" % (domain_minor.strand, domain_minor.strand.nodes()))
             # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
-            result['case'] = 2
+            result['case'] = 3
             result['changed_complexes'] = [c]
             result['free_strands'] = [domain_minor.strand]
         else:
-            # Case (c) Two unhybridized strands
-            result['case'] = 3
+            ## Case 4(c) Two unhybridized strands
+            result['case'] = 4
             result['obsolete_complexes'] = [c]
             result['free_strands'] = [domain1.strand, domain2.strand]
             c.history.append("break_complex_at: Breaking now-obsolete complex into two free strands...")

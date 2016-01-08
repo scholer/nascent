@@ -160,7 +160,7 @@ class Complex(nx.MultiDiGraph):
         self.reaction_deque = deque([0], maxlen=reaction_deque_size)
         #self.reaction_deque = [0]    # deque(maxlen=reaction_deque_size)
         # self.reaction_deque_size = reaction_deque_size
-        self.reaction_count = Counter()
+        self.reaction_invocation_count = Counter()
         self.reaction_throttle_cache = {}
         self.previous_reaction_attrs = {}
         self.N_strand_changes = 0
@@ -567,7 +567,8 @@ class Complex(nx.MultiDiGraph):
                 domain.state_change_reset(reset_complex=False)
             #pdb.set_trace()
 
-    def assert_state_change(self, reaction_spec_pair, reaction_attr, reset=False):
+    def assert_state_change(self, reaction_spec_pair, reaction_attr, reset=False,
+                            expected_state_fingerprint=None):
         """
         Will
         1) Make a new state_fingerprint and add it to historic_fingerprints list,
@@ -584,6 +585,7 @@ class Complex(nx.MultiDiGraph):
 
         Otherwise, returns None.
 
+        ### Micro-cycles ###
         Regarding reaction micro-cycles, do we record complex states:
             state1 -> state2 -> state1
         or reaction_pairs:
@@ -592,16 +594,23 @@ class Complex(nx.MultiDiGraph):
                    pair1        pair2
             state1 ----> state2 ----> state1
         I think reaction_pairs are the most useful, since that is what we want to throttle.
-
         This method is invoked after every reaction. Performance is important.
         Consider using a heap or blist instead of standard list:
             http://kmike.ru/python-data-structures/
+        ### Edit: We no longer detect micro-cycles, only reaction invocations ###
+
         """
         if reset:
+            ## We could reset state fingerprints (strands, hybridizations, stackings);
+            ## we can use reaction_attr.reaction_type to know whether to reset hyb or stack,
+            ## but we would need to probe result['case'] in order to know whether to reset
+            ## strands/backbone fingerprint.
             self.reset_state_fingerprint()
+        assert reaction_spec_pair != self.reaction_deque[-1]
         state_fingerprint = self.state_fingerprint()
         assert state_fingerprint != self._historic_fingerprints[-1]
-        assert reaction_spec_pair != self.reaction_deque[-1]
+        if expected_state_fingerprint is not None:
+            assert state_fingerprint == expected_state_fingerprint
         self._historic_fingerprints.append(state_fingerprint)
         # print("assert_state_change invoked for %r with reaction_spec_pair %s" % (self, reaction_spec_pair))
         # pprint(locals())
@@ -615,7 +624,7 @@ class Complex(nx.MultiDiGraph):
             self.previous_reaction_attrs[reaction_spec_pair] = reaction_attr
 
         ## Increment reaction count:
-        self.reaction_count[reaction_spec_pair] += 1
+        self.reaction_invocation_count[reaction_spec_pair] += 1
 
         # pdb.set_trace()
         ## Detect reaction cycle:

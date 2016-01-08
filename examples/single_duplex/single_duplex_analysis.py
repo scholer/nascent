@@ -76,11 +76,11 @@ def main():
 
     # stats, statsfolders = load_stats()
     runidxs = [-1] #
-    runidxs = [-1, -2]
-    runidxs = [-1, -2, -3]
-    runidxs = [-1, -2, -3, -4, -5]
+    # runidxs = [-1, -2]
+    # runidxs = [-1, -2, -3]
+    # runidxs = [-1, -2, -3, -4, -5]
     # runidxs = [-2, -3, -4, -5]
-    runidxs = [-4, -5]
+    # runidxs = [-4, -5]
     stats, statsfolders = load_multiple_stats(runidxs=runidxs, basedir=scriptdir, structure=structure, process=True)
     statsfolder = statsfolders[0]
 
@@ -106,8 +106,8 @@ def main():
             fields=('f_partially_hybridized_strands_avg', 'f_fully_hybridized_strands_avg')
             ax = plot_tot_vs_time(runstats, filename=None, #plotfilename,
                                   ax=ax,
-                                  #x='duration_cum',
-                                  #x='system_time_end',
+                                  x='duration_cum',
+                                  # x='system_time_end',
                                   figsize=(16, 10),
                                   #linestyles=("-", "None"),
                                   colors=color*5,

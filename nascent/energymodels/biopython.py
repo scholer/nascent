@@ -164,11 +164,13 @@ def canonical_partitions(energies, T, unit='cal/mol'):
     """
     Return list [exp(-E_s / kT) for s in energies microstates]
     """
+    # beta as in p_s = exp(-beta*E_s)
     if 'mol' in unit:
         beta = 1/(R_units_to_value['cal/mol/K' if 'cal' in unit else 'J/mol/K']*T)
     else:
         beta = 1/(k_units_to_value['cal/K' if 'cal' in unit else 'J/K']*T)
     if unit[0] == 'k':
+        # We have kilo-joules/kcal/etc:
         beta = beta / 1000
     try:
         return [math.exp(-beta*E_s) for E_s in energies]
@@ -360,6 +362,7 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table="DNA_NN4"
         imm_table = energy_tables[imm_table]
     if isinstance(de_table, str):
         de_table = energy_tables[de_table]
+    # Combined table: (not yet used...)
     comb_table = nn_table.copy()
     comb_table.update(tmm_table)
     comb_table.update(imm_table)
@@ -370,7 +373,7 @@ def hybridization_dH_dS(seq, check=True, c_seq=None, shift=0, nn_table="DNA_NN4"
 
     seq = str(seq)
     if c_seq is None:
-        # Wait... are we taking the rcompl or compl? - compl. c_seq is 3'-to-5'.
+        # c_seq is not reversed complement, but the complement from 3' to 5'
         c_seq = compl(seq)
     if check:
         baseset = ('A', 'C', 'G', 'T', 'I')
@@ -607,6 +610,7 @@ def Tm_NN(seq, check=True, c_seq=None, shift=0, nn_table="DNA_NN4",
         #            = [strandB]_init - [duplex]                # since [strandB] = [strandB]_init - [duplex]
         #            = [strandB]_init - [strandA]_init/2        # since [duplex] = [strandA]_init/2
         #            = dnac1 - dnac2 / 2
+        # K_melt = 1/K_hyb:
         k = (dnac1 - (dnac2 / 2.0)) * molar_unit    # Note: This is not for hybridization but for MELTING!
         # I don't get it... If dnac2 > 2 dnac1 then this is negative...?
         # dnac2 MUST be the lower of the two concentrations.

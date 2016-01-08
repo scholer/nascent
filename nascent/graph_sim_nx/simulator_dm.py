@@ -224,7 +224,7 @@ class DM_Simulator(Simulator):
             # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_forming)}
             # sysmgr.hybridization_propensity_functions is dict with              {domspec_pair: a_j}
             # printd(" ---- Reaction stats: ----")
-            #sysmgr.print_reaction_stats()
+            # sysmgr.print_reaction_stats()
             # printd("\n".join(sysmgr.reaction_stats_strs()))
 
             # Step 1. (I expect that hybridization_propensity_functions is up-to-date)
@@ -319,7 +319,11 @@ class DM_Simulator(Simulator):
             self.sim_system_time += tau
 
             ## 3b: Perform reaction and update reactions:
-            # print("\n\nPerforming reaction:", reaction_spec, reaction_attr)
+            # print("\n\nPerforming reaction: %s, %s\n - propensity c_j = %0.04g / %0.04g" %
+            #       (reaction_spec, reaction_attr, a[j],
+            #        sysmgr.possible_hybridization_reactions[reaction_spec] if reaction_type is HYBRIDIZATION_INTERACTION
+            #        else sysmgr.possible_stacking_reactions[reaction_spec]),
+            #       end="\n\n")
             if reaction_type == HYBRIDIZATION_INTERACTION:
                 c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
                 # Determine reaction attributes:

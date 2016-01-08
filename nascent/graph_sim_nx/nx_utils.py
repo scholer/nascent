@@ -46,9 +46,13 @@ def layout_graph(g, pos=None, layout=nx.layout.spring_layout, save_pos_as_attr=F
     :save_pos_as_attr: If True, will invoke nx.set_node_attributes(g, 'pos', pos) after run.
     For graphviz layout, to use existing positions as starting positions for layout calculation,
     save node pos as node attribute before invoking layout function.
+    nx.spring_layout arguments:
+        G, dim=2, k=None, pos=None, fixed=None, iterations=50, weight='weight', scale=1.0, center=None
     """
     if pos is None:
         pos = nx.get_node_attributes(g, 'pos')
+        if len(pos) == 0:
+            pos = None
     if layout == "graphviz":
         # Use graphviz for layout; requires pygraphviz
         try:
@@ -71,7 +75,7 @@ def layout_graph(g, pos=None, layout=nx.layout.spring_layout, save_pos_as_attr=F
     else:
         if isinstance(layout, str):
             layout = getattr(nx.layout, layout) # pylint: disable=E1101
-        pos = layout(g)
+        pos = layout(g, pos=pos, **kwargs)
     if save_pos_as_attr:
         for node, v in pos.items():
             # pos can sometimes be numpy.ndarray; make sure we save a regular python list.
@@ -82,7 +86,11 @@ def layout_graph(g, pos=None, layout=nx.layout.spring_layout, save_pos_as_attr=F
 
 
 def draw_graph_and_save(g, outputfn, pos=None, layout=nx.spring_layout, clear_graph=True, hold=False, **kwargs):
-    """ Primitive drawing of a networkx graph. """
+    """
+    Primitive matplotlib.pyplot drawing of a networkx graph.
+    What about drawing directly with graphviz? Export to dot and run?
+    - See seq_analysis
+    """
     try:
         init_matplotlib()
     except ImportError as e:
@@ -110,3 +118,31 @@ def draw_graph_and_save(g, outputfn, pos=None, layout=nx.spring_layout, clear_gr
     if clear_graph:
         pyplot.clf()
     return pos
+
+
+def draw_with_graphviz(G, filename, export=('dot', 'png'), interface='pydot', prog='neato'):
+    """
+    :G:         The graph to draw.
+    :filename:  Filename basis (without the file extension).
+    :export:    A tuple/list of file formats to export to
+    :prog:      The graphviz layout program to use, typically 'neato' or 'dot'.
+    """
+    if interface == 'pydot' or G.is_multigraph():
+
+        # Use the pydot interface to graphviz:
+        P = nx.to_pydot(G)
+        if 'dot' in export:
+            P.write_dot(filename + ".dot") # same as P.write(filename, format='dot', prog=None). Default prog is 'dot'.
+        if 'png' in export:
+            P.write_png(filename + ".png", prog=prog) # returns True on success.
+    else:
+        # Gohlke's pygraphviz for Windows doesn't seem to support strict=False.
+        # Use the pygraphviz Agraph interface to graphviz:
+        A = nx.to_agraph(G)
+        A.write(filename + ".dot")
+        try:
+            A.draw(path=filename + ".png", format='png', prog=prog)
+        except OSError as e:
+            err, is_ok = e, False
+        else:
+            is_ok = True

@@ -170,9 +170,10 @@ def main():
               # or only re-calculate for pairs against other changed domains?
               "reaction_update_pair_against_all": True,
               # Nric = normalized_reaction_invocation_count = sysmgr.reaction_invocation_count[reaction_spec]/len(sysmgr.domains_by_name[d.name])
-              "reaction_throttle": False, # True: default to c_j_throttle_factor = exp(-Nric/10)
+              "reaction_throttle": True, # True: default to c_j_throttle_factor = exp(-Nric/10)
               # Use a reaction throttle cache, decrementing the throttle when reaction is triggered, rather than calculated in calculate_c_j from Nric
               "reaction_throttle_use_cache": True,
+              "reaction_throttle_per_complex": True,
               "reaction_throttle_offset": 0,
               "reaction_throttle_reset_on_temperature_change": True,
               "dispatcher_enabled": False,  # True to use a dispatcher to save and visualize graph changes.
@@ -254,8 +255,8 @@ def main():
                 s.sort_stats('time').print_stats(20)
             else:
                 # pdb.set_trace()
-                # simulator.simulate(T=330, n_steps_max=400000, systime_max=100)
-                simulator.simulate(T=330, n_steps_max=400, systime_max=100)
+                simulator.simulate(T=330, n_steps_max=10000, systime_max=1000)
+                # simulator.simulate(T=330, n_steps_max=400, systime_max=100)
 
     except KeyboardInterrupt:
         print("\n\nABORT: KeyboardInterrupt.\n\n")
