@@ -284,172 +284,6 @@ class ComponentMgr(GraphManager):
         return result
 
 
-    def join_complex_at(self, domain_pair=None, stacking_pair=None, edge_kwargs=None):
-        """
-        Join one or more complexes, by forming one or more edges.
-        Return result dict with:
-        result = {'changed_complexes': None,
-                  'new_complexes': None,
-                  'obsolete_complexes': None,
-                  'free_strands': None,
-                  'case': None}
-        Case is any of:
-            Case 0 : intRA-STRAND hybridization.
-            Case 1 : IntRA-complex hybridization
-            Case 2 : IntER-complex hybridization between two complexes. Merge the two complexs:
-            Case 3a: domain2/strand2 is not in a complex; use c1
-            Case 3b: domain1/strand1 is not in a complex; use c2
-            Case 4 : Neither strands are in existing complex; create new complex
-
-        """
-        if domain_pair is None and stacking_pair is None:
-            raise ValueError("Must provide either domain_pair or stacking_pair.")
-        if domain_pair is not None and stacking_pair is not None:
-            raise NotImplementedError("Providing both domain_pair and stacking_pair is not yet implemented!")
-
-        if domain_pair:
-            domain1, domain2 = domain_pair
-            # NOTE: Complex graph edge attributes doesn't matter very much!
-            if edge_kwargs is None:
-                edge_kwargs = {"interaction": HYBRIDIZATION_INTERACTION,
-                               #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
-                               #"weight": 2,
-                               'dist_ee_nm': HELIX_WIDTH,
-                               'dist_ee_sq': HELIX_WIDTH**2,
-                               'stiffness': 1
-                              }
-            domain_edge_kwargs = edge_kwargs
-            #h1end3p = h1end5p = (h2end3p, h2end5p) = ()
-        else:
-            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
-            if edge_kwargs is None:
-                edge_kwargs = {"interaction": STACKING_INTERACTION,
-                               #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
-                               #"weight": 2,
-                               'dist_ee_nm': HELIX_STACKING_DIST,
-                               'dist_ee_sq': HELIX_STACKING_DIST**2,
-                               'stiffness': 1
-                              }
-            stacking_edge_kwargs = edge_kwargs
-            domain1, domain2 = h1end3p.domain, h2end3p.domain
-        ## Variable unpacking:
-        strand1 = domain1.strand
-        strand2 = domain2.strand
-        c1 = strand1.complex
-        c2 = strand2.complex
-
-        # changed_complexes, new_complexes, obsolete_complexes, free_strands = None, None, None, []
-        result = {'changed_complexes': None,
-                  'new_complexes': None,
-                  'obsolete_complexes': None,
-                  'free_strands': None,
-                  'case': None}
-
-        if strand1 == strand2:
-            # If forming an intra-strand connection, we don't need to check if we make or merge any Complexes
-            print("hybridize case 0: intra-strand hybridization.")
-            result['case'] = 0
-            assert c1 == c2
-            if c1 is None:
-                # No complex to update, just return:
-                return result
-            else:
-                c_major = c1
-                result['changed_complexes'] = [c1]
-        ## Else: Analyse what happened to the complex
-        elif c1 and c2:
-            ## Both domains are in a complex.
-            if c1 == c2:
-                ## Case (1): Intra-complex hybridization
-                # printd("hybridize case 1: intra-complex hybridization.")
-                result['case'] = 1
-                assert strand1 in c2.strands and strand2 in c1.strands
-                # c1.add_edge(domain1, domain2, interaction=HYBRIDIZATION_INTERACTION) # done below
-                c_major = c1
-                result['changed_complexes'] = [c_major]
-                c_major.history.append("join_complex_at: Intra-complex hybridization.")
-            else:
-                ## Case (2): Inter-complex hybridization between two complexes. Merge the two complexs:
-                # printd("hybridize case 2: inter-complex hybridization.")
-                result['case'] = 2
-                c_major, c_minor = (c1, c2) if (len(c1.nodes()) >= len(c2.nodes())) else (c2, c1)
-                c_major.history.append("join_complex_at: Inter-complex hybridization, merging with c_minor = %r" %
-                                       (c_minor,))
-                # Import nodes and edges to major complex:
-                # add_strands updates: strand.complex, c_major.strands, c_major.strands_by_name
-                c_major.add_strands(c_minor.strands, update_graph=False)
-                # We use the c_minor graph - rather than strands ^ - to update c_major graph:
-                c_major.add_nodes_from(c_minor.nodes(data=True))
-                c_major.add_edges_from(c_minor.edges(keys=True, data=True))
-                c_major.N_strand_changes += c_minor.N_strand_changes # Currently not keeping track of strand changes.
-                c_major.history.append(c_minor.history)
-                c_major.hybridized_pairs |= c_minor.hybridized_pairs
-                c_major.stacked_pairs |= c_minor.stacked_pairs
-                # Complex.add_strands takes care of updating counters:
-                #c_major.domain_species_counter += c_minor.domain_species_counter
-                #c_major.strand_species_counter += c_minor.strand_species_counter
-                ## Delete the minor complex:
-                c_minor.strands.clear()     # Clear strands
-                c_minor.strands_by_name.clear()
-                c_minor.domain_species_counter.clear()
-                c_minor.strand_species_counter.clear()
-                c_minor.hybridized_pairs.clear()
-                c_minor.stacked_pairs.clear()
-                c_minor.node.clear()        # Clear nodes
-                c_minor.adj.clear()         # Clear edges (graph.adj attribute contains edge data for nx graphs)
-                c_minor.history.append("This complex is now merged with %r" % (c_major,))
-                result['obsolete_complexes'] = [c_minor]
-                result['changed_complexes'] = [c_major]
-        elif c1:
-            ## Case 3a: domain2/strand2 is not in a complex; use c1
-            # printd("hybridize case 3a: strand hybridizing to complex.")
-            result['case'] = 3
-            c_major = c1
-            c_major.history.append("join_complex_at: Strand+complex hybridization.")
-            c_major.add_strand(strand2, update_graph=True)
-            c_major._strands_fingerprint = None
-            result['changed_complexes'] = [c_major]
-        elif c2:
-            ## Case 3b: domain1/strand1 is not in a complex; use c2
-            # printd("hybridize case 3b: strand hybridizing to complex.")
-            result['case'] = 3
-            c_major = c2
-            c_major.history.append("join_complex_at: Strand+complex hybridization.")
-            c_major.add_strand(strand1, update_graph=True)
-            c_major._strands_fingerprint = None
-            result['changed_complexes'] = [c_major]
-        else:
-            ## Case 4: Neither strands are in existing complex; create new complex
-            result['case'] = 4
-            # printd("hybridize case 4: inter-strand hybridization (forming a new complex).")
-            new_complex = Complex(strands=[strand1, strand2])
-            new_complex.history.append("join_complex_at: Complex created from strands %r, %r." % (strand1, strand2))
-            # new_complex.strands |= {strand1, strand2}
-            # strand1.complex = strand2.complex = new_complex
-            # new_complex.add_strand(strand1)
-            # new_complex.add_strand(strand2)
-            c_major = new_complex
-            result['new_complexes'] = [new_complex]
-
-        # Create the hybridization connection in the major complex graph:
-        if domain_pair:
-            c_major.history.append("join_complex_at: Adding edge (%r, %r, %r)." %
-                                   (domain1, domain2, HYBRIDIZATION_INTERACTION))
-            c_major.add_hybridization_edge((domain1, domain2))
-        if stacking_pair:
-            c_major.history.append("join_complex_at: Adding edges (%r, %r, %r) and (%r, %r, %r)." %
-                                   (h1end3p.domain, h1end5p.domain, STACKING_INTERACTION,
-                                    h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
-            c_major.add_stacking_edge(stacking_pair)
-
-        # Reset complex: (maybe not needed here)
-        c_major.domain_distances = {} # Reset distances
-        c_major.reset_state_fingerprint()
-
-        return result
-
-
-
     def dehybridize(self, domain1, domain2, break_complex=True):
         """
         Dehybridize domain2 from domain1.
@@ -565,213 +399,6 @@ class ComponentMgr(GraphManager):
             print("print('- dehybridize complete.')", file=self.hyb_dehyb_file)
 
         self.N_domains_hybridized -= 2
-
-        return result
-
-
-    def break_complex_at(self, domain_pair=None, stacking_pair=None, interaction=None):
-        """
-        Break complex at one or more edges and determine how it splits up.
-        Note: This only deals with the complex (although it uses system graphs for analysis).
-        Make sure to break edges in system graphs before calling this method to determine and
-        process complex breakage.
-
-        Old:
-            ## Case 0: No complexes; Intra-strand (e.g. hairpin) de-hybridization.
-            ## Case 1/(a) Two smaller complexes - must create a new complex for detached domain:
-            ## Case 2/(b) One complex and one unhybridized strand - no need to do much further
-            ## Case 3/(c) Two unhybridized strands
-
-        Edit, new, to conform to join_complex_at(...):
-            CASE 0: NO COMPLEX PRESENT, intra-strand reaction.
-            Case 1: The two strands are still connected: No need to do anything further
-            Case 2 Two smaller complexes - must create a new complex for detached domain:
-            Case 3 One complex and one unhybridized strand - no need to do much further
-            Case 4 Two unhybridized strands
-
-        """
-        if domain_pair is None and stacking_pair is None:
-            raise ValueError("Must provide either domain_pair or stacking_pair.")
-        if domain_pair is not None and stacking_pair is not None:
-            raise NotImplementedError("Providing both domain_pair and stacking_pair is not yet implemented!")
-        if stacking_pair:
-            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
-        if domain_pair:
-            domain1, domain2 = domain_pair
-            if interaction is None:
-                interaction = HYBRIDIZATION_INTERACTION
-            #h1end3p = h1end5p = (h2end3p, h2end5p) = ()
-        else:
-            domain1, domain2 = h1end3p.domain, h2end3p.domain
-            if interaction is None:
-                interaction = STACKING_INTERACTION
-
-        edge_key = interaction
-
-        strand1 = domain1.strand
-        strand2 = domain2.strand
-        c = strand1.complex
-        assert c == strand2.complex
-
-        result = {'changed_complexes': None,
-                  'new_complexes': None,
-                  'obsolete_complexes': None,
-                  'free_strands': None,
-                  'case': None,
-                  'is_forming': False,
-                 }
-
-        ## CASE 0: NO COMPLEX PRESENT
-        if strand1 == strand2 and c is None:
-            # The domains are on the same strand and we don't have any complex to update
-            # Case 0?
-            result['case'] = 0
-            result['free_strands'] = [strand1]
-            return result
-
-        assert c is not None
-
-        ## First, BREAK CONNECTION:
-        if domain_pair is not None:
-            ## Update complex graph, breaking the d1-d2 hybridization edge:
-            # c.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
-            # c.hybridized_pairs.remove(frozenset(domain_pair))
-            c.remove_hybridization_edge(domain_pair)
-            c.history.append("break_complex_at: Removed edge (%r, %r, %r) and unsetting _hybridization_fingerprint..." %
-                             (domain1, domain2, HYBRIDIZATION_INTERACTION))
-            #c.strand_graph.remove_edge(strand1, strand2, s_edge_key)  ## complex strand_graph is obsolete
-            c._hybridization_fingerprint = None  # Reset hybridization fingerprint
-        if stacking_pair is not None:
-            ## Update complex graph, breaking (h1end3p, h1end5p) and (h2end3p, h2end5p) stacking edges:
-            # c.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
-            # c.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
-            # # Stacked_pairs have direction (h1nd3p, h1end5p) Unless you want it to be the same stacking pair as here?
-            # c.stacked_pairs.remove((h1end3p.domain, h1end5p.domain))
-            # c.stacked_pairs.remove((h1end3p.domain, h2end5p.domain))
-            c.remove_stacking_edge(stacking_pair)
-            c.history.append("break_complex_at: Removed edges (%r, %r, %r) and (%r, %r, %r) and unsetting _stacking_fingerprint..." %
-                             (h1end3p.domain, h1end5p.domain, STACKING_INTERACTION,
-                              h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
-            c._stacking_fingerprint = None  # Reset hybridization fingerprint
-        c.history.append(" - break_complex_at: also unsetting _state_fingerprint (was: %s)" % (c._state_fingerprint,))
-        c._state_fingerprint = None
-        c.domain_distances = {}  # Reset distances:
-
-        ## Then, SEE WHAT HAS HAPPENED TO THE COMPLEX:
-
-        ## Determine the connected component for strand 1:
-        dom1_cc_oligos = nx.node_connected_component(self.strand_graph, strand1)
-        # Could also use nx.connected_components_subgraphs(c)
-
-        ## Case 1: The two strands are still connected: No need to do anything further
-        if strand2 in dom1_cc_oligos:
-            ## The two strands are still connected: No need to do anything further
-            c.history.append("( - break_complex_at: complex is still intact.)")
-            result['case'] = 1
-            result['changed_complexes'] = [c]
-            # printd("Dehybridize case 0: Complex still intact.")
-            return result
-
-        #### The two strands are no longer connected: ####
-        c._strands_fingerprint = None
-        c.reset_state_fingerprint()
-
-        ## Need to split up. Three cases:
-        ## Case 2(a) Two smaller complexes - must create a new complex for detached domain:
-        ## Case 3(b) One complex and one unhybridized strand - no need to do much further
-        ## Case 4(c) Two unhybridized strands
-
-        dom2_cc_oligos = nx.node_connected_component(self.strand_graph, strand2)
-        assert strand2 not in dom1_cc_oligos
-        assert strand1 not in dom2_cc_oligos
-        dom1_cc_size = len(dom1_cc_oligos)  # cc = connected component
-        dom2_cc_size = len(dom2_cc_oligos)
-        # printd("dom1_cc_size=%s, dom2_cc_size=%s, len(c.strands)=%s" % (dom1_cc_size, dom2_cc_size, len(c.strands)))
-
-        assert len(c.strands) == dom1_cc_size + dom2_cc_size
-
-        if dom2_cc_size > 1 and dom1_cc_size > 1:
-            ## Case 2(a) Two smaller complexes - must create a new complex for detached domain:
-            # Determine which of the complex fragments is the major and which is the minor:
-            ## TODO: I don't really need the domain-graph, the strand-level should suffice.
-            ## (although it is a good check to have while debuggin...)
-            # Make sure NOT to make a copy of graph attributes (nodes/edges/etc)
-            # connected_component_subgraphs is not implemented for directed graphs!
-            # However, you can just do it manually using system graphs instead of complex domain graph:
-            # cc_subgraphs = list(connected_component_subgraphs(c, copy=False))
-            # if len(cc_subgraphs) != 2:
-            #     print("Unexpected length %s of connected_component_subgraphs(c):" % len(cc_subgraphs))
-            #     pprint(cc_subgraphs)
-            cc1_nodes = nx.node_connected_component(self.domain_graph, domain1)
-            cc2_nodes = nx.node_connected_component(self.domain_graph, domain2)
-            #graph_minor, graph_major = sorted(cc_subgraphs, key=lambda g: len(g.nodes()))
-            if len(cc1_nodes) < len(cc2_nodes):
-                graph_minor = self.domain_graph.subgraph(cc1_nodes)
-                # Remember to add the departing domain.strand to the new_complex_oligos list:
-                new_complex_oligos = set(dom1_cc_oligos)
-            else:
-                graph_minor = self.domain_graph.subgraph(cc2_nodes)
-                new_complex_oligos = set(dom2_cc_oligos)
-            # Use graph_minor to initialize; then all other is obsolete
-            # c.strands -= new_complex_oligos
-            # c.remove_nodes_from(graph_minor.nodes())
-            c.history.append("break_complex_at: Breaking off minor complex...")
-            removed_hybridization_pairs, removed_stacking_pairs = \
-                c.remove_strands(new_complex_oligos, update_graph=True, update_edge_pairs=True)
-            c_new = Complex(data=graph_minor, strands=new_complex_oligos)
-            # Remember to add the hybridized_pairs and stacked_pairs removed from the major complex.
-            c_new.hybridized_pairs |= removed_hybridization_pairs
-            c_new.stacked_pairs |= removed_stacking_pairs
-            # printd("Dehybridize case (a) - De-hybridization caused splitting into two complexes:")
-            # printd(" - New complex: %s, nodes = %s" % (c_new, c_new.nodes()))
-            # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
-            # printd(" - graph_minor nodes:", graph_minor.nodes())
-            c.history.append(" - break_complex_at: minor complex %r with %s strands broken off." % (c_new, new_complex_oligos))
-            # Case 2: Two smaller complexes - must create a new complex for detached domain:
-            result['case'] = 2
-            result['changed_complexes'] = [c]
-            result['new_complexes'] = [c_new]
-        elif dom2_cc_size > 1 or dom1_cc_size > 1:
-            ## Case 3(b) one complex and one unhybridized strand - no need to do much further
-            # Which-ever complex has more than 1 strands is the major complex:
-            domain_minor = domain1 if dom1_cc_size == 1 else domain2
-            c.history.append("break_complex_at: Breaking off strand...")
-            c.remove_strand(domain_minor.strand, update_graph=True)
-            # printd("Dehybridize case (b) - De-hybridization caused a free strand to split away:")
-            # printd(" - Free strand: %s, nodes = %s" % (domain_minor.strand, domain_minor.strand.nodes()))
-            # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
-            result['case'] = 3
-            result['changed_complexes'] = [c]
-            result['free_strands'] = [domain_minor.strand]
-        else:
-            ## Case 4(c) Two unhybridized strands
-            result['case'] = 4
-            result['obsolete_complexes'] = [c]
-            result['free_strands'] = [domain1.strand, domain2.strand]
-            c.history.append("break_complex_at: Breaking now-obsolete complex into two free strands...")
-            c.remove_strands((strand1, strand2), update_graph=True)
-            # c.remove_nodes_from(strand1) # iter(nx.Graph) yields nodes.
-            # c.remove_nodes_from(strand2)
-            assert c.strands == set()
-            ## This sometimes fails:
-            if not all(len(strandset) == 0 for strandset in c.strands_by_name.values()):
-                print(" FAIL: all(len(strandset) == 0 for strandset in c.strands_by_name.values())")
-                pprint(c.strands_by_name)
-                pprint(c.nodes())
-                pprint(c.edges())
-            assert all(len(strandset) == 0 for strandset in c.strands_by_name.values())
-            assert len(c.nodes()) == 0
-            strand1.complex, strand2.complex = None, None
-            # printd("Dehybridize case (c) - De-hybridization caused complex to split into two free strands:")
-            # printd(" - Free strands 1: %s, nodes1 = %s" % (domain1.strand, domain1.strand.nodes()))
-            # printd(" - Free strands 1: %s, nodes1 = %s" % (domain2.strand, domain2.strand.nodes()))
-            # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
-
-        if domain_pair:
-            assert domain1.partner is None
-            assert domain2.partner is None
-        if stacking_pair:
-            assert all(end.stack_partner is None for end in (h1end3p, h2end5p, h2end3p, h1end5p))
 
         return result
 
@@ -991,3 +618,378 @@ class ComponentMgr(GraphManager):
             print("print('- un-stacking complete.')", file=self.hyb_dehyb_file)
 
         return result
+
+
+    def join_complex_at(self, domain_pair=None, stacking_pair=None, edge_kwargs=None):
+        """
+        Join one or more complexes, by forming one or more edges.
+        Return result dict with:
+        result = {'changed_complexes': None,
+                  'new_complexes': None,
+                  'obsolete_complexes': None,
+                  'free_strands': None,
+                  'case': None}
+        Case is any of:
+            Case 0 : intRA-STRAND hybridization.
+            Case 1 : IntRA-complex hybridization
+            Case 2 : IntER-complex hybridization between two complexes. Merge the two complexs:
+            Case 3a: domain2/strand2 is not in a complex; use c1
+            Case 3b: domain1/strand1 is not in a complex; use c2
+            Case 4 : Neither strands are in existing complex; create new complex
+        Thus:
+            Case 0-1: Intra/uni-molecular reactions; no change in volume energy.
+        """
+        if domain_pair is None and stacking_pair is None:
+            raise ValueError("Must provide either domain_pair or stacking_pair.")
+        if domain_pair is not None and stacking_pair is not None:
+            raise NotImplementedError("Providing both domain_pair and stacking_pair is not yet implemented!")
+
+        if domain_pair:
+            domain1, domain2 = domain_pair
+            # NOTE: Complex graph edge attributes doesn't matter very much!
+            if edge_kwargs is None:
+                edge_kwargs = {"interaction": HYBRIDIZATION_INTERACTION,
+                               #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
+                               #"weight": 2,
+                               'dist_ee_nm': HELIX_WIDTH,
+                               'dist_ee_sq': HELIX_WIDTH**2,
+                               'stiffness': 1
+                              }
+            domain_edge_kwargs = edge_kwargs
+            #h1end3p = h1end5p = (h2end3p, h2end5p) = ()
+        else:
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+            if edge_kwargs is None:
+                edge_kwargs = {"interaction": STACKING_INTERACTION,
+                               #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
+                               #"weight": 2,
+                               'dist_ee_nm': HELIX_STACKING_DIST,
+                               'dist_ee_sq': HELIX_STACKING_DIST**2,
+                               'stiffness': 1
+                              }
+            stacking_edge_kwargs = edge_kwargs
+            domain1, domain2 = h1end3p.domain, h2end3p.domain
+        ## Variable unpacking:
+        strand1 = domain1.strand
+        strand2 = domain2.strand
+        c1 = strand1.complex
+        c2 = strand2.complex
+
+        # changed_complexes, new_complexes, obsolete_complexes, free_strands = None, None, None, []
+        result = {'changed_complexes': None,
+                  'new_complexes': None,
+                  'obsolete_complexes': None,
+                  'free_strands': None,
+                  'case': None}
+
+        if strand1 == strand2:
+            # If forming an intra-strand connection, we don't need to check if we make or merge any Complexes
+            print("hybridize case 0: intra-strand hybridization.")
+            result['case'] = 0
+            assert c1 == c2
+            if c1 is None:
+                # No complex to update, just return:
+                return result
+            else:
+                c_major = c1
+                result['changed_complexes'] = [c1]
+        ## Else: Analyse what happened to the complex
+        elif c1 and c2:
+            ## Both domains are in a complex.
+            if c1 == c2:
+                ## Case (1): Intra-complex hybridization
+                # printd("hybridize case 1: intra-complex hybridization.")
+                result['case'] = 1
+                assert strand1 in c2.strands and strand2 in c1.strands
+                # c1.add_edge(domain1, domain2, interaction=HYBRIDIZATION_INTERACTION) # done below
+                c_major = c1
+                result['changed_complexes'] = [c_major]
+                c_major.history.append("join_complex_at: Intra-complex hybridization.")
+            else:
+                ## Case (2): Inter-complex hybridization between two complexes. Merge the two complexs:
+                # printd("hybridize case 2: inter-complex hybridization.")
+                result['case'] = 2
+                c_major, c_minor = (c1, c2) if (len(c1.nodes()) >= len(c2.nodes())) else (c2, c1)
+                c_major.history.append("join_complex_at: Inter-complex hybridization, merging with c_minor = %r" %
+                                       (c_minor,))
+                # Import nodes and edges to major complex:
+                # add_strands updates: strand.complex, c_major.strands, c_major.strands_by_name
+                c_major.add_strands(c_minor.strands, update_graph=False)
+                # We use the c_minor graph - rather than strands ^ - to update c_major graph:
+                c_major.add_nodes_from(c_minor.nodes(data=True))
+                c_major.add_edges_from(c_minor.edges(keys=True, data=True))
+                c_major.N_strand_changes += c_minor.N_strand_changes # Currently not keeping track of strand changes.
+                c_major.history.append(c_minor.history)
+                c_major.hybridized_pairs |= c_minor.hybridized_pairs
+                c_major.stacked_pairs |= c_minor.stacked_pairs
+                # Complex.add_strands takes care of updating counters:
+                #c_major.domain_species_counter += c_minor.domain_species_counter
+                #c_major.strand_species_counter += c_minor.strand_species_counter
+                ## Delete the minor complex:
+                c_minor.strands.clear()     # Clear strands
+                c_minor.strands_by_name.clear()
+                c_minor.domain_species_counter.clear()
+                c_minor.strand_species_counter.clear()
+                c_minor.hybridized_pairs.clear()
+                c_minor.stacked_pairs.clear()
+                c_minor.node.clear()        # Clear nodes
+                c_minor.adj.clear()         # Clear edges (graph.adj attribute contains edge data for nx graphs)
+                c_minor.history.append("This complex is now merged with %r" % (c_major,))
+                result['obsolete_complexes'] = [c_minor]
+                result['changed_complexes'] = [c_major]
+        elif c1:
+            ## Case 3a: domain2/strand2 is not in a complex; use c1
+            # printd("hybridize case 3a: strand hybridizing to complex.")
+            result['case'] = 3
+            c_major = c1
+            c_major.history.append("join_complex_at: Strand+complex hybridization.")
+            c_major.add_strand(strand2, update_graph=True)
+            c_major._strands_fingerprint = None
+            result['changed_complexes'] = [c_major]
+        elif c2:
+            ## Case 3b: domain1/strand1 is not in a complex; use c2
+            # printd("hybridize case 3b: strand hybridizing to complex.")
+            result['case'] = 3
+            c_major = c2
+            c_major.history.append("join_complex_at: Strand+complex hybridization.")
+            c_major.add_strand(strand1, update_graph=True)
+            c_major._strands_fingerprint = None
+            result['changed_complexes'] = [c_major]
+        else:
+            ## Case 4: Neither strands are in existing complex; create new complex
+            result['case'] = 4
+            # printd("hybridize case 4: inter-strand hybridization (forming a new complex).")
+            new_complex = Complex(strands=[strand1, strand2])
+            new_complex.history.append("join_complex_at: Complex created from strands %r, %r." % (strand1, strand2))
+            # new_complex.strands |= {strand1, strand2}
+            # strand1.complex = strand2.complex = new_complex
+            # new_complex.add_strand(strand1)
+            # new_complex.add_strand(strand2)
+            c_major = new_complex
+            result['new_complexes'] = [new_complex]
+
+        # Create the hybridization connection in the major complex graph:
+        if domain_pair:
+            c_major.history.append("join_complex_at: Adding edge (%r, %r, %r)." %
+                                   (domain1, domain2, HYBRIDIZATION_INTERACTION))
+            c_major.add_hybridization_edge((domain1, domain2))
+        if stacking_pair:
+            c_major.history.append("join_complex_at: Adding edges (%r, %r, %r) and (%r, %r, %r)." %
+                                   (h1end3p.domain, h1end5p.domain, STACKING_INTERACTION,
+                                    h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
+            c_major.add_stacking_edge(stacking_pair)
+
+        # Reset complex: (maybe not needed here)
+        c_major.domain_distances = {} # Reset distances
+        c_major.reset_state_fingerprint()
+
+        return result
+
+
+    def break_complex_at(self, domain_pair=None, stacking_pair=None, interaction=None):
+        """
+        Break complex at one or more edges and determine how it splits up.
+        Note: This only deals with the complex (although it uses system graphs for analysis).
+        Make sure to break edges in system graphs before calling this method to determine and
+        process complex breakage.
+
+        Old:
+            ## Case 0: No complexes; Intra-strand (e.g. hairpin) de-hybridization.
+            ## Case 1/(a) Two smaller complexes - must create a new complex for detached domain:
+            ## Case 2/(b) One complex and one unhybridized strand - no need to do much further
+            ## Case 3/(c) Two unhybridized strands
+
+        Edit, new, to conform to join_complex_at(...):
+            CASE 0: NO COMPLEX PRESENT, intra-strand reaction.
+            Case 1: The two strands are still connected: No need to do anything further
+            Case 2 Two smaller complexes - must create a new complex for detached domain:
+            Case 3 One complex and one unhybridized strand - no need to do much further
+            Case 4 Two unhybridized strands
+
+        """
+        if domain_pair is None and stacking_pair is None:
+            raise ValueError("Must provide either domain_pair or stacking_pair.")
+        if domain_pair is not None and stacking_pair is not None:
+            raise NotImplementedError("Providing both domain_pair and stacking_pair is not yet implemented!")
+        if stacking_pair:
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+        if domain_pair:
+            domain1, domain2 = domain_pair
+            if interaction is None:
+                interaction = HYBRIDIZATION_INTERACTION
+            #h1end3p = h1end5p = (h2end3p, h2end5p) = ()
+        else:
+            domain1, domain2 = h1end3p.domain, h2end3p.domain
+            if interaction is None:
+                interaction = STACKING_INTERACTION
+
+        edge_key = interaction
+
+        strand1 = domain1.strand
+        strand2 = domain2.strand
+        c = strand1.complex
+        assert c == strand2.complex
+
+        result = {'changed_complexes': None,
+                  'new_complexes': None,
+                  'obsolete_complexes': None,
+                  'free_strands': None,
+                  'case': None,
+                  'is_forming': False,
+                 }
+
+        ## CASE 0: NO COMPLEX PRESENT
+        if strand1 == strand2 and c is None:
+            # The domains are on the same strand and we don't have any complex to update
+            # Case 0?
+            result['case'] = 0
+            result['free_strands'] = [strand1]
+            return result
+
+        assert c is not None
+
+        ## First, BREAK CONNECTION:
+        if domain_pair is not None:
+            ## Update complex graph, breaking the d1-d2 hybridization edge:
+            # c.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
+            # c.hybridized_pairs.remove(frozenset(domain_pair))
+            c.remove_hybridization_edge(domain_pair)
+            c.history.append("break_complex_at: Removed edge (%r, %r, %r) and unsetting _hybridization_fingerprint..." %
+                             (domain1, domain2, HYBRIDIZATION_INTERACTION))
+            #c.strand_graph.remove_edge(strand1, strand2, s_edge_key)  ## complex strand_graph is obsolete
+            c._hybridization_fingerprint = None  # Reset hybridization fingerprint
+        if stacking_pair is not None:
+            ## Update complex graph, breaking (h1end3p, h1end5p) and (h2end3p, h2end5p) stacking edges:
+            # c.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
+            # c.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+            # # Stacked_pairs have direction (h1nd3p, h1end5p) Unless you want it to be the same stacking pair as here?
+            # c.stacked_pairs.remove((h1end3p.domain, h1end5p.domain))
+            # c.stacked_pairs.remove((h1end3p.domain, h2end5p.domain))
+            c.remove_stacking_edge(stacking_pair)
+            c.history.append("break_complex_at: Removed edges (%r, %r, %r) and (%r, %r, %r) and unsetting _stacking_fingerprint..." %
+                             (h1end3p.domain, h1end5p.domain, STACKING_INTERACTION,
+                              h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
+            c._stacking_fingerprint = None  # Reset hybridization fingerprint
+        c.history.append(" - break_complex_at: also unsetting _state_fingerprint (was: %s)" % (c._state_fingerprint,))
+        c._state_fingerprint = None
+        c.domain_distances = {}  # Reset distances:
+
+        ## Then, SEE WHAT HAS HAPPENED TO THE COMPLEX:
+
+        ## Determine the connected component for strand 1:
+        dom1_cc_oligos = nx.node_connected_component(self.strand_graph, strand1)
+        # Could also use nx.connected_components_subgraphs(c)
+
+        ## Case 1: The two strands are still connected: No need to do anything further
+        if strand2 in dom1_cc_oligos:
+            ## The two strands are still connected: No need to do anything further
+            c.history.append("( - break_complex_at: complex is still intact.)")
+            result['case'] = 1
+            result['changed_complexes'] = [c]
+            # printd("Dehybridize case 0: Complex still intact.")
+            return result
+
+        #### The two strands are no longer connected: ####
+        c._strands_fingerprint = None
+        c.reset_state_fingerprint()
+
+        ## Need to split up. Three cases:
+        ## Case 2(a) Two smaller complexes - must create a new complex for detached domain:
+        ## Case 3(b) One complex and one unhybridized strand - no need to do much further
+        ## Case 4(c) Two unhybridized strands
+
+        dom2_cc_oligos = nx.node_connected_component(self.strand_graph, strand2)
+        assert strand2 not in dom1_cc_oligos
+        assert strand1 not in dom2_cc_oligos
+        dom1_cc_size = len(dom1_cc_oligos)  # cc = connected component
+        dom2_cc_size = len(dom2_cc_oligos)
+        # printd("dom1_cc_size=%s, dom2_cc_size=%s, len(c.strands)=%s" % (dom1_cc_size, dom2_cc_size, len(c.strands)))
+
+        assert len(c.strands) == dom1_cc_size + dom2_cc_size
+
+        if dom2_cc_size > 1 and dom1_cc_size > 1:
+            ## Case 2(a) Two smaller complexes - must create a new complex for detached domain:
+            # Determine which of the complex fragments is the major and which is the minor:
+            ## TODO: I don't really need the domain-graph, the strand-level should suffice.
+            ## (although it is a good check to have while debuggin...)
+            # Make sure NOT to make a copy of graph attributes (nodes/edges/etc)
+            # connected_component_subgraphs is not implemented for directed graphs!
+            # However, you can just do it manually using system graphs instead of complex domain graph:
+            # cc_subgraphs = list(connected_component_subgraphs(c, copy=False))
+            # if len(cc_subgraphs) != 2:
+            #     print("Unexpected length %s of connected_component_subgraphs(c):" % len(cc_subgraphs))
+            #     pprint(cc_subgraphs)
+            cc1_nodes = nx.node_connected_component(self.domain_graph, domain1)
+            cc2_nodes = nx.node_connected_component(self.domain_graph, domain2)
+            #graph_minor, graph_major = sorted(cc_subgraphs, key=lambda g: len(g.nodes()))
+            if len(cc1_nodes) < len(cc2_nodes):
+                graph_minor = self.domain_graph.subgraph(cc1_nodes)
+                # Remember to add the departing domain.strand to the new_complex_oligos list:
+                new_complex_oligos = set(dom1_cc_oligos)
+            else:
+                graph_minor = self.domain_graph.subgraph(cc2_nodes)
+                new_complex_oligos = set(dom2_cc_oligos)
+            # Use graph_minor to initialize; then all other is obsolete
+            # c.strands -= new_complex_oligos
+            # c.remove_nodes_from(graph_minor.nodes())
+            c.history.append("break_complex_at: Breaking off minor complex...")
+            removed_hybridization_pairs, removed_stacking_pairs = \
+                c.remove_strands(new_complex_oligos, update_graph=True, update_edge_pairs=True)
+            c_new = Complex(data=graph_minor, strands=new_complex_oligos)
+            # Remember to add the hybridized_pairs and stacked_pairs removed from the major complex.
+            c_new.hybridized_pairs |= removed_hybridization_pairs
+            c_new.stacked_pairs |= removed_stacking_pairs
+            # printd("Dehybridize case (a) - De-hybridization caused splitting into two complexes:")
+            # printd(" - New complex: %s, nodes = %s" % (c_new, c_new.nodes()))
+            # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
+            # printd(" - graph_minor nodes:", graph_minor.nodes())
+            c.history.append(" - break_complex_at: minor complex %r with %s strands broken off." % (c_new, new_complex_oligos))
+            # Case 2: Two smaller complexes - must create a new complex for detached domain:
+            result['case'] = 2
+            result['changed_complexes'] = [c]
+            result['new_complexes'] = [c_new]
+        elif dom2_cc_size > 1 or dom1_cc_size > 1:
+            ## Case 3(b) one complex and one unhybridized strand - no need to do much further
+            # Which-ever complex has more than 1 strands is the major complex:
+            domain_minor = domain1 if dom1_cc_size == 1 else domain2
+            c.history.append("break_complex_at: Breaking off strand...")
+            c.remove_strand(domain_minor.strand, update_graph=True)
+            # printd("Dehybridize case (b) - De-hybridization caused a free strand to split away:")
+            # printd(" - Free strand: %s, nodes = %s" % (domain_minor.strand, domain_minor.strand.nodes()))
+            # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
+            result['case'] = 3
+            result['changed_complexes'] = [c]
+            result['free_strands'] = [domain_minor.strand]
+        else:
+            ## Case 4(c) Two unhybridized strands
+            result['case'] = 4
+            result['obsolete_complexes'] = [c]
+            result['free_strands'] = [domain1.strand, domain2.strand]
+            c.history.append("break_complex_at: Breaking now-obsolete complex into two free strands...")
+            c.remove_strands((strand1, strand2), update_graph=True)
+            # c.remove_nodes_from(strand1) # iter(nx.Graph) yields nodes.
+            # c.remove_nodes_from(strand2)
+            assert c.strands == set()
+            ## This sometimes fails:
+            if not all(len(strandset) == 0 for strandset in c.strands_by_name.values()):
+                print(" FAIL: all(len(strandset) == 0 for strandset in c.strands_by_name.values())")
+                pprint(c.strands_by_name)
+                pprint(c.nodes())
+                pprint(c.edges())
+            assert all(len(strandset) == 0 for strandset in c.strands_by_name.values())
+            assert len(c.nodes()) == 0
+            strand1.complex, strand2.complex = None, None
+            # printd("Dehybridize case (c) - De-hybridization caused complex to split into two free strands:")
+            # printd(" - Free strands 1: %s, nodes1 = %s" % (domain1.strand, domain1.strand.nodes()))
+            # printd(" - Free strands 1: %s, nodes1 = %s" % (domain2.strand, domain2.strand.nodes()))
+            # printd(" - Old complex: %s, nodes = %s" % (c, c.nodes()))
+
+        if domain_pair:
+            assert domain1.partner is None
+            assert domain2.partner is None
+        if stacking_pair:
+            assert all(end.stack_partner is None for end in (h1end3p, h2end5p, h2end3p, h1end5p))
+
+        return result
+
+

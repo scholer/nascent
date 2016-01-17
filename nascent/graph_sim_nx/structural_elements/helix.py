@@ -22,8 +22,12 @@
 Module representing helices.
 
 """
+# sequential_number_generator returns a generator; sequential_uuid_gen *is* a generator.
 from nascent.graph_sim_nx.utils import (sequential_number_generator, sequential_uuid_gen)
 from nascent.graph_sim_nx.constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)
+
+# A generator, get next sequential id with next(make_helix_sequential_id)
+make_helix_sequential_id = sequential_number_generator()
 
 
 def domain_stack_upstream(domain, include_start=True):
@@ -70,10 +74,15 @@ def ends5p3p_stack_from_domain(domain, direction, include_start=True):
     raise ValueError("Unrecognized direction '%s'" % direction, direction)
 
 
-class DsHelix():
+class DoubleHelix():
     """
     Class representing a single, fully-stacked double helix.
     NOTE: Make sure you are not replicating the functionality of system_graphs.HelixGraph
+
+    Also: A new double helix is formed every time a domain hybridizes. Double-helices can expand/merge
+    by stacking, but only by merging with an existing double-helix. You probably do not want to instantiate a
+    new object for every hybridization reaction.
+    If you need to refer to helices uniquely, you can use a module-level sequential_number_generator.
     """
     rise = 0.4  # Rise from one bp to the next in nm.
     bp_per_turn = 10.5
@@ -83,6 +92,8 @@ class DsHelix():
     def __init__(self, start_domain):
         if start_domain.partner is None:
             raise ValueError("start_domain must be hybridized to create a DsHelix")
+        self.huid = next(make_helix_sequential_id)
+        self.direction_vector = [1.0, 0.0, 0.0]  # [x, y, z], could/should be a quarternion.
         partner = start_domain.partner
         # What is the order of the helices domain?
         # Is it: "both-5p-to-3p"
@@ -92,11 +103,21 @@ class DsHelix():
         # helix1: [5p-most-domain, ...., 3p-most-domain]
         # helix2: [3p-most-domain, ...., 5p-most-domain]
 
+        # A double-helix consists of two helices (helix "strands")
+        # - We use helix "strand" although they it does not need to be a single strand *molecule*.
+        # - Each helix strand in the double-helix is merely composed of domains.
         self.helices_domains = [list(domain_stack_upstream(start_domain, include_start=False))[::-1]\
                                 + list(domain_stack_downstream(start_domain)),
                                 list(domain_stack_upstream(partner, include_start=False))[::-1]\
                                 + list(domain_stack_downstream(partner))]
 
+        self.helix_strand_sets = [set(domains) for domains in self.helices_domains]
+        self.helix_strand_parity_by_domain = {}
+        for helix_parity, helix_strand in enumerate(self.helices_domains):
+            # helix parity is either 0 or 1 and correspond to the index in helices_domains.
+            # This also functions to hold a set of all domains in the ds-helix.
+            for domain in helix_strand:
+                self.helix_strand_parity_by_domain[domain] = helix_parity
         # domain ends (5p3p)
         # Version 1, assuming "both-5p-to-3p" helix domain ordering:
         self.helices_5p3p_ends = [[end for domain in helix for end in [domain.end5p, domain.end3p]]
@@ -117,16 +138,27 @@ class DsHelix():
         self.length_bp = self.lengths[0]
         self.length_nm = self.length_bp*0.34
 
+
+    def split(self,):
+        """ Split the helix into two, e.g. after an unstacking reaction. """
+        pass
+
+    def __lt__(self, other_helix):
+        return self.huid < other_helix.huid
+    def __gt__(self, other_helix):
+        return self.huid > other_helix.huid
+
     def __len__(self, ):
         return sum(len(domain) for domain in self.helices_domains[0])
 
 
 
-class CashableDsHelix(DsHelix):
+class CashableDsHelix(DoubleHelix):
     """
     Class representing a single, fully-stacked double helix.
     This subclass only uses text strings rather than objects and can thus be used
     between complexes.
+    Not sure if this is really worth the trouble...
     """
 
     def __init__(self, start_domain):

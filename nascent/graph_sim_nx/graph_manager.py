@@ -26,6 +26,7 @@ import itertools
 from pprint import pprint
 
 
+from .system_graphs import InterfaceGraph
 from .nx_utils import draw_graph_and_save
 from .structural_elements.strand import SingleStrand
 from .structural_elements.helix import DsHelix
@@ -136,6 +137,7 @@ def determine_end_end_distance(source, target, edge_attrs, interaction):
 
 
 
+
 class GraphManager():
 
     def __init__(self, strands=None, ends5p3p_graph=None, domain_graph=None, strand_graph=None):
@@ -148,12 +150,14 @@ class GraphManager():
         # MultiGraph vs Graph?
         # - Should be a multigraph to support stacking
         # - domains and ends can connect to the same partner via both backbone and stacking interactions
-        # - hairpins without loops has hybridization to same domain as phosphate backbone.
+        # - hairpins without loops has hybridization to same domain as phosphate backbone
+        #    (but we can disallow this and say we must always have a loop in hairpins).
         # - Not sure what the performance penalty of multi graphs are vs regular graphs?
         # - We could have a separate graphs without stacking, but not sure when those would be useful?
         self.ends5p3p_graph = ends5p3p_graph or nx.MultiGraph()
         self.domain_graph = domain_graph or nx.MultiGraph()
         self.strand_graph = strand_graph or nx.MultiGraph()
+        self.interfaces_graph = InterfaceGraph()
         if strands:
             # TODO: Add strand-node attrs to strand-graph:
             # TODO: Add "Label" attr to all nodes (for Gephi)
@@ -164,8 +168,29 @@ class GraphManager():
                 self.ends5p3p_graph.add_nodes_from(strand.ends5p3p_graph.nodes(data=True))
                 self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph.edges(keys=True, data=True))
 
+                # self.interfaces_graph.add_nodes_from(
+                #     end for end5p in strand.ends5p3p_graph.nodes() if isinstance(end5p, DomainEnd5p)
+                #     for end in (end5p, end5p.bp_downstream) if end is not None)
+                # self.interfaces_graph.add_nodes_from(
+                #     InterfaceNode((end5p, end5p.bp_downstream) if end5p.bp_downstream else (end5p, ))
+                #     for end5p in strand.ends5p3p_graph.nodes() if isinstance(end5p, DomainEnd5p))
+                ## Edit: InterfaceNodes are now a persistent part of DomainEnds
+        self.interfaces_graph.add_nodes_from(end.ifnode for end in self.ends5p3p_graph.nodes())
+        domain_end_edges = self.ends5p3p_graph.edges(data=True, keys=True)
+        # We must start from a graph without hybridization/stacking.
+        # If we have hybridization/stacking, we have to perform node-delegation on those nodes
+        # and we don't want to implement that right now...
+        assert all(key == PHOSPHATEBACKBONE_INTERACTION for source, target, key, data in domain_end_edges)
+        self.interfaces_graph.add_edges_from((source.ifnode, target.ifnode, data)
+            for source, target, key, data in domain_end_edges)
+
         ### Other attributes: ###
         self.fnprefix = ""
+
+        ### Loops: ###
+        # We currently just use domain objects to track loops. Could probably be domain species.
+        self.enable_loop_tracking = True
+
 
 
 
@@ -292,7 +317,7 @@ class GraphManager():
         return shortest_path(self.ends5p3p_graph, end5p3p1, end5p3p2, weight='dist_ee_sq')
 
 
-    def intracomplex_activity(self, elem1, elem2):
+    def intracomplex_activity(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION):
         r"""
         Returns
             :intracomplex_activity:
@@ -431,6 +456,27 @@ class GraphManager():
               which is just 0.67 nm.                                ---------------.________________
               effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2) = 1.66 nm³
               activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3 = 1.66 nm³ / 1.66 nm³ = 1.
+
+        TODO: Add option to calculate shape energy contribution from ssDNA-dsDNA during duplex formation.
+              This energy is entropic and can be viewed in two ways:
+                (1) After duplex is formed, the effective activity is slightly different
+                    than it was before the domain was hybridized, because the duplex length and rigidity is changed.
+                    (long domains become longer; higher rigidity).
+                (2) Duplex formation changes the shape energy (loop entropy) of the complex by reducing
+                    the number of available micro-states (the conformational space).
+              Should duplex-formation-based loop energy be applied to the off-rate or on-rate?
+                If the duplex is actually formed before the crossover is made, then an argument could be made
+                that the duplex-formation-shape-energy should be applied to the the on-rate (k_on).
+                However, this argument is not very convincing: The duplex cannot be formed without at least
+                partially closing the loop (if the furthest end is hybridized, and there is a new loop with size equal
+                to the ss length of the domain..).
+              Thus, it is probably most realistic to apply duplex-formation-shape-dS to the off-rate.
+              This "post-hybridization duplex-formation-shape-dG" calculation could go hand-in-hand with a general
+              "post-reaction-processing" where we determine not only adjustments to k_off but also:
+                * Does the reaction (hybridization/stacking) produce an impossible structure?
+                    E.g. if
+
+
         """
         #path = self.domains_shortest_path(domain1, domain2)
         #path_elements = self.domain_path_elements(path)
@@ -448,7 +494,13 @@ class GraphManager():
         ## 5p3p-level shortest path:
         # domain1, domain2
         if isinstance(elem1, Domain):
+            """
+            For domain-hybridization, what path exactly are we considering?
+            - depends on zippering vs ??
+
+            """
             domain1, domain2 = elem1, elem2
+            cmplx = domain1.strand.complex
             d1end5p, d2end5p = domain1.end5p, domain2.end5p
             d1end3p, d2end3p = domain1.end3p, domain2.end3p
             path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
@@ -458,11 +510,14 @@ class GraphManager():
                 path = path[slice_start:slice_end]
         elif isinstance(elem1, DomainEnd):
             d1end5p, d2end5p = elem1, elem2
+            cmplx = d1end5p.domain.strand.complex
             # domain1, domain2 = d1end5p.domain, d2end5p.domain # only used for debugging
             path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
+            slice_start, slice_end = 0, None
         else:
             # TODO: Consolidate this for domain hybridization and end stacking
             (h1end3p, h2end5p), (h2end3p, h1end5p) = elem1, elem2
+            cmplx = h1end5p.domain.strand.complex
             # import pdb; pdb.set_trace()
             path = self.ends5p3p_shortest_path(h1end3p, h2end3p)
             slice_start = 1 if path[1] == h2end5p else 0
@@ -478,6 +533,18 @@ class GraphManager():
         # import pdb; pdb.set_trace()
 
         ## TODO: CHECK FOR SECONDARY LOOPS!
+        if path[0] in cmplx.loops_by_domainend and len(cmplx.loops_by_domainend[path[0]]) > 0 \
+            and path[-1] in cmplx.loops_by_domainend and len(cmplx.loops_by_domainend[path[-1]]) > 0:
+            # We have a secondary loop.
+            shared_loops = cmplx.loops_by_domainend[path[0]] & cmplx.loops_by_domainend[path[-1]]
+            assert len(shared_loops) > 0
+            # Can we always use the smallest loop, or is there a particular order that must be obeyed?
+            smallest_loop = min(shared_loops, key=lambda loop: len(loop['nodes']))
+            path1_nodes = set(path)
+            assert all(node in smallest_loop['nodes'] for node in path)
+            assert path1_nodes <= smallest_loop['nodes']  # Using set operations is faster
+            # Set operators: & = intersection, - = difference, ^ = symmetric_difference, <= subset, >= superset.
+            path2_nodes = smallest_loop['nodes'] - path1_nodes
 
         # path_elements is a list of tuples with: [(stiffness, total-length, sum-of-squared-lengths), ...]
         # For rigid, double-helical elements, element length, l, is N_bp * 0.34 nm.
@@ -648,6 +715,7 @@ class GraphManager():
         if activity < 1:
             print("Activity %s less than 1 - printing locals():" % activity)
             pprint(locals())
+
         return activity
 
 

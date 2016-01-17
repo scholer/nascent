@@ -43,6 +43,7 @@ from .constants import STACKING_INTERACTION #, PHOSPHATEBACKBONE_INTERACTION, HY
 from .constants import ss_kuhn_length, ss_rise_per_nt, ds_rise_per_bp
 from .algorithms import connectivity_rings
 from .debug import printd, pprintd
+from .system_graphs import InterfaceNode
 
 
 # Module-level constants and variables:
@@ -299,6 +300,8 @@ class Domain():
         return len(self.sequence)
 
 
+
+
 class DomainEnd():
     """
     Attributes:
@@ -332,6 +335,7 @@ class DomainEnd():
         self.pb_downstream = None   # end connected by phosphate backbone on same strand
         self.stack_partner = None   # stacking partner
         self.stack_string = None    # Stacking string, e.g. "CA/GT" or maybe frozenset("CG", "AT")
+        self.ifnode = InterfaceNode(self)
         ## TODO: Many of these attributes are essentially duplicated in the ends5p3p system graph.
         ## Consider consolidating these in some way.
 

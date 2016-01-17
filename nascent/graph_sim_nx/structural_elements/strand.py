@@ -19,7 +19,7 @@
 
 """
 
-Module representing helices.
+Module representing strands. Not currently used.
 
 """
 

@@ -46,6 +46,7 @@ import networkx as nx
 from pprint import pprint
 from functools import wraps
 import pdb
+import numpy as np
 
 # Relative imports
 from .connected_multigraph import ConnectedMultiGraph
@@ -59,8 +60,10 @@ from .debug import printd, pprintd
 
 # Module-level constants and variables:
 make_sequential_id = sequential_number_generator()
+# A generator, get next sequential id with next(make_helix_sequential_id)
+helix_sequential_id_generator = sequential_number_generator()
 
-supercomplex_sequential_id_gen = sequential_number_generator()
+# supercomplex_sequential_id_gen = sequential_number_generator()
 
 
 def state_should_change(method):
@@ -195,6 +198,77 @@ class Complex(nx.MultiDiGraph):
         for domain in self.domains():
             self.domains_by_name[domain.name].add(domain)
             self.domain_species_counter[domain.name] += 1
+
+        ### Helix bundling: ###
+        # See also modules   helix_duplex  and   structural_elements.helix   !
+        # For now, a "helix" is just a set of fully hubridized and stacked Domain (or DomainEnd) nodes.
+        # Actually: What happens when merging two complexes? Keeping track of helix indices would be a pain.
+        # Probably best to have helix objects which can remain unique between complex merges.
+        # But: Making a new object for every hybridization reaction might be expensive (and un-cacheable).
+        # Better, then, to use helix_sequential_id_generator to generate unique numbers to identify helices with.
+        self.helices = set()
+        # For a pair of helices hi, hj: A list of paths connecting bp pos (or DomainEnd nodes) between hi hj:
+        # (hi, hj): [(hi_bpidx, hj_bpidx, [path]), ...]   or maybe   {(DomainEnd1, DomainEnd2): [path], ...} dict?
+        self.helix_connections = {}
+        # For each pair of helices ha, hb: For each pair of crossover paths ti, tj:
+        # A value denoting how "connected" the two helices are because of those two crossovers:
+        # B_ij = (len(t_i) + len(t_j))/(d1 + d2),   where d1 and d2 are distances between crossovers on ha and hb.
+        # This is effectively a matrix with indices same as for helix_connections, e.g.
+        # connection t_i in [t0, t1, ..., tj, ...] is index B[j,:] and B[:,j] in matrix B for helix-pair hi, hj.
+        # If connections don't have a regular index, consider using a numpy.array?
+        # Or just a dict {(ti, tj): b_ij}
+        self.helix_connectivities = {}
+        # For each pair of helices (ha, hb), the minimum b_ij of all b in matrix B:
+        self.helix_minimum_freedom_factor = {}
+        # When a new connection is made, instead of completely re-calculating B, just re-calculate for the new
+        # connection vs all existing connections and then see if any of these are less than the minimum b_ij.
+        # When a connection is broken, we must find the new minimum of the B matrix.
+        # Note that if a connection is broken due to a duplex-dehybridization reaction,
+        # you probably have to split up the matrix. Annoying, but should be doable.
+        # This is always the case when a helix-duplex is broken (unstacked, unhybridized),
+        # so the data structures should be small/light and easy to break down and re-build.
+        # It is probably nice to know given a DomainEnd node, whether it is part of a helix-duplex and which one:
+        self.helix_by_domainend = {}
+        # if domain_end in self.helix_by_domainend: helix = self.helix_by_domainend[domain_end]; ...
+        self.helix_bundles = []
+        self.helix_bundle_by_helix_idx = {}  # helix_idx:
+
+        ### Complex energy: ###
+        # Includes: Volume energies (for every bi-molecular reaction), Shape/Loop energy and of course,
+        # stacking- and hybridization energies. For each, we have both dH and dS.
+        # self.energies_dHdS = {'volume': [0, 0], 'shape': [0, 0],
+        #                       'stacking': [0, 0], 'hybridization': [0, 0]}
+        self.energies_dHdS = [{'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0},
+                              {'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0}]
+        self.energy_total_dHdS = [0, 0]
+        # energies_dHdS = np.array([(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)],
+        #     dtype=[('volume', float), ('shape', float), ('stacking', float), ('hybridization', float)])
+        # Edit: numpy's "structured array" is almost useless. Use ndarray if you want speed.
+
+
+        ### Keeping track of loops: ###
+        # Dict with loops. Keyed by ... ?
+        self.loops = {}
+        # For each loop, we have a dict with entries:
+        #     path_list: The original path with the nodes forming the loop in the ends.
+        #     nodes: frozenset of all nodes.
+        #     edges:    frozenset of all edges.
+        #     edges_specs: frozenset of all edges as Domain-species (rather than objects) - for caching.
+        #     edges_properties: a dict with {edge_spec: (length, len_sq, stiffness) tuples for each edge}
+        #     loop_entropy: a measure of the loops entropy in units of kb or R.
+        # The 'edges' entry is a frozenset of "edge_pairs", each edge_pair a tuple with
+        #   (frozenset(source, target), interaction_type)
+        #    -- hashing these gives "state-independent" loop fingerprint.
+        #    But if one strand/domain is replaced by another (but otherwise identical) strand, this hash changes.
+        # The 'edges_specs' is like edges, but uses domain species (e.g. 'A:5p', 'b:3p', etc).
+        # This should give the same hash for identical strands.
+        # The loop is keyed by the hash: loop_elms_hash = hash(edges_specs)
+        # If we want a state-dependent fingerprint, we could use:
+        #   hash(tuple(edge_spec+edges_properties[edge_spec] for edge_spec in edges_specs))
+
+        # We also want a way to quickly determine whether a DomainEnd node is part of a loop.
+        self.loops_by_domainend = defaultdict(set)  # DomainEnd => {loop1, loop3, ...}
+        # Should we use a set or list? We probably have random deletion of loops, so set is arguably better.
 
 
         ### Graphs: ###
@@ -888,32 +962,32 @@ class Complex(nx.MultiDiGraph):
 
 
 
-class SuperComplex(ConnectedMultiGraph):
-    """
-    Each node is a complex.
-    """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.scuid = next(supercomplex_sequential_id_gen)
-        # Use this or self.nodes() ??
-        self.complexes = set()
-        self.strands = set() # TODO: Add support for non-complexed strands in supercomplex
-        # Use this or self.edges() ??
-        # No, each node is a complex, stacking_pairs are pairs of:
-        # {(h1end3p, h2end5p), (h2end3p, h1end5p)}
-        self.stacking_pairs = set()
-        # Edge could be:
-        # c1, c2, key=bluntend_pair
-        self._state_fingerprint = None
-
-    def state_fingerprint(self):
-        if self._state_fingerprint is None:
-            hashes = frozenset(hash((cmplx.strands_fingerprint(),
-                                     cmplx.hybridization_fingerprint(),
-                                     cmplx.stacking_fingerprint()))
-                               for cmplx in self.complexes)
-            self._state_fingerprint = hashes
-        return self._state_fingerprint
-
-    def reset_state_fingerprint(self):
-        self._state_fingerprint = None
+# class SuperComplex(ConnectedMultiGraph):
+#     """
+#     Each node is a complex.
+#     """
+#     def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
+#         self.scuid = next(supercomplex_sequential_id_gen)
+#         # Use this or self.nodes() ??
+#         self.complexes = set()
+#         self.strands = set() # TODO: Add support for non-complexed strands in supercomplex
+#         # Use this or self.edges() ??
+#         # No, each node is a complex, stacking_pairs are pairs of:
+#         # {(h1end3p, h2end5p), (h2end3p, h1end5p)}
+#         self.stacking_pairs = set()
+#         # Edge could be:
+#         # c1, c2, key=bluntend_pair
+#         self._state_fingerprint = None
+#
+#     def state_fingerprint(self):
+#         if self._state_fingerprint is None:
+#             hashes = frozenset(hash((cmplx.strands_fingerprint(),
+#                                      cmplx.hybridization_fingerprint(),
+#                                      cmplx.stacking_fingerprint()))
+#                                for cmplx in self.complexes)
+#             self._state_fingerprint = hashes
+#         return self._state_fingerprint
+#
+#     def reset_state_fingerprint(self):
+#         self._state_fingerprint = None
