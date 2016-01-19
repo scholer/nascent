@@ -65,7 +65,7 @@ from pprint import pprint
 import networkx as nx
 from networkx.algorithms.components import connected_components, connected_component_subgraphs
 # import numpy as np
-# import pdb
+import pdb
 
 # from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
 #, R # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K
@@ -246,26 +246,37 @@ class ComponentMgr(GraphManager):
         self.domain_graph.add_edge(domain1, domain2, key=edge_key, attr_dict=edge_kwargs)
         self.ends5p3p_graph.add_edge(domain1.end5p, domain2.end3p, key=edge_key, attr_dict=edge_kwargs)
         self.ends5p3p_graph.add_edge(domain2.end5p, domain1.end3p, key=edge_key, attr_dict=edge_kwargs)
+        # Hybridization => merge two DomainEnds into a single node by delegating representation of one to the other.
+        end1_delegatee = self.interface_graph.merge(domain1.end5p.ifnode, domain2.end3p.ifnode)
+        end2_delegatee = self.interface_graph.merge(domain1.end3p.ifnode, domain2.end5p.ifnode)
+        # You could just use interface_graph[end1_delegate][end2_delegate] instead of looping...
+        # Remember, interface_graph.adj reflects the current *representation*. After merging/delegating ifnodes,
+        # the edges from delegator is no longer available. Either update edge before merge or only update delegatee.
+        self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_nm'] = domain1.ds_dist_ee_nm
+        self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_sq'] = domain1.ds_dist_ee_sq
+        self.interface_graph[end1_delegatee][end2_delegatee]['stiffness'] = 1
 
         # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
         for d in (domain1, domain2):
             if self.ends5p3p_graph.is_multigraph():
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_nm'] = d.ds_dist_ee_nm
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_sq'] = d.ds_dist_ee_sq
-                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['stiffness'] = 1  # ss backbone has zero stiffness
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['stiffness'] = 1
             else:
-                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_nm'] = d.ds_dist_ee_nm
-                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ds_dist_ee_sq
+                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_nm'] = d.ds_dist_ee_nm  # domain ds end-to-end dist
+                self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ds_dist_ee_sq  # cached squared result, nm2
                 self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 1  # ds helix has stiffness 1
-            # dist_ee_nm=HELIX_XOVER_DIST,
-            # dist_ee_sq=HELIX_XOVER_DIST**2
+            # Edit: only updating edges from delegatee not delegator edge.
+            # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_nm'] = d.ds_dist_ee_nm
+            # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_sq'] = d.ds_dist_ee_sq
+            # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['stiffness'] = 1
+
         if join_complex:
             result = self.join_complex_at(domain_pair=(domain1, domain2), edge_kwargs=edge_kwargs)
         else:
             c1 = strand1.complex
             if c1 is not None:
-                c1.history.append("hybridize: Adding edge (%r, %r, %r)." %
-                                       (domain1, domain2, edge_key))
+                # c1.history.append("hybridize: Adding edge (%r, %r, %r)." % (domain1, domain2, edge_key))
                 # I'm experimenting having Complex being a DiGraph...
                 c1.add_hybridization_edge((domain1, domain2))
                 # c1.add_edge(domain1, domain2, key=edge_key, attr_dict=edge_kwargs)
@@ -330,6 +341,9 @@ class ComponentMgr(GraphManager):
         self.domain_graph.remove_edge(domain1, domain2, key=edge_key)
         self.ends5p3p_graph.remove_edge(domain1.end5p, domain2.end3p, key=edge_key)
         self.ends5p3p_graph.remove_edge(domain2.end5p, domain1.end3p, key=edge_key)
+        # Dehybridization => Undo the effect of current InterfaceNode delegation:
+        self.interface_graph.split(domain1.end5p.ifnode, domain2.end3p.ifnode)
+        self.interface_graph.split(domain1.end3p.ifnode, domain2.end5p.ifnode)
 
         # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
         for d in (domain1, domain2):
@@ -342,6 +356,9 @@ class ComponentMgr(GraphManager):
                 self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_nm'] = d.ss_dist_ee_nm
                 self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ss_dist_ee_sq
                 self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 0  # ss backbone has zero stiffness
+            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_nm'] = d.ss_dist_ee_nm
+            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_sq'] = d.ss_dist_ee_sq
+            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['stiffness'] = 0
 
         ## If domain is stacked, break the stacking interaction before breaking complex:
         ## Edit/new: Domains CANNOT dehybridize if they are stacked
@@ -494,6 +511,8 @@ class ComponentMgr(GraphManager):
         self.domain_graph.add_edge(h2end3p.domain, h2end5p.domain, key=h2_edge_key, attr_dict=edge_kwargs)
         self.ends5p3p_graph.add_edge(h1end3p, h1end5p, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
         self.ends5p3p_graph.add_edge(h2end3p, h2end5p, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
+        # Stacking => merge two DomainEnds into a single node by delegating representation of one to the other.
+        delegatee = self.interface_graph.merge(h1end3p.ifnode.top_delegate(), h2end3p.ifnode.top_delegate())
 
         if join_complex and self.stacking_joins_complexes:
             result = self.join_complex_at(stacking_pair=stacking_tuple, edge_kwargs=edge_kwargs)
@@ -584,6 +603,15 @@ class ComponentMgr(GraphManager):
         self.domain_graph.remove_edge(h2end3p.domain, h2end5p.domain, key=h2_edge_key)
         self.ends5p3p_graph.remove_edge(h1end3p, h1end5p, key=STACKING_INTERACTION)
         self.ends5p3p_graph.remove_edge(h2end3p, h2end5p, key=STACKING_INTERACTION)
+        #             h1end3p         h1end5p
+        # Helix 1   ----------3' : 5'----------
+        # Helix 2   ----------5' : 3'----------
+        #             h2end5p         h2end3p
+        # Stacking => merge two DomainEnds into a single node by delegating representation of one to the other.
+        end1_delegatee = h1end3p.ifnode if h1end3p.ifnode.delegatee is None else h2end5p.ifnode
+        end2_delegatee = h2end3p.ifnode if h2end3p.ifnode.delegatee is None else h1end5p.ifnode
+        # Cannot use top_delegate, that would just get the same for both, have to find the delegate for each duplex.
+        delegatee = self.interface_graph.split(end1_delegatee, end2_delegatee)
 
         if break_complex and self.stacking_joins_complexes:
             result = self.break_complex_at(stacking_pair=stacking_tuple)
@@ -991,5 +1019,3 @@ class ComponentMgr(GraphManager):
             assert all(end.stack_partner is None for end in (h1end3p, h2end5p, h2end3p, h1end5p))
 
         return result
-
-

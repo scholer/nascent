@@ -48,6 +48,16 @@ def parse_strand_domains_file(filepath, sep1="\t", sep2=",", n_clones_default=1)
     with open(filepath) as fp:
         _ = next(fp).split()    # header
         lines = [[cell.strip() for cell in line.strip().split(sep1)] for line in fp if line[0] != "#"]
+    return strands_from_stranddefs_lines(lines, sep2=sep2, n_clones_default=n_clones_default)
+
+def parse_strand_domains_text(text, sep1="\t", sep2=",", n_clones_default=1):
+    """ Make Strands from strand-def text string. Do NOT include header. """
+    lines = [[cell.strip() for cell in line.strip().split(sep1)] for line in text.split("\n")
+              if len(line) > 0 and line[0] != "#"]
+    return strands_from_stranddefs_lines(lines, sep2=sep2, n_clones_default=n_clones_default)
+
+def strands_from_stranddefs_lines(lines, sep2=",", n_clones_default=1):
+    """ Common function to get Strands (with Domains) from strand-def lines. """
     strands = []
     for i, line in enumerate(lines, 2):
         strand_name = line[0]

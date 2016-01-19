@@ -267,7 +267,7 @@ class Complex(nx.MultiDiGraph):
         #   hash(tuple(edge_spec+edges_properties[edge_spec] for edge_spec in edges_specs))
 
         # We also want a way to quickly determine whether a DomainEnd node is part of a loop.
-        self.loops_by_domainend = defaultdict(set)  # DomainEnd => {loop1, loop3, ...}
+        self.loops_by_interface = defaultdict(set)  # InterfaceNode => {loop1, loop3, ...}
         # Should we use a set or list? We probably have random deletion of loops, so set is arguably better.
 
 

@@ -23,13 +23,14 @@ from networkx.algorithms.shortest_paths import shortest_path
 # import numpy as np
 import math
 import itertools
+from itertools import chain, groupby
 from pprint import pprint
-
+from operator import itemgetter
 
 from .system_graphs import InterfaceGraph
 from .nx_utils import draw_graph_and_save
 from .structural_elements.strand import SingleStrand
-from .structural_elements.helix import DsHelix
+from .structural_elements.helix import DoubleHelix
 from .structural_elements.bundle import HelixBundle
 from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
@@ -157,7 +158,7 @@ class GraphManager():
         self.ends5p3p_graph = ends5p3p_graph or nx.MultiGraph()
         self.domain_graph = domain_graph or nx.MultiGraph()
         self.strand_graph = strand_graph or nx.MultiGraph()
-        self.interfaces_graph = InterfaceGraph()
+        self.interface_graph = InterfaceGraph()
         if strands:
             # TODO: Add strand-node attrs to strand-graph:
             # TODO: Add "Label" attr to all nodes (for Gephi)
@@ -168,20 +169,20 @@ class GraphManager():
                 self.ends5p3p_graph.add_nodes_from(strand.ends5p3p_graph.nodes(data=True))
                 self.ends5p3p_graph.add_edges_from(strand.ends5p3p_graph.edges(keys=True, data=True))
 
-                # self.interfaces_graph.add_nodes_from(
+                # self.interface_graph.add_nodes_from(
                 #     end for end5p in strand.ends5p3p_graph.nodes() if isinstance(end5p, DomainEnd5p)
                 #     for end in (end5p, end5p.bp_downstream) if end is not None)
-                # self.interfaces_graph.add_nodes_from(
+                # self.interface_graph.add_nodes_from(
                 #     InterfaceNode((end5p, end5p.bp_downstream) if end5p.bp_downstream else (end5p, ))
                 #     for end5p in strand.ends5p3p_graph.nodes() if isinstance(end5p, DomainEnd5p))
                 ## Edit: InterfaceNodes are now a persistent part of DomainEnds
-        self.interfaces_graph.add_nodes_from(end.ifnode for end in self.ends5p3p_graph.nodes())
+        self.interface_graph.add_nodes_from(end.ifnode for end in self.ends5p3p_graph.nodes())
         domain_end_edges = self.ends5p3p_graph.edges(data=True, keys=True)
         # We must start from a graph without hybridization/stacking.
         # If we have hybridization/stacking, we have to perform node-delegation on those nodes
         # and we don't want to implement that right now...
         assert all(key == PHOSPHATEBACKBONE_INTERACTION for source, target, key, data in domain_end_edges)
-        self.interfaces_graph.add_edges_from((source.ifnode, target.ifnode, data)
+        self.interface_graph.add_edges_from((source.ifnode, target.ifnode, data)
             for source, target, key, data in domain_end_edges)
 
         ### Other attributes: ###
@@ -190,7 +191,6 @@ class GraphManager():
         ### Loops: ###
         # We currently just use domain objects to track loops. Could probably be domain species.
         self.enable_loop_tracking = True
-
 
 
 
@@ -226,6 +226,51 @@ class GraphManager():
             if i > 0:
                 remaining_domains = remaining_domains[i:]
 
+
+    def group_interfaces_path_by_stiffness(self, path):
+        """
+        Returns a list of structural elements based on a interface-level path (list of InterfaceGraph nodes),
+        where neighboring edges with the same stiffness has been grouped:
+        path_edges = [(stiffness, [(length, length_sq, stiffness, source, target), ...]),
+                      (stiffness, [(length, length_sq, stiffness, source, target), ...]),
+                      (stiffness, [(length, length_sq, stiffness, source, target), ...]),
+                      ...]
+        That is, if the path is:
+            4 nm ss-backbone + 3 nm ss-backbone + 5 nm ds+backbone + 1 nm ss-backbone + 2 nm ds-backbone + 8 nm ds-backbone,
+        The result is:
+            [(0, [(4 nm, 16 nm2, source, target), (3 nm, 9 nm2, source, target)]),
+             (1, [(5 nm, 25 nm2, source, target)]),
+             (0, [(1 nm, 1 nm2, source, target)]),
+             (1, [(2 nm, 4 nm2, source, target), (8 nm, 64 nm2, source, target)])]
+
+        Where stiffness=0 indicates a list of single-stranded edges,
+        stiffness=1 indicates a hybridized duplex edge, and stiffness=3 is used for helix-bundles.
+        """
+        ## First create a generator of (length, length_sq, stiffness, source, target)
+        ## Then use itertools.groupby to group elements by stiffness
+        ## https://docs.python.org/3/library/itertools.html#itertools.groupby
+        path_source_target_eattr = ((source, target, self.interface_graph[source][target])
+                                    for source, target in zip(path, path[1:]))
+        path_tuples = ((edge_attrs['dist_ee_nm'], edge_attrs['dist_ee_sq'], edge_attrs['stiffness'], source, target)
+                        for source, target, edge_attrs in path_source_target_eattr)
+        stiffness_key = itemgetter(2) # Because stiffness = path_tup[2] for path_tup i path_tuples
+        return itertools.groupby(path_tuples, key=stiffness_key)
+
+
+    def interfaces_path_summary(self, path):
+        """
+        Return a list of (stiffness, [length, sum_length_squared]) tuples
+        where each tuple represents a path segment with the same stiffness.
+        This basically reduces the path to its constituent parts, which are usually all
+        that is needed to calculate end-to-end probability distribution functions.
+        """
+        grouped_path_edges = self.group_interfaces_path_by_stiffness(path)
+        # Trim away stiffness, source, target from (length, length_sq, stiffness, source, target) tuples:
+        # zip(*[(1,1), (2, 4), (3, 9), (4, 16)]) = [(1, 2, 3, 4), (1, 4, 9, 16)]
+        return [(stiffness, [sum(lengths) for lengths in zip(*[tup[:2] for tup in elem_tuples])])
+                for stiffness, elem_tuples in grouped_path_edges]
+
+
     def ends5p3p_path_partial_elements(self, path, length_only=False, summarize=False):
         """
         Returns a list of structural elements based on a 5p3p-level path (list of DomainEnd nodes).
@@ -245,6 +290,7 @@ class GraphManager():
         stiffness = None
         last_stiffness = None
         stiffness_group = None
+        ## CONGRATS: YOU JUST RE-INVENTED itertools.groupby()
         for i in range(len(path)-1):
             # source, target are DomainEnd instances, either end5p, end3p or reversed.
             source, target = path[i], path[i+1]
@@ -306,6 +352,13 @@ class GraphManager():
         """
         return shortest_path(self.domain_graph, domain1, domain2)
 
+    def interfaces_shortest_path(self, ifnode1, ifnode2):
+        """
+        TODO: This should certainly be cached.
+        """
+        if isinstance(ifnode1, DomainEnd):
+            ifnode1, ifnode2 = ifnode1.ifnode.top_delegate(), ifnode2.ifnode.top_delegate()
+        return shortest_path(self.interface_graph, ifnode1, ifnode2)
 
     def ends5p3p_shortest_path(self, end5p3p1, end5p3p2):
         """ :end5p3p1:, :end5p3p2: DomainEnd nodes (either End5p or End3p),
@@ -318,6 +371,142 @@ class GraphManager():
 
 
     def intracomplex_activity(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION):
+        r"""
+        Returns
+            :intracomplex_activity:
+        between domain1 and domain2, so that
+            c_j = k_j * intracomplex_activity
+        The intracomplex activity is basically just:
+            activity = 1 / (N_A * effective_volume) = N_A⁻¹ * Ω⁻¹    [unit: M = mol/L]
+        where NA is Avogadro's constant, 6.022e23/mol.
+        """
+        if reaction_type is HYBRIDIZATION_INTERACTION:
+            domain1, domain2 = elem1, elem2
+            cmplx = domain1.strand.complex
+            d1end5p, d2end5p = domain1.end5p, domain2.end5p
+            d1end3p, d2end3p = domain1.end3p, domain2.end3p
+            # path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
+            path = shortest_path(self.interface_graph,
+                                 d1end5p.ifnode.top_delegate(),
+                                 d2end5p.ifnode.top_delegate())
+            slice_start = 1 if path[1] == d1end3p else 0
+            slice_end = -1 if path[-2] == d2end3p else None
+            if slice_start == 1 or slice_end is not None:
+                path = path[slice_start:slice_end]
+        elif reaction_type is STACKING_INTERACTION:
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = elem1, elem2
+            cmplx = h1end5p.domain.strand.complex
+            # import pdb; pdb.set_trace()
+            #             h1end3p         h1end5p
+            # Helix 1   ----------3' : 5'----------
+            # Helix 2   ----------5' : 3'----------
+            #             h2end5p         h2end3p
+            path = shortest_path(self.interface_graph,
+                                 h1end3p.ifnode.top_delegate(),
+                                 h2end3p.ifnode.top_delegate())
+            slice_start = 1 if path[1] == h2end5p else 0
+            slice_end = -1 if path[-2] == h1end5p else None
+            if slice_start == 1 or slice_end is not None:
+                path = path[slice_start:slice_end]
+        else:
+            assert isinstance(elem1, DomainEnd) and isinstance(elem2, DomainEnd)
+            d1end5p, d2end5p = elem1, elem2
+            cmplx = d1end5p.domain.strand.complex
+            # domain1, domain2 = d1end5p.domain, d2end5p.domain # only used for debugging
+            # path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
+            path = shortest_path(self.interface_graph,
+                                 d1end5p.ifnode.top_delegate(),
+                                 d2end5p.ifnode.top_delegate())
+            slice_start, slice_end = 0, None
+
+
+        # TODO: Rename to "path_summary"
+        path_elements = self.interfaces_path_summary(path)
+        # path_summary is a list of (stiffness, [length, sum_length_squared]) tuples
+
+
+        ## TODO: CHECK FOR SECONDARY LOOPS!
+        ## We can easily do this simply by whether the two nodes are already in an existing loop.
+        if path[0] in cmplx.loops_by_interface and len(cmplx.loops_by_interface[path[0]]) > 0 \
+            and path[-1] in cmplx.loops_by_interface and len(cmplx.loops_by_interface[path[-1]]) > 0:
+            # We have a secondary loop.
+            shared_loops = cmplx.loops_by_interface[path[0]] & cmplx.loops_by_interface[path[-1]]
+            assert len(shared_loops) > 0
+            # Can we always use the smallest loop, or is there a particular order that must be obeyed?
+            smallest_loop = min(shared_loops, key=lambda loop: len(loop['nodes']))
+            path1_nodes = set(path)
+            assert all(node in smallest_loop['nodes'] for node in path)
+            assert path1_nodes <= smallest_loop['nodes']  # Using set operations is faster
+            # Set operators: &: intersection, -: difference), ^: symmetric_difference, <=: is subset, >=: superset.
+            path2_nodes = smallest_loop['nodes'] - path1_nodes
+
+
+        ## Find LRE and SRE parts
+        ## TODO: Replace "element" by "segment", which better describes that a segment is composed of one or more
+        ## edges with same stiffness.
+        try:
+            # LRE: "Longest Rigid Element"; "SRE": "Sum of Remaining Elements".
+            _, LRE_len, LRE_len_sq, LRE_idx = max((stiffness, elem_length, elem_len_sq, i)
+                                                  for i, (stiffness, (elem_length, elem_len_sq))
+                                                  in enumerate(path_elements)
+                                                  if stiffness > 0)
+            # No need to check if LRE_len <= HELIX_WIDTH - InterfaceGraph only includes backbone connections.
+        except ValueError:
+            # No stiff elements: (summarizing segment_len_sq is OK for non-stiff, single-stranded segments)
+            LRE_len, LRE_len_sq = 0, 0
+            SRE_len = sum(elem_length for (stiffness, (elem_length, elem_len_sq)) in path_elements if stiffness == 0)
+            SRE_len_sq = sum(elem_len_sq for (stiffness, (elem_length, elem_len_sq)) in path_elements if stiffness == 0)
+        else:
+            # Exclude LRE when calculating SRE length:
+            # Don't sum segment_len_sq for stiff segments; You must, instead, square the total segment_length.
+            if len(path_elements) > 1:
+                SRE_lengths_and_sq = [(elem_length, elem_length**2 if stiffness > 0 else elem_len_sq)
+                                      for sub_path in (path_elements[:LRE_idx], path_elements[LRE_idx+1:])
+                                      for stiffness, (elem_length, elem_len_sq) in sub_path]
+                SRE_len, SRE_len_sq = [sum(vals) for vals in zip(*SRE_lengths_and_sq)]
+            else:
+                # SRE_lengths, SRE_sq_lengths = [], []
+                SRE_len, SRE_len_sq = 0, 0
+
+        if LRE_len > SRE_len:
+            # The domains cannot reach each other. (Unless we allow helical bending which is not yet implemented)
+            return 0
+
+        # If LRE is significant, then we cannot use the simple end-end-distance < rc approximation. Instead, we must
+        # consider the end-to-end PDF of the SRE part at radius r=LRE_len and within critical volume v_c.
+        # Can this be approximated by a simple LRE factor?
+        # LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq)) if LRE_len_sq > 0 else 1
+
+        gamma_corr = 1
+        if LRE_len_sq > SRE_len_sq:
+            # Domains can reach, but requires the SRE to extend beyond the mean squared end-to-end distance.
+            # Should probably be approximated with some continuous function.
+            # gamma = (3/2)*gamma_corr;
+            gamma_corr += 0.5
+
+        ## Calculate mean end-to-end squared distance between the two domains, aka E_r_sq:
+        # We already have the squared length, Nᵢbᵢ², so we just need to sum LRE and SRE:
+        ## EDIT, no, wait - if we have stacked, stiff double-helices/helix-bundles, then we CANNOT
+        ## just add the squared lengths together. We have to square the entire element length.
+        ## We can do it for ss-helices, since the "squared length" is already just N_nt*ss_rise_per_nt*ss_kuhn_length,
+        ## but that isn't valid for fully-stacked continuous segments of ds-helices.
+        ## Done: Re-calculate SRE_len_sq based on the summarized segment lengths, not the path edges.
+
+
+        mean_sq_ee_dist = LRE_len_sq + SRE_len_sq       # unit of nm
+        # There shouldn't be any need to test for if mean_sq_ee_dist <= HELIX_XOVER_DIST**2 in the InterfaceGraph
+
+        ## Note: "effective_volume" is just an informal term for P_loop(rc) / P_v0(rc) x AVOGADRO_VOLUME_NM3
+        effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2)
+        activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3
+        if gamma_corr > 1:
+            activity = activity**gamma_corr
+
+        return activity
+
+
+
+    def intracomplex_activity_old(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION):
         r"""
         Returns
             :intracomplex_activity:
@@ -387,6 +576,21 @@ class GraphManager():
             domains can hybridize under helix bending energy EB.
         7. Otherwise, if the LRE is longer than the SRE and the LRE is a rigid multi-bundle element,
             then for now we assume that the domains cannot bind.
+
+        ## Regarding "effective volume" vs P_loop/P_v0: ##
+        Using "effective volume" is more intuitive than P^rc_loop/P^rc_v0.
+        However, stricly speaking we ARE considering reactant proximity/localization/collision probability
+        relative to standard conditions (1 M) using probability distribution function of the loop-connected reactants.
+        This happens to reduce to something that looks like P_loop/P_v0 = v_0/v_eff,
+        where we can use the mean squared end-to-end distance (mean_sq_ee_dist aka E[r²]) to calculate v_eff.
+        However, this is just an approximation valid only for E[r²] >> rc (rc = critical interaction distance),
+        which happens to reduce to a simple expression for P_loop and an expression for P_loop/P_v0 that does not
+        depend on rc. In general, especially if rc is significant, P_loop/P_v0 could very well depend on rc!
+        There is also no general guarantee that the expression for P_rel = P_loop/P_v0 will reduce to something with
+        an easily-identifiable v_eff subexpression. In that case we can simply define v_eff as
+          v_eff = v_0 * P_v0(rc) / P_loop(rc) = v_0 / P_rel(rc)       # P_rel < 1 (unless they are really close)
+        although in practice we would not need to calculate v_eff, we would just use
+          activity = P_v0(rc) / P_loop(rc) × M
 
         Regarding mixed-level optimization (APPROXIMATION!):
         1. Get the path at the strand level
@@ -515,6 +719,7 @@ class GraphManager():
             path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
             slice_start, slice_end = 0, None
         else:
+            # Assume stacking interaction:
             # TODO: Consolidate this for domain hybridization and end stacking
             (h1end3p, h2end5p), (h2end3p, h1end5p) = elem1, elem2
             cmplx = h1end5p.domain.strand.complex
@@ -533,6 +738,7 @@ class GraphManager():
         # import pdb; pdb.set_trace()
 
         ## TODO: CHECK FOR SECONDARY LOOPS!
+        ## We can easily do this simply by whether the two nodes are already in an existing loop.
         if path[0] in cmplx.loops_by_domainend and len(cmplx.loops_by_domainend[path[0]]) > 0 \
             and path[-1] in cmplx.loops_by_domainend and len(cmplx.loops_by_domainend[path[-1]]) > 0:
             # We have a secondary loop.
@@ -546,7 +752,7 @@ class GraphManager():
             # Set operators: & = intersection, - = difference, ^ = symmetric_difference, <= subset, >= superset.
             path2_nodes = smallest_loop['nodes'] - path1_nodes
 
-        # path_elements is a list of tuples with: [(stiffness, total-length, sum-of-squared-lengths), ...]
+        # path_elements is a list of tuples as: [(stiffness, (total-length, sum-of-squared-lengths)), ...]
         # For rigid, double-helical elements, element length, l, is N_bp * 0.34 nm.
         # For single-stranded elements, we estimate the end-to-end distance by splitting the strand into
         #   N = N_nt*0.6nm/1.8nm segments, each segment being the Kuhn length 1.8 nm of ssDNA,
@@ -554,7 +760,7 @@ class GraphManager():
         #   E[r²] = ∑ Nᵢbᵢ² for i ≤ m = N (1.8 nm)²
         #         = round(N_nt*0.6nm/1.8nm) (1.8 nm)² = N_nt * 0.6/1.8 * 1.8*1.8 nm² = N_nt 0.6*1.8 nm²
         #         = N_nt * lˢˢ * λˢˢ = N_nt * 1.08 nm²
-        # Why use stiffness as first maximum criteria??
+        # Why use stiffness as first maximum criteria?? Shouldn't it just be stiffness > 0? Meh.
         try:
             # LRE: "Longest Rigid Element"; "SRE": "Sum of Remaining Elements".
             _, LRE_len, LRE_len_sq, LRE_idx = max((stiffness, elem_length, elem_len_sq, i)

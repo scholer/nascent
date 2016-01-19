@@ -22,19 +22,19 @@
 """
 
 Module for representing system-level graphs (where each complex form it's own subgraph)
- - domains
- - strands
+ - DomainEnds graph
+ - Interface graph (where hybridized/stacked DomainEnds are merged/collapsed into a single node.)
+ - Domains graph
+ - Strands graph
 
 
 """
 
 from collections import defaultdict
 import networkx as nx
-# import pdb
-# from pprint import pprint
 
-from nascent.graph_sim_nx.constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION,
-                                            STACKING_INTERACTION)
+# Local imports:
+from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)
 
 
 
@@ -59,36 +59,37 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         Then we wouldn't have to spend as much time determining whether edges should be removed or not.
     """
 
-    def check_all_edges(self, do_raise=True):
-        """ Quickly check that self.adj[source][target] is equivalent to self.adj[target][source] """
-        all_ok = True
-        for source in self.adj:
-            for target in self.adj[source]:
-                try:
-                    assert source in self.adj[target]
-                except AssertionError as e:
-                    all_ok = False
-                    print("FAIL: source %s not in self.adj[%s] = %s" % (source, target, self.adj[target]))
-                    if do_raise:
-                        raise e
-                try:
-                    assert target in self.adj[source]
-                except AssertionError as e:
-                    all_ok = False
-                    print("FAIL: target %s not in self.adj[%s] = %s" % (target, source, self.adj[source]))
-                    if do_raise:
-                        raise e
-                try:
-                    assert self.adj[source][target] == self.adj[target][source]
-                except AssertionError as e:
-                    all_ok = False
-                    print("FAIL: self.adj[%s][%s] != self.adj[%s][%s]" % (source, target, target, source))
-                    if do_raise:
-                        raise e
-                except KeyError:
-                    pass
-        if all_ok:
-            print("All edged checked OK.")
+    def merge(self, node1, node2):
+        """
+        Merge representation of node1 and node2.
+        Returns the delegatee.
+        Mostly equivalent to calling self.delegate(node1, node2), but will also set node attributes e.g. size.
+        Synonyms: merge, fuse, join, unite, connect, link, collect, combine, collapse,
+        """
+        self.delegate(node1, node2)
+        try:
+            self.node[node2]['size'] += 1
+            self.node[node1]['size'] -= 1
+        except KeyError:
+            self.node[node2]['size'] = 2
+            self.node[node1]['size'] = 0
+        return node2
+
+    def split(self, node1, node2):
+        """
+        Undo collapse/merge of node1 and node2 by determining which node is delegator and which is delegatee,
+        and then calling undelegate(delegator, delegatee) accordingly.
+        Returns the delegatee.
+        Synonyms: split, part, separate, divide, disjoin, sever, slice, disunite
+        """
+        if node1.delegatee is not None:
+            delegator, delegatee = node1, node2
+        else:
+            delegator, delegatee = node2, node1
+        self.undelegate(delegator, delegatee)
+        self.node[delegator]['size'] += 1
+        self.node[delegatee]['size'] -= 1
+        return delegatee
 
 
     def delegate(self, delegator, delegatee):
@@ -149,7 +150,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
                     self.adj[target][delegatee]['edge_count'] = 2
             del self.adj[target][delegator]
             # del self.adj[delegator][target]  # cannot delete entries from dict while iterating over it.
-            # (but, you can just convert the dict.keys() iterator to a list and THEN you can delete entries in-place.)
+            # (but, you could have converted the dict.keys() iterator to a list and THEN delete entries in-place.)
         # 2b. Remove all outgoing edges from delegator:
         self.adj[delegator] = {} # Do not use self.adj[delegator].clear(); that will clear target_nodes in-place
         # delegatee.delegated_edges[delegator] = target_nodes
@@ -161,9 +162,6 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         """
         Reverse the effect of delegate.
         """
-        # print("adj before undelegating %s from %s:" % (delegator, delegatee))
-        # pprint(self.adj)
-        #pdb.set_trace()
 
         ## 0. Make sure everything looks right:
         assert delegator.delegatee is delegatee
@@ -261,37 +259,6 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         #             self.adj[delegator][target_delegate]['edge_count'] = 1
 
 
-
-
-        ### Old code from when I was using the 'nested' delegated_edges data structure.
-        # target_nodes = delegatee.delegated_edges.pop(delegator)
-        # # del delegatee.delegated_edges[delegator]
-        # remaining_delegatee_targets = {target for delegator, targets in delegatee.delegated_edges.items()
-        #                                for target in targets}
-        # #self.adj[delegator].update(target_nodes) # done below in the for-loop
-        # for target, eattr in target_nodes.items():
-        #     assert delegator not in self.adj[target]
-        #     assert target not in self.adj[delegator]
-        #     self.adj[target][delegator] = eattr
-        #     self.adj[delegator][target] = eattr
-        #     print("self.adj[%s][%s] = %s" % (delegator, target, eattr))
-        #     if target not in remaining_delegatee_targets:
-        #         if target not in self.adj[delegatee] or delegatee not in self.adj[target]:
-        #             print(target in self.adj[delegatee], delegatee in self.adj[target])
-        #             pdb.set_trace()
-        #         print("del self.adj[%s][%s]" % (delegatee, target))
-        #         del self.adj[delegatee][target]
-        #         print("del self.adj[%s][%s]" % (target, delegatee))
-        #         del self.adj[target][delegatee]
-        #     else:
-        #         # We still have an edge from delegatee to target.
-        #         pass
-        # # Alternative to above: map(self.adj[delegatee].__delitem__, target_nodes)
-        # delegator.delegatee = None
-        # print("adj *after* undelegating %s from %s:" % (delegator, delegatee))
-        # pprint(self.adj)
-
-
     def add_edges_from(self, ebunch, attr_dict=None, **attr):
         """
         Add edges as "native" edges between nodes.
@@ -318,6 +285,52 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         v.delegated_edges[v][u] = self.adj[v][u]
         # print("%s.delegated_edges: %s" % (u, u.delegated_edges))
         # print("%s.delegated_edges: %s" % (v, v.delegated_edges))
+
+    def top_delegate(self, node):
+        """
+        Find the top delegate node. This graph-level method relies on in-graph node attribute 'delegatee',
+        i.e. instead of ifnode.delegatee object attribute, it calls self.node[node]['delegatee'] dict entry.
+        """
+        try:
+            node_delegatee = self.node[node]['delegatee']
+        except KeyError:
+            self.node[node]['delegatee'] = node_delegatee = None
+        if node_delegatee is None:
+            return self
+        else:
+            return self.top_delegate(node_delegatee)
+
+
+    def check_all_edges(self, do_raise=True):
+        """ Quickly check that self.adj[source][target] is equivalent to self.adj[target][source] """
+        all_ok = True
+        for source in self.adj:
+            for target in self.adj[source]:
+                try:
+                    assert source in self.adj[target]
+                except AssertionError as e:
+                    all_ok = False
+                    print("FAIL: source %s not in self.adj[%s] = %s" % (source, target, self.adj[target]))
+                    if do_raise:
+                        raise e
+                try:
+                    assert target in self.adj[source]
+                except AssertionError as e:
+                    all_ok = False
+                    print("FAIL: target %s not in self.adj[%s] = %s" % (target, source, self.adj[source]))
+                    if do_raise:
+                        raise e
+                try:
+                    assert self.adj[source][target] == self.adj[target][source]
+                except AssertionError as e:
+                    all_ok = False
+                    print("FAIL: self.adj[%s][%s] != self.adj[%s][%s]" % (source, target, target, source))
+                    if do_raise:
+                        raise e
+                except KeyError:
+                    pass
+        if all_ok:
+            print("All edged checked OK.")
 
 
     def print_delegate_info(self):
@@ -352,17 +365,32 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
 
 class InterfaceNode():
     """
-    How should delegate_edges be ordered? Should the delegator be the "original" node, or the
+    Node for use by InterfaceGraph.
+    Each node represents one or more DomainEnds, which, when stacked or hybridized, is collapsed into a single
+    InterfaceNode representation. This is akind to having a single DomainEnd node representing multiple DomainEnds.
+    Since stacking and hybridization causes InterfaceNodes to be merged, rather than connecting them by a new edge,
+    all edges between InterfaceNodes are phosphate-backbone edges.
+    Attributes:
+    :domain_end:    The original DomainEnd instance represented by this InterfaceNode.
+    :delegatee:     If graph representation of this node has been delegated to another node, this node is stored here.
+    :delegated_edges: A dict holding *all* edges represented by this node, including the original set of edges,
+                    with the form: {original_delegator_node1: {target_node1: eattr_dict, ...}, ...}.
+                    Since delegated_edges includes this node it self, it is guaranteed that delegated_edges will
+                    include self as key-element, with the original targets-dict as values. There are a number of
+                    alternative datastructure implementations for this model, c.f. discussion below.
+
+    Old discussion: How should delegate_edges be ordered?  [Selected implementation: (a)]
     For instance, consider the graph
-        0------1---2-------3        0---.  1        .----3
-                                         `.----2---:
-        4------5---6-------7        4----´ 5   6    `---7
+        0------1---2-------3     0---.  1        .----3     0---.  1        .---3
+                                      `.5---2---:                `.----2---:
+        4------5---6-------7     4----´     6    `---7      4----´ 5   6    `---7
     Where 5 was delegated to 1 and (1 and 6) was delegated to 2.
     I.e from 5 we have a tree delegation branch: 5 --> 1 --> 2
-    What should the datastructure of IN2 delegated_edges be w.r.t. 5 ?
-     (a)    5 => {4: {}, 6: {}}, 1 => {0: {}, 2: {}} - i.e. store the *original* {source: targets} edges.
-     (b)    1 => {4: {}, 6: {}, 0: {}, 2: {}}        - and then in node 1 have {5 => {4: {}, 6: {}}}
-     (c)    1 => {5 => {4: {}, 6: {}}, 1 => {0: {}, 2: {}}}  - i.e. nested, 1 level for each delegation.
+
+    Considerations on the datastructure of delegated_edges, e.g. node 1 be w.r.t. node 5 (1-level merge):
+     (a)    {5: {4: {}, 6: {}}, 1: {0: {}, 2: {}}}       - i.e. store the *original* {source: targets} edges.
+     (b)    {1: {4: {}, 6: {}, 0: {}, 2: {}}}            - and then in node 1 have {5 => {4: {}, 6: {}}}
+     (c)    {1: {5: {4: {}, 6: {}}, 1: {0: {}, 2: {}}}}  - i.e. nested, 1 level for each delegation.
 
     Option (a) seems simplest: Any element in delegate_edges will *always* be an *original* edge,
     corresponding 1:1 to an edge in the ends5p3p graph.
@@ -383,6 +411,19 @@ class InterfaceNode():
             a top delegatee or any of the delegators below it shares an edge to the same target.
             One way this could happen is if we have a single-domain circular duplex
             where the 3p end stack with the 5p end of the same domain. We generally do not permit that.
+    We've selected option (a), so delegated_edges [for the merged example to the right] has structure:
+        Node 2 delegated_edges: {2: {1: {}, 3: {}},   # The original phosphate-backbone targets for node 2
+                                 6: {5: {}, 7: {}},   # Phosphate-backbone targets delegated from node 6.
+                                 5: {4: {}, 6: {}},   # Targets delegated from node 5
+                                 1: {0: {}, 2: {}}}   # Delegated from node 1 (which were delegated to 5 and then 2).
+        Node 5 delegated_edges: {5: {4: {}, 6: {}},   # Node 5's original backbone targets.
+                                 1: {0: {}, 2: {}}}   # Targets delegated from node 1.
+        Node 1 delegated_edges: {1: {0: {}, 2: {}}}   # Node 1's original backbone targets.
+        Node 6 delegated_edges: {6: {5: {}, 7: {}}}   # Node 6's original backbone targets.
+        Node 0 delegated_edges: {0: {1: {}}}          # Node 0's original backbone targets.
+        Node 3, 4, 7 are similar to node 0.
+        As you can see, the content of an InterfaceNode's delegated_edges does not change when it is being delegated
+        to another node. This makes it cheaper to "reverse" a node-merge.
 
     """
     def __init__(self, domain_end):
@@ -402,9 +443,10 @@ class InterfaceNode():
             return self.delegatee.top_delegate()
 
     def __str__(self, ):
-        return "I:" + str(self.domain_end)
+        return "I:" + self.domain_end.name
 
     def __repr__(self, ):
+        #return "I:" + str(self.domain_end)
         return str(self) # + " at " + str(hex(id(self)))
 
     def __lt__(self, other_node):
