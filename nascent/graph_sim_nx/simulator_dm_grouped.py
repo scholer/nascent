@@ -155,7 +155,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)
         self.print_post_step_fmt = ("\r{self.N_steps: 5} "
-                                    "[{self.sim_system_time:0.02e}"
+                                    "[{sysmgr.system_time:0.02e}"
                                     " {stats[tau]:0.02e}"
                                     " {stats[tau_mean]:0.02e}] "
                                     "[{timings[step_time]:0.02e}] "
@@ -178,10 +178,10 @@ class DM_SimulatorUngrouped(DM_Simulator):
         """
         self.timings['simulation_start_time'] = timer()
         self.timings['step_start_time'] = self.timings['step_end_time'] = self.timings['simulation_start_time']
-        if systime_max is None:
-            systime_max = self.sim_system_time + simulation_time
 
         sysmgr = self.reactionmgr
+        if systime_max is None:
+            systime_max = sysmgr.system_time + simulation_time
         if T is None:
             T = sysmgr.temperature
         else:
@@ -212,8 +212,8 @@ class DM_SimulatorUngrouped(DM_Simulator):
             # Step 2: Generate values for τ and j:  - easy.
             r1, r2 = random.random(), random.random()
             dt = ln(1/r1)/a0_sum
-            if systime_max and self.sim_system_time + dt > systime_max:
-                self.sim_system_time = systime_max
+            if systime_max and sysmgr.system_time + dt > systime_max:
+                sysmgr.system_time = systime_max
                 print("\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
                 return n_done
             # find j:
@@ -239,7 +239,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
             # 3b: Hybridize/dehybridize domains and Update graphs/stats/etc
 
             # 3a: Update system time:
-            self.sim_system_time += dt
+            sysmgr.system_time += dt
 
             # 3b: Hybridize/dehybridize:
             c_j, is_forming = sysmgr.possible_hybridization_reactions[reaction_spec]
@@ -274,7 +274,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
                 #     - nodes: a two-tuple for edge types, a node name or list of nodes for node types.
                 directive = self.state_change_hybridization_template.copy()
                 directive['forming'] = int(is_forming)
-                directive['time'] = self.sim_system_time
+                directive['time'] = sysmgr.system_time
                 directive['T'] = sysmgr.temperature
                 directive['tau'] = dt
                 directive['nodes'] = (d1, d2)  # Not sure if we have to give str representation here
@@ -284,7 +284,7 @@ class DM_SimulatorUngrouped(DM_Simulator):
             answer = 'g' or input(("\nReaction complete. Type 'd' to enter debugger; 'g' to save plot to file; "
                                    "any other key to continue... "))
             if 'g' in answer:
-                sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
+                sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, sysmgr.system_time))
             if 'd' in answer:
                 pdb.set_trace()
 
@@ -300,11 +300,6 @@ class DM_SimulatorUngrouped(DM_Simulator):
             print(self.print_post_step_fmt.format(
                 self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr),
                   end="")
-
-            if n_done % 10000 == 0:
-                print(("Simulated %s of %s steps at T=%s K (%0.0f C). "+
-                       "%s state changes with %s selections in %s total steps.") %
-                      (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
 
         # end while loop
         return n_done

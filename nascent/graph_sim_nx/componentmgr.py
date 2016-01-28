@@ -383,7 +383,11 @@ class ComponentMgr(GraphManager):
                 ## TODO: FIX THIS!!
                 ## Hypothesis: We can ONLY break a hybridization that is NOT stacked?
                 ## - Must give correct result for the "1 vs 2 vs N split" example case.
-                ## TODO: CHECK WHETHER DOMAINS CAN DEHYBRIDIZE IF STACKED
+                ## Can domains dehybridize if stacked? If not, why?
+                ## - We currently only consider stacking of hybridized domains (duplexes), NOT single-stranded domains.
+                ## - If we cannot stack domains that are not hybridized, then we cannot dehybridize domains that are
+                ##   stacked (the reverse rx). All reactions must be reversible,
+                ##   otherwise we would get a net cyclic transport in our reaction network.
                 unstacking_results[frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))] = \
                     self.unstack(h1end3p, h2end5p, h2end3p, h1end5p, break_complex=False)
                 # printd("Unstack result for domain %r:" % (d,))
@@ -608,8 +612,13 @@ class ComponentMgr(GraphManager):
         # Helix 2   ----------5' : 3'----------
         #             h2end5p         h2end3p
         # Stacking => merge two DomainEnds into a single node by delegating representation of one to the other.
-        end1_delegatee = h1end3p.ifnode if h1end3p.ifnode.delegatee is None else h2end5p.ifnode
-        end2_delegatee = h2end3p.ifnode if h2end3p.ifnode.delegatee is None else h1end5p.ifnode
+        # Just because h1end3p.ifnode.delegatee is not None, does not mean that h2end5p *is* the delegatee.
+        # When the duplexes are stacked, both may well not be None.
+        end1_delegatee = h1end3p.ifnode if h2end5p.ifnode.delegatee is h1end3p.ifnode else h2end5p.ifnode
+        end2_delegatee = h2end3p.ifnode if h1end5p.ifnode.delegatee is h2end3p.ifnode else h1end5p.ifnode
+        # Stacking should be the top delegation, there shouldn't be further layers:
+        assert (end1_delegatee.delegatee is None and end2_delegatee.delegatee is end1_delegatee) \
+            or (end2_delegatee.delegatee is None and end1_delegatee.delegatee is end2_delegatee)
         # Cannot use top_delegate, that would just get the same for both, have to find the delegate for each duplex.
         delegatee = self.interface_graph.split(end1_delegatee, end2_delegatee)
 

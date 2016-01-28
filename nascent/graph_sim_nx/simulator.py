@@ -79,12 +79,12 @@ class Simulator():
         """
         self.params = params
         self.reactionmgr = ReactionMgr(volume=volume, strands=strands, params=params, domain_pairs=domain_pairs)
-        self.sim_system_time = 0  # System time within the simulator, typically measured in micro-seconds.
 
         ## Simulation stats, counts:
-        self.N_steps = 0    # Total number of steps
-        self.N_changes = 0  # Number of state changes (hybridizations or de-hybridizations)
-        self.N_selections = 0 # Total number of succeessfull selection of domain1 and domain2.
+        self.N_steps = 0    # Total number of steps; see also reactionmgr.N_invoked_reactions_count.
+        # N_changes and N_selections are legacy properties
+        # self.N_changes = 0  # Number of state changes (hybridizations or de-hybridizations)
+        # self.N_selections = 0 # Total number of succeessfull selection of domain1 and domain2.
         self.N_steps_per_T = params.get('n_steps_per_T', 100000)
         self.system_stats = {}
 
@@ -108,7 +108,7 @@ class Simulator():
 
         ## Hooks ##
         self.Visualization_hook = None
-        self.print_post_step_fmt = "{self.N_steps: 5} {self.N_selections: 5}"
+        self.print_post_step_fmt = "{self.N_steps: 5}"
         self.dispatcher = None
 
 
@@ -204,9 +204,7 @@ class Simulator():
             n_done += 1
             self.N_steps += 1
             if n_done % 10000 == 0:
-                print(("Simulated %s of %s steps at T=%s K (%0.0f C). " +
-                       "%s state changes with %s selections in %s total steps.") %
-                      (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
+                print(("Simulated %s of %s steps at T=%s K (%0.0f C). ") % (n_done, n_steps_max, T, T-273.15))
             if self.Record_stats and (self.N_steps % self.stepsampling_frequency == 0):
                 self.record_stats_snapshot(T, statstype="timesampling")
         assert sysmgr.n_hybridized_domains() == sysmgr.N_domains_hybridized

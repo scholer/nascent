@@ -80,11 +80,13 @@ from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION,
 from .constants import REACTION_NAMES
 # from .complex import Complex
 from .componentmgr import ComponentMgr
-from .nx_utils import draw_graph_and_save, layout_graph
+from .nx_utils import draw_graph_and_save, layout_graph, draw_with_graphviz
 from .debug import printd, pprintd
 from .domain import Domain, DomainEnd
-ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
+from .utils import sequential_number_generator
 
+ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
+reaction_graph_sequantial_number_generator = sequential_number_generator()
 
 
 
@@ -114,10 +116,12 @@ class ReactionMgr(ComponentMgr):
         ComponentMgr.__init__(self, strands=strands, params=params, domain_pairs=None)
         self.params = params
         self.temperature = params.get('temperature', 300)
+        self.system_time = params.get('system_time', 0.0)
         self.volume = volume or params.get('volume')
         # Base single-molecule activity of two free single reactants in volume.
         self.specific_bimolecular_activity = 1/self.volume/N_AVOGADRO # × M
         self.include_steric_repulsion = False # True
+        self.N_invoked_reactions_count = 0  # Keep count of how many reactions; See also simulator.N_steps
 
         ## Reaction settings/parameters:
         # When a complex is changed, update hybridization reaction for all pairs,
@@ -133,8 +137,13 @@ class ReactionMgr(ComponentMgr):
         self.stacking_rate_constant = params.get('stacking_rate_constant', 1e5)
         self.enable_intercomplex_stacking = params.get("enable_intercomplex_stacking", False)
 
-        ## Reaction graph:
-        self.reaction_graph = nx.MultiDiGraph() # Can we have multiple edges?
+        ## Reaction graph: ##
+        # reaction_graph is directed, but should it be a MultiGraph? I can't imagine why..
+        # Can we have multiple edges from a source to a target?
+        # There really should be only ONE reaction that takes a complex from state A to state B.
+        # However, just to make sure we detect that this is indeed true, for now we use a MultiDiGraph,
+        # keyed by (reacted_spec_pair, reaction_attr):
+        self.reaction_graph = nx.MultiDiGraph()  # [source][target][(reacted_spec_pair, reaction_attr)] = eattr
         self.reaction_graph.add_node(0) # The "null" node from which all new complexes emerge.
         self.reaction_graph_complexes_directory = params.get("reaction_graph_complexes_directory")
         if self.reaction_graph_complexes_directory is not None:
@@ -434,18 +443,20 @@ class ReactionMgr(ComponentMgr):
             dH, dS
         where dH is in units of gas constant R, and dS in units of R/K
         """
-        state_spec_pair = frozenset(d.state_fingerprint() for d in (d1, d2))
+        #state_spec_pair = frozenset(d.state_fingerprint() for d in (d1, d2))
         if state_spec_pair not in self._statedependent_dH_dS:
             if (d1.name, d2.name) not in self.domain_dHdS:
                 dH, dS = hybridization_dH_dS(d1.sequence, c_seq=d2.sequence[::-1])
                 print("Energy (dH, dS) for %s hybridizing to %s: %0.4g kcal/mol, %0.4g cal/mol/K" % (d1, d2, dH, dS))
                 print("     ", d1.sequence, "\n     ", d2.sequence[::-1])
-                # Convert to units of R, R/K:
+                # Convert to units of R, R/K: -- uh... really? Isn't it that already?
                 dH, dS = dH*1000/R, dS/R
                 # printd(" - In units of R: %0.4g R, %0.4g R/K" % (dH, dS))
                 self.domain_dHdS[(d1.name, d2.name)] = dH, dS
             else:
                 dH, dS = self.domain_dHdS[(d1.name, d2.name)]
+            ## TODO: Right now we don't support state-dependent energies and just stop short here:
+            return dH, dS
             # TODO: make adjustments, e.g. due to:
             # * dangling ends
             # * stacking
@@ -465,36 +476,32 @@ class ReactionMgr(ComponentMgr):
         TODO: Add steric/electrostatic/surface repulsion (individual activity contribution for d1 and d2,
               so that activity = intercomplex_activity*d1_activity*d2_activity)
         """
-        if isinstance(elem1, tuple):
-            #assert reaction_type == STACKING_INTERACTION
-            if reaction_spec_pair is None:
+        if reaction_spec_pair is None:
+            if reaction_type is STACKING_INTERACTION:
+                assert isinstance(elem1, tuple)
                 reaction_spec_pair = frozenset(((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
                                                 (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
-            else: # TODO: Remove assertion when done debugging.
+                d1, d2 = elem1[0].domain, elem2[0].domain
+            else:
+                assert isinstance(elem1, Domain)
+                d1, d2 = elem1, elem2
+                reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
+            assert d1.strand.complex == d2.strand.complex != None
+        else:
+            # Assert that the finger-print is correct. (TODO: Remove assertion when done debugging.)
+            if reaction_type is STACKING_INTERACTION:
+                d1, d2 = elem1[0].domain, elem2[0].domain
                 assert reaction_spec_pair == frozenset(((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
                                                         (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
-            d1, d2 = elem1[0].domain, elem2[0].domain
-        else:
-            if reaction_spec_pair is None:
-                reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
             else: # TODO: Remove assertion when done debugging.
                 assert reaction_spec_pair == frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
-            if isinstance(elem1, Domain):
-                d1, d2 = elem1, elem2
                 assert reaction_type == HYBRIDIZATION_INTERACTION
-            elif isinstance(elem1, DomainEnd):
-                d1, d2 = elem1.domain, elem2.domain
-        assert d1.strand.complex == d2.strand.complex != None
-        # cache = self.cache['intracomplex_activity']
+                d1, d2 = elem1, elem2
+            assert d1.strand.complex == d2.strand.complex != None
+
         if reaction_spec_pair in self.cache['intracomplex_activity']:
             return self.cache['intracomplex_activity'][reaction_spec_pair]
-        #activity = d1.strand.complex.intracomplex_activity(d1, d2)
-        if isinstance(elem1, tuple): # stacking domain-ends
-            # activity = (super().intracomplex_activity(elem1[0], elem2[0]) +
-            #             super().intracomplex_activity(elem1[1], elem2[1]))/2
-            activity = super().intracomplex_activity(elem1, elem2)   # h1end3p, h2end3p
-        else: # hybridizing domains
-            activity = super().intracomplex_activity(elem1, elem2)
+        activity = super().intracomplex_activity(elem1, elem2, reaction_type)
         self.cache['intracomplex_activity'][reaction_spec_pair] = activity
         return activity
 
@@ -540,7 +547,7 @@ class ReactionMgr(ComponentMgr):
         return rel_act
 
 
-    def calculate_c_j(self, elem1, elem2, reaction_attr, reaction_spec_pair=None):
+    def calculate_c_j(self, elem1, elem2, reaction_attr, reaction_spec_pair):
         """
         General method for calculation of c_j stochastic rate constant.
         Unlike the specialized calculate_hybridization_c_j and calculate_stacking_c_j,
@@ -556,10 +563,16 @@ class ReactionMgr(ComponentMgr):
         assert reaction_attr.reaction_type != HYBRIDIZATION_INTERACTION or \
             reaction_attr.is_forming or reaction_attr.is_intra
         reaction_type, is_forming, is_intra = reaction_attr
-        if reaction_spec_pair is not None and reaction_spec_pair in self.cache['stochastic_rate_constant']:
+        c_j_cache_key = (reaction_spec_pair, reaction_attr)
+        if c_j_cache_key in self.cache['stochastic_rate_constant']:
+            assert reaction_spec_pair is not None
             # TOOD: Make sure that this includes stacking state!
-            # TODO: We actually have two kinds of species fingerprints: One that allows symmetry and one that don't.
-            c_j, ra = self.cache['stochastic_rate_constant'][reaction_spec_pair]
+            # TODO: We actually have two kinds of species fingerprints: One that allows symmetry and one that don't
+            # TODO: We need to differentiate between intra-complex and inter-complex reactions in the cache,
+            #       otherwise we can't distinguish between intra-complex reaction and reaction between two identical
+            #       domains in two complexes with the same state (although that is somewhat unlikely to happen).
+            #       Probably just cache by (reaction_spec_pair, reaction_attr); reaction_attr = (type, forming, intra)
+            c_j, ra = self.cache['stochastic_rate_constant'][c_j_cache_key]
             assert ra == reaction_attr
         else:
             if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
@@ -577,7 +590,7 @@ class ReactionMgr(ComponentMgr):
             else:
                 raise ValueError("Unknown reaction type %r for reaction_attr %s between %s and %s" %
                                  (reaction_attr.reaction_type, reaction_attr, elem1, elem2))
-            self.cache['stochastic_rate_constant'][reaction_spec_pair] = (c_j, reaction_attr)
+            self.cache['stochastic_rate_constant'][c_j_cache_key] = (c_j, reaction_attr)
             # raise NotImplementedError("Not fully implemented yet...")
 
         if self.reaction_throttle:
@@ -733,7 +746,8 @@ class ReactionMgr(ComponentMgr):
                 assert d1.strand.complex is not None or d1.strand == d2.strand
                 # Intra-complex reaction:
                 try:
-                    stochastic_activity = self.intracomplex_activity(d1, d2)
+                    stochastic_activity = self.intracomplex_activity(d1, d2, reaction_type=reaction_type,
+                                                                     reaction_spec_pair=reaction_spec_pair)
                 except nx.NetworkXNoPath as e:
                     c = d1.strand.complex
                     print(("ERROR: No path between d1 %s and d2 %s "
@@ -867,13 +881,14 @@ class ReactionMgr(ComponentMgr):
                 # Intra-complex reaction:
                 # This should really be the average of dist(h1end3p, h1end5p), dist(h2end3p, h2end5p).
                 # However, except for the case where the helices are already backbone connected,
-                # we can approximate this by just one distance, dist(h1end3p, h2end3p):
+                # we can approximate this by just one distance, dist(h1end3p, h2end3p): (TODO: Re-check this...)
                 if h1end3p.pb_downstream == h1end5p and h2end3p.pb_downstream == h2end5p:
                     stochastic_activity = 1
                 # (h1end3p, h2end5p), (h2end3p, h1end5p)
                 #stochastic_activity = self.intracomplex_activity(h1end3p, h2end3p, reaction_type=STACKING_INTERACTION)
                 stochastic_activity = self.intracomplex_activity((h1end3p, h2end5p), (h2end3p, h1end5p),
-                                                                 reaction_type=STACKING_INTERACTION)
+                                                                 reaction_type=STACKING_INTERACTION,
+                                                                 reaction_spec_pair=reaction_spec_pair)
                 # printd("reaction_spec_pair:")
                 # pprintd(reaction_spec_pair)
                 # printd(" - stacking stochastic_activity (intra reaction) = %s" % stochastic_activity)
@@ -1033,9 +1048,16 @@ class ReactionMgr(ComponentMgr):
                         #     self.stacked_domains_by_name[d2.name].remove(d2)
                         #     self.hybridized_domains_by_name[d1.name].add(d1)
                         #     self.hybridized_domains_by_name[d2.name].add(d2)
+                        # IF the duplex is already stacked in the other end, then the *dehybridization* reaction (for
+                        # the two domains of that duplex) is already removed from possible_hybridization_reactions.
                         domain_pair = frozenset((d1, d2))
-                        del self.possible_hybridization_reactions[domain_pair]
-                        del self.reaction_attrs[domain_pair]
+                        try:
+                            del self.possible_hybridization_reactions[domain_pair]
+                        except KeyError:
+                            ## TODO: Check that the other end of the duplex is indeed stacked.
+                            pass
+                        else:
+                            del self.reaction_attrs[domain_pair]
                         self.reaction_pairs_by_domain[d1].clear()
                         self.reaction_pairs_by_domain[d2].clear()
                 else:
@@ -1777,6 +1799,31 @@ class ReactionMgr(ComponentMgr):
             Case 2-5: Inter/bi-molecular reaction; Change in volume energy.
         """
         edge_key = (reacted_spec_pair, reaction_attr)
+        elem1, elem2 = tuple(reacted_pair)
+        if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+            domain1, domain2 = tuple(reacted_pair)
+        elif reaction_attr.reaction_type is STACKING_INTERACTION:
+            #             h1end3p         h1end5p
+            # Helix 1   ----------3' : 5'----------
+            # Helix 2   ----------5' : 3'----------
+            #             h2end5p         h2end3p
+            ## Regarding order of DomainEnd stacking pairing/tuples (check that they are correct)
+            # Stacking is downstream: 3'::5'. But we bundle by duplex ends, so it becomes symmetric, and then intead
+            # we organize the ends for each dupel as (h1end3p, h2end5p), even though that may not make much sense.
+            # We've had this discussion before about the order of DomainEnds in stacking reaction pairs,
+            # ordering either by duplex-end, or by helix:
+            #   {(h1end3p, h2end5p), (h2end3p, h1end5p)}   or   {(h1end3p, h1end5p), (h2end3p, h2end5p)}
+            # Remember that stacking of duplex ends is a symmetric pair (end1 stack end2 is same as end2 stack end1),
+            # so the order shouldn't matter when storing the pair (use frozenset, not tuple).
+            # (h1end5p, h2end3p), (h2end5p, h1end3p) = tuple(reacted_pair)  # Wrong
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(reacted_pair)
+            assert all(end.end == "5p" for end in (h1end5p, h2end5p))  ## TODO: Remove assertions
+            assert all(end.end == "3p" for end in (h1end3p, h2end3p))
+        elif reaction_attr.reaction_type is PHOSPHATEBACKBONE_INTERACTION:
+            h1end3p, h1end5p = tuple(reacted_pair)
+            assert h1end3p.end == "3p" and h1end5p.end == "5p"  ## TODO: Remove assertion
+        else:
+            raise ValueError("Unknown reaction type '%s'" % (reaction_attr.reaction_type,), reaction_attr.reaction_type)
 
         ### Adjust throttle vars (and also update complex energy): ###
 
@@ -1804,13 +1851,11 @@ class ReactionMgr(ComponentMgr):
                 ## We *could* do this in complex.assert_state_change; but then we would have to pass
                 ## in reaction_result as argument (if we want to distinguish intRA vs intER molecular reactions...)
                 if reaction_attr.reaction_type is STACKING_INTERACTION:
-                    h1end3p = next(iter(next(iter(reacted_pair))))
                     cmplx = h1end3p.domain.strand.complex
                 else:
                     # Update when we introduce backbone ligation/nicking reactions:
                     assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
-                    d1 = next(iter(reacted_pair))
-                    cmplx = d1.strand.complex
+                    cmplx = domain1.strand.complex
                 if reaction_attr.is_intra and reaction_result['case'] < 2:
                     # result case < 2 is for intRA complex/strand reactions
                     if reacted_spec_pair not in cmplx.reaction_throttle_cache:
@@ -1836,6 +1881,18 @@ class ReactionMgr(ComponentMgr):
                 else:
                     self.reaction_throttle_cache[(reacted_spec_pair, reaction_attr)] *= 0.99
 
+        ## Energy ##
+        if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+            #dH, dS = self.domain_dHdS[(domain1, domain2)]
+            dH, dS = self.dHdS_from_state_cache(domain1, domain2, state_spec_pair=reacted_spec_pair)
+        elif reaction_attr.reaction_type is STACKING_INTERACTION:
+            # h1end3p.stack_string is only set when the DomainEnd is actually stacked.
+            stack_string = "%s%s/%s%s" % (h1end3p.base, h1end5p.base, h2end5p.base, h2end3p.base)
+            if stack_string not in DNA_NN4:
+                stack_string = stack_string[::-1]
+            dH, dS = DNA_NN4_R[stack_string]
+        else:
+            raise NotImplementedError("Only HYBRIDIZATION and STACKING interactions implemented ATM.")
 
         ### Assert state change for all changed complexes and update reaction graph: ###
         changed_complexes = chain(*[lst
@@ -1888,7 +1945,10 @@ class ReactionMgr(ComponentMgr):
             ### 2. Update complex energy: ###
             # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
             # use result['case'] to determine if the volume energy of the complex is changed.
-            dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
+            # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
+            # has been called. Also: Is this really state dependent? Can't we just let de-hybridization and unstacking
+            # be independent of complex state?
+            #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
             if reaction_attr.is_forming:
                 if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
                     cmplx.energies_dHdS[0]['hybridization'] += dH
@@ -1897,17 +1957,27 @@ class ReactionMgr(ComponentMgr):
                     cmplx.energies_dHdS[0]['stacking'] += dH
                     cmplx.energies_dHdS[1]['stacking'] += dS
 
+                # Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
+                # Case 2/3/4: IntER-complex hybridization between two complexes/strands.
                 if reaction_result['case'] <= 1:
+                    # IntRA-complex reaction
                     assert reaction_attr.is_intra
+                    activity = self.cache['intracomplex_activity'][reacted_spec_pair]
+                    if activity <= 0:
+                        print(("\n\nActivity %s for %s reaction between %s and %s is <= 0; "
+                               "shape/loop energy is infinite; reaction should revert.\n\n") %
+                              (activity, reaction_attr.reaction_type, elem1, elem2))
+                        dS_shape = 1000
+                    else:
+                        dS_shape = -ln(activity)  # Lower activity means higher energy when forming...
+                    cmplx.energies_dHdS[1]['shape'] += dS_shape
+                    dS += dS_shape
+                else:
+                    # IntER-strand/complex reaction; Two strands/complexes coming together.
+                    assert reaction_attr.is_intra is False
                     dS_volume = ln(self.specific_bimolecular_activity)  # Multiply by -R*T to get dG.
                     cmplx.energies_dHdS[1]['volume'] += dS_volume
                     dS += dS_volume
-                else:
-                    assert reaction_attr.is_intra is False
-                    activity = self.cache['intramolecular_activity'][reacted_spec_pair]
-                    dS_shape = ln(activity)
-                    cmplx.energies_dHdS[1]['shape'] += dS_shape
-                    dS += dS_shape
             else:
                 ## Dehybridize/unstack reaction: (is always "intra-molecular")
                 if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
@@ -1925,16 +1995,21 @@ class ReactionMgr(ComponentMgr):
                 else:
                     # We still have just a single complex:
                     # How to get the gained loop entropy?
-                    # if reacted_spec_pair in self.cache['intramolecular_activity']:
-                    #     activity = self.cache['intramolecular_activity'][reacted_spec_pair]
+                    # if reacted_spec_pair in self.cache['intracomplex_activity']:
+                    #     activity = self.cache['intracomplex_activity'][reacted_spec_pair]
                     # Edit: reacted_spec_pair is for the old state; not the state we are currently in.
                     # However, since we have just asserted state fingerprint change, it should be OK to
                     # re-calculate the activity.
                     # We are going to be calculating the activity when we update possible reactions,
                     # so might as well do it here:
-                    elem1, elem2 = tuple(reacted_pair)
                     activity = self.intracomplex_activity(elem1, elem2, reaction_attr.reaction_type)
-                    dS_shape = -ln(activity)
+                    if activity <= 0:
+                        print(("\n\nActivity for %s reaction between %s and %s is <= 0, reaction_attr %s"
+                               "shape/loop energy is infinite; reaction should revert.\n\n") %
+                              (activity, elem1, elem2, reaction_attr))
+                        dS_shape = 1000
+                    else:
+                        dS_shape = ln(activity)
                     dS += dS_shape
                     cmplx.energies_dHdS[1]['shape'] += dS_shape
                 cmplx.energy_total_dHdS = [sum(d.values()) for d in cmplx.energies_dHdS]
@@ -1953,8 +2028,12 @@ class ReactionMgr(ComponentMgr):
             else:
                 self.reaction_graph.node[target]['encounters'] += 1  # could also simply be 'size'?
                 # For now, we keep statistics of the different complex energies that have been calculated
-                # and what
-                self.reaction_graph.node[target]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] += 1
+                # https://treyhunner.com/2015/11/counting-things-in-python/
+                # Using Counter is fast, but doesn't work well when we want to serialize the graph, so using dict:
+                try:
+                    self.reaction_graph.node[target]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] += 1
+                except KeyError:
+                    self.reaction_graph.node[target]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] = 1
             assert source in self.reaction_graph
             assert target in self.reaction_graph
             # Can probably just add edge and increment afterwards... maybe
@@ -2001,56 +2080,76 @@ class ReactionMgr(ComponentMgr):
             state_fingerprint = cmplx.state_fingerprint()
         else:
             assert state_fingerprint == cmplx.state_fingerprint()
-        self.reaction_graph.add_node(state_fingerprint, encounters=1, dH_dS_first=tuple(cmplx.energy_total_dHdS))
+        assert state_fingerprint not in self.reaction_graph.node  # node-attrs dict, {node: {node attrs}}
+        assert state_fingerprint not in self.reaction_graph.adj   # edge-attrs dict, {src: {tgt1: {edge1_attrs}, ...}}
+
         dHdS = tuple(cmplx.energy_total_dHdS)
-        self.reaction_graph.node[state_fingerprint]['dH_dS_first'] = dHdS
-        self.reaction_graph.node[state_fingerprint]['dH_dS_count'] = Counter()
-        self.reaction_graph.node[state_fingerprint]['dH_dS_count'][dHdS] += 1
+        node_attrs = {'dH_dS_first': dHdS,
+                      'dH_dS_count': {dHdS: 1},
+                      'encounters': 1,
+                     }
+        # MultiGraph, with edges keyed by (reacted_spec_pair, reaction_attr):
+        # reaction_graph.adj[source][target][(reacted_spec_pair, reaction_attr)] = eattr
+        self.reaction_graph.add_node(state_fingerprint, encounters=1, dH_dS_first=tuple(cmplx.energy_total_dHdS))
+        # self.reaction_graph.node[state_fingerprint]['dH_dS_first'] = dHdS
+        self.reaction_graph.node[state_fingerprint]['dH_dS_count'] = {} # Counter()
+        self.reaction_graph.node[state_fingerprint]['dH_dS_count'][dHdS] = 1
+        #self.reaction_graph.node[state_fingerprint] = node_attrs
+        #self.reaction_graph.adj[state_fingerprint] = {}
+
 
         if self.reaction_graph_complexes_directory is not None:
             # Save complex to file:
             # https://networkx.github.io/documentation/latest/reference/readwrite.html
-            for method in ("yaml", "edgelist", "adjlist", "multiline_adjlist",
-                           "gexf", "pajek"):
+            # adjlist: not useful; each line simply has: str(source) str(target1) str(target2) ...
+            # edgelist: Better, each line describes an edge: source target edge_attr
+            # multiline_adjlist: edgelist meets adjlist; N_targets+1 lines for each source.
+            # pajek: Has node+edge attrs but no multi-graph edge keys.
+            # gefx: xml-based; nice, but very verbose. Has all node and edge attrs AND edge keys and node object attrs.
+            # yaml: Dumps *everything*, Domains, DomainEnds, Strands, Complexes, etc.
+            # for method in ("edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek", "yaml"):
+            for method in ("edgelist", "gexf"):
                 path = os.path.join(self.reaction_graph_complexes_directory,
                                     "%s.%s" % (state_fingerprint, method))
                 write_function = getattr(nx, "write_" + method)
                 write_function(cmplx, path)
             # create a graph visualization:
-            path = os.path.join(self.reaction_graph_complexes_directory,
-                                "%s.%s" % (state_fingerprint, "png"))
             # start_pos = cmplx.graph['pos'] # edit: saving 'pos' directly in node attr dict:
             # start_pos = nx.get_node_attributes(cmplx, 'pos')
             pos = layout_graph(cmplx, save_pos_as_attr=True)
             # cmplx.graph['pos'] = pos
             # nx.set_node_attributes(cmplx, 'pos', pos)
+            path = os.path.join(self.reaction_graph_complexes_directory,
+                                "%s.%s" % (state_fingerprint, "png"))
             draw_graph_and_save(cmplx, path, pos=pos)
+            complexes_overview_fn = os.path.join(self.reaction_graph_complexes_directory, "complexes_overview.txt")
+            with open(complexes_overview_fn, 'a') as fd:
+                fd.write("%s\t%s\n" % (self.system_time, state_fingerprint))
 
 
     def save_reaction_graph(self, ):
         """ Save reaction graph to file... """
 
         if self.reaction_graph_complexes_directory is None:
-            print("reaction_graph_complexes_directory is not set; cannot save reaction_graph...")
+            print("reaction_graph_complexes_directory is not set; cannot save reaction_graph/system graphs...")
             return
 
         #self.reaction_graph.node[0]['pos'] = (0, 0)
 
-        ## Save reaction_graph
-        reaction_graph_fnfmt = "reaction_graph_{i:05}.png"
-        i = 0
-        for i in range(100000):
-            path = os.path.join(self.reaction_graph_complexes_directory,
-                                reaction_graph_fnfmt.format(i=i))
-            if not os.path.exists(path):
-                pos = layout_graph(self.reaction_graph, save_pos_as_attr=True,
-                                   k=3, weight=None, scale=4.0, fixed=["0"])
-                # default k=sqrt(N_nodes), scale=1.0, weight='weight'
-                draw_graph_and_save(self.reaction_graph, path, pos=pos)
-                break
-        else:
-            print("Unable to find a suitable filename for reaction_graph...")
-
+        ## Save system graphs:
+        graphs_to_save = ("reaction_graph", "ends5p3p_graph", "interface_graph")
+        fn_number = next(reaction_graph_sequantial_number_generator)
+        for graph_name in graphs_to_save:
+            #graph_fnfmt = "%s_%s.png" % (graph_name, fn_number)
+            path = os.path.join(self.reaction_graph_complexes_directory, "%s_%s.png" % (graph_name, fn_number))
+            if os.path.exists(path):
+                print("WARNING: Graph output file already exists:", path)
+                return
+            graph = getattr(self, graph_name)
+            #pos = layout_graph(graph, save_pos_as_attr=True, k=3, weight=None, scale=4.0)
+            # (defaults: k=sqrt(N_nodes), scale=1.0, weight='weight')
+            #draw_graph_and_save(graph, path, pos=pos) # draw graph with matplotlib
+            draw_with_graphviz(graph, path)
 
 
 
@@ -2249,4 +2348,3 @@ class ReactionMgr(ComponentMgr):
         return {reaction_spec: v
                 for reaction_spec, v in self.possible_hybridization_reactions.items()
                 if domspec in reaction_spec[0]}
-

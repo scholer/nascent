@@ -1,0 +1,27 @@
+
+# Data types: #
+
+
+## Sets/Frozensets: ##
+
+Frozenset hashing:
+* https://hg.python.org/cpython/file/5fd1ac1c9474/Objects/setobject.c#l766
+* http://stackoverflow.com/questions/20832279/python-frozenset-hashing-algorithm-implementation
+
+
+## Trees and sorted lists/containers: ##
+
+Overviews:
+* http://www.grantjenks.com/docs/sortedcontainers/
+* http://kmike.ru/python-data-structures/
+
+BList:
+* http://stutzbachenterprises.com/blist/
+
+Discussions:
+* http://stackoverflow.com/questions/1109804/does-python-have-a-sorted-list  - rbtree, RBTree, or pyavl, sortedcontainers, native heapq + bisect, 
+
+
+Performance measurements:
+* https://wiki.python.org/moin/TimeComplexity
+

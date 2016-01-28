@@ -34,8 +34,9 @@ from math import log as ln # exp
 import time
 from datetime import datetime
 from pprint import pprint
+import logging
+logger = logging.getLogger(__name__)
 import pdb
-import time
 if sys.platform == "win32":
     timer = time.clock
 else:
@@ -48,7 +49,7 @@ else:
 #from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
 #from .thermodynamic_utils import thermodynamic_meltingcurve
 from .simulator import Simulator
-from .reactionmgr_grouped import ReactionMgrGrouped
+#from .reactionmgr_grouped import ReactionMgrGrouped
 from .dispatcher import StateChangeDispatcher
 from .stats_manager import StatsWriter
 # N_AVOGADRO in /mol,
@@ -145,7 +146,7 @@ class DM_Simulator(Simulator):
         self.system_stats['tau_deque'] = deque(maxlen=10)
         self.step_sleep_factor = self.params.get('simulator_step_sleep_factor', 0)
         self.print_post_step_fmt = ("{self.N_steps: 5} "
-                                    "[{self.sim_system_time:0.02e}"
+                                    "[{sysmgr.system_time:0.02e}"
                                     " {stats[tau]:0.02e}"
                                     " {stats[tau_mean]:0.02e}] "
                                     "[{timings[step_time]:0.02e}] "
@@ -189,11 +190,11 @@ class DM_Simulator(Simulator):
             simulation_time = self.params["time_per_T"]
         self.timings['simulation_start_time'] = timer()
         self.timings['step_start_time'] = self.timings['step_end_time'] = self.timings['simulation_start_time']
-        if systime_max is None:
-            systime_max = self.sim_system_time + simulation_time
 
-        sysmgr = self.reactionmgr
         # sysmgr_grouped = self.reactionmgr_grouped
+        sysmgr = self.reactionmgr
+        if systime_max is None:
+            systime_max = sysmgr.system_time + simulation_time
         if T is None:
             T = sysmgr.temperature
         else:
@@ -217,7 +218,7 @@ class DM_Simulator(Simulator):
 
         while n_done < n_steps_max:
 
-            # printd("\n\n------ Step %03s -----------\n" % n_done)
+            printd("\n\n------ Step %03s -----------\n" % n_done)
             sysmgr.check_system()
             # printd(" - precheck OK.")
 
@@ -260,11 +261,11 @@ class DM_Simulator(Simulator):
             # Step 2: Generate values for τ and j:  - easy.
             r1, r2 = random.random(), random.random()
             tau = ln(1/r1)/a0_sum
-            if systime_max and self.sim_system_time + tau > systime_max:
-                tau = systime_max - self.sim_system_time
+            if systime_max and sysmgr.system_time + tau > systime_max:
+                tau = systime_max - sysmgr.system_time
                 if self.stats_writer:
-                    self.stats_writer.write_stats(tau=tau, sys_time=self.sim_system_time)
-                self.sim_system_time = systime_max
+                    self.stats_writer.write_stats(tau=tau)
+                sysmgr.system_time = systime_max
                 print("\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
                 return n_done
 
@@ -274,7 +275,7 @@ class DM_Simulator(Simulator):
             if self.stats_writer:
                 # Strictly speaking we don't need to produce stats during the simulation; we can use the dispatcher
                 # to note the domain state changes and then re-create the stats after simulation.
-                self.stats_writer.write_stats(tau=tau, sys_time=self.sim_system_time)
+                self.stats_writer.write_stats(tau=tau)
 
 
             ## find which reaction j should fire:
@@ -316,14 +317,14 @@ class DM_Simulator(Simulator):
             ## 3b: Hybridize/dehybridize domains and Update graphs/stats/etc
 
             ## 3a: Update system time:
-            self.sim_system_time += tau
+            sysmgr.system_time += tau
 
             ## 3b: Perform reaction and update reactions:
-            # print("\n\nPerforming reaction: %s, %s\n - propensity c_j = %0.04g / %0.04g" %
-            #       (reaction_spec, reaction_attr, a[j],
-            #        sysmgr.possible_hybridization_reactions[reaction_spec] if reaction_type is HYBRIDIZATION_INTERACTION
-            #        else sysmgr.possible_stacking_reactions[reaction_spec]),
-            #       end="\n\n")
+            print("\n\nPerforming reaction: %s, %s\n - propensity c_j = %0.04g / %0.04g" %
+                  (reaction_spec, reaction_attr, a[j],
+                   sysmgr.possible_hybridization_reactions[reaction_spec] if reaction_type is HYBRIDIZATION_INTERACTION
+                   else sysmgr.possible_stacking_reactions[reaction_spec]),
+                  end="\n\n")
             if reaction_type == HYBRIDIZATION_INTERACTION:
                 c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
                 # Determine reaction attributes:
@@ -460,12 +461,6 @@ class DM_Simulator(Simulator):
                 sleep_time=sleep_time),
                   end="\r")
 
-            # if n_done % 10000 == 0:
-            #     print(("Simulated %s of %s steps at T=%s K (%0.0f C). "+
-            #            "%s state changes with %s selections in %s total steps.") %
-            #           (n_done, n_steps_max, T, T-273.15, self.N_changes, self.N_selections, self.N_steps))
-
-
             ## SLEEP, if required: ##
             if self.step_sleep_factor and sleep_time > 0:
                 # Compensate for simulation calculation time:
@@ -487,10 +482,6 @@ class DM_Simulator(Simulator):
             #     return
             # if 'd' in answer:
             #     pdb.set_trace()
-
-        ## Extended n_done above n_done_max. Should record stats? - No..
-        # if self.stats_writer:
-        #     self.stats_writer.write_stats(tau=0, sys_time=self.sim_system_time)
 
 
         # end while loop
@@ -545,7 +536,7 @@ class DM_Simulator(Simulator):
         #       {(d1end5p, d1end3p), (d2end5p, d2end3p)}
         directive = self.state_change_hybridization_template.copy()
         directive['T'] = sysmgr.temperature
-        directive['time'] = self.sim_system_time
+        directive['time'] = sysmgr.system_time
         directive['tau'] = tau
         directive['forming'] = int(reaction_attr.is_forming)
         directive['interaction'] = reaction_attr.reaction_type
@@ -570,7 +561,7 @@ class DM_Simulator(Simulator):
                 # IMPORTANT: For stacking interactions, domains must be given in the order of the stack:
                 #            nodes = (dom1, dom2) means that dom1.end3p stacks with dom2.end5p !
                 state_change = {'forming': int(reaction_attr.is_forming),
-                                'time': self.sim_system_time,
+                                'time': sysmgr.system_time,
                                 'T': sysmgr.temperature,
                                 'tau': 0,
                                 #'nodes': zip(duplexend1, duplexend2[::-1]),

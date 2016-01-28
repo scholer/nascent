@@ -82,10 +82,25 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         Returns the delegatee.
         Synonyms: split, part, separate, divide, disjoin, sever, slice, disunite
         """
-        if node1.delegatee is not None:
-            delegator, delegatee = node1, node2
-        else:
+        # if node1.delegatee is not None:
+        #     # This is not sufficient check; both node1 and node2 can have a delegatee, which itself has a delegatee
+        #     delegator, delegatee = node1, node2
+        # else:
+        #     delegator, delegatee = node2, node1
+        if node1.delegatee is None:
+            # This, OTOH, should be a valid check. Node1 does not have any delegatee,
+            # so it should itself be the top delegate
             delegator, delegatee = node2, node1
+        elif node2.delegatee is None:
+            # This, OTOH, should be a valid check.
+            delegator, delegatee = node1, node2
+        elif node1.delegatee is node2:
+            delegator, delegatee = node1, node2
+            assert node2.delegatee is not node1
+        elif node2.delegatee is node1:
+            delegator, delegatee = node2, node1
+        else:
+            raise ValueError("Either node1 must be delegatee of node2 or node2 must be delegatee of node1.")
         self.undelegate(delegator, delegatee)
         self.node[delegator]['size'] += 1
         self.node[delegatee]['size'] -= 1

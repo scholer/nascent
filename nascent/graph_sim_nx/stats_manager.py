@@ -57,6 +57,12 @@ def simplify(data, _list=list, _set=set):
     return str(data)
 
 
+def load_complex_state_count(fn):
+    with open(fn) as fp:
+        data = list(msgpack.Unpacker(fp, encoding='utf-8'))
+    return data
+
+
 class StatsWriter():
     """
     TODO: Implement support for msgpack format.
@@ -74,17 +80,19 @@ class StatsWriter():
         self.stats_field_sep2 = config.get('stats_field_sep2', ', ')
 
         # Use standard fields,
-        self.stats_total_fields = config.get('stats_total_fields',
-            ['tau', 'sim_system_time', 'temperature',
-             'N_domains', 'n_hybridizable_domains', 'n_hybridized_domains',
-             'N_strands', 'n_partially_hybridized_strands', 'n_fully_hybridized_strands',
-             'n_stacked_ends',
-             'n_complexes'])
+        default_totals_fields = [
+            'tau', 'system_time', 'temperature',
+            'N_domains', 'n_hybridizable_domains', 'n_hybridized_domains',
+            'N_strands', 'n_partially_hybridized_strands', 'n_fully_hybridized_strands',
+            'n_stacked_ends',
+            'n_complexes'
+        ]
+        self.stats_total_fields = config.get('stats_total_fields', default_totals_fields)
         # Or use a custom line format:
         # self.stats_total_fmt = config.get('stats_total_fmt')
 
         self.stats_per_domain_sysfields = config.get('stats_per_domain_sysfields',
-                                                     ['tau', 'sim_system_time', 'temperature'])
+                                                     ['tau', 'system_time', 'temperature'])
         self.stats_per_domain_fields = config.get('stats_per_domain_fields',
                                                   ['n_total', 'n_hybridized'])
         self.stats_per_domain_species = config.get('stats_per_domain_species',
@@ -98,7 +106,7 @@ class StatsWriter():
         self.stats_per_strand_fields = config.get('stats_per_strand_fields',
                                                   ['n_total', 'n_hybridized', 'n_fully_hybridized'])
         self.stats_per_strand_sysfields = config.get('stats_per_strand_sysfields',
-                                                     ['tau', 'sim_system_time', 'temperature'])
+                                                     ['tau', 'system_time', 'temperature'])
 
 
         ## General "total" stats (for each step, file is kept open)
@@ -154,29 +162,29 @@ class StatsWriter():
 
 
     def close_all(self):
+        """ Explicitly close all open files. """
         for fh in self.open_files:
             fh.close()
 
 
-    def write_stats(self, tau, sys_time):
+    def write_stats(self, tau):
         """ Write all stats to all file. """
         if self.stats_total_file is not None:
-            self.write_total_stats(tau, sys_time)
+            self.write_total_stats(tau)
         if self.stats_per_domain_file is not None:
-            self.write_per_domain_stats(tau, sys_time)
+            self.write_per_domain_stats(tau)
         if self.stats_per_strand_file is not None:
-            self.write_per_strand_stats(tau, sys_time)
-        # pdb.set_trace()
+            self.write_per_strand_stats(tau)
 
 
-    def write_total_stats(self, tau, sys_time=None, fields=None, init_stats=None):
+    def write_total_stats(self, tau, fields=None, init_stats=None):
         """
         Write system stats to file.
         """
         if fields is None:
             fields = self.stats_total_fields
         sysmgr = self.sysmgr
-        simulator = self.simulator
+        # simulator = self.simulator
         if init_stats is None:
             stats_total = {}
         else:
@@ -185,7 +193,7 @@ class StatsWriter():
         ## Collect data to a single stats line dict:
         stats_total['tau'] = tau
         ## System/reaction/component manager stats:
-        for attr in ('temperature', 'N_domains', 'N_strands'):
+        for attr in ('system_time', 'temperature', 'N_domains', 'N_strands'):
             stats_total[attr] = getattr(sysmgr, attr)
         for getter in ('n_hybridized_domains',
                        'n_hybridizable_domains',
@@ -194,19 +202,13 @@ class StatsWriter():
                        'n_fully_hybridized_strands'):
             stats_total[getter] = getattr(sysmgr, getter)()
         stats_total['n_complexes'] = len(sysmgr.complexes)
-        ## Simulator stats:
-        if simulator is not None:
-            for attr in ('sim_system_time', ):
-                stats_total[attr] = getattr(simulator, attr)
-        if sys_time is not None:
-            stats_total['sim_system_time'] = sys_time
 
         ## Write data to file:
         line = self.stats_field_sep.join(str(stats_total[field]) for field in fields)
         self.stats_total_file.write(line + "\n")
 
 
-    def write_per_domain_stats(self, tau, sys_time=None, sysfields=None, fields=None, species=None, init_stats=None):
+    def write_per_domain_stats(self, tau, sysfields=None, fields=None, species=None, init_stats=None):
         """
         Will first write constant fields, then domain species.
         sim_system_time, temperature, N_domains, n_hybridized_domains, N_strands, ...
@@ -218,7 +220,6 @@ class StatsWriter():
         if species is None:
             species = self.stats_per_domain_species
         sysmgr = self.sysmgr
-        simulator = self.simulator
         if init_stats is None:
             stats_total = {}
         else:
@@ -227,20 +228,8 @@ class StatsWriter():
         ## Collect data to a single stats line dict:
         stats_total['tau'] = tau
         ## System/reaction/component manager stats:
-        for attr in ('temperature', 'N_domains'):
+        for attr in ('system_time', 'temperature', 'N_domains'):
             stats_total[attr] = getattr(sysmgr, attr)
-        # for getter in ('n_hybridized_domains',
-        #                'n_hybridizable_domains',
-        #                'n_partially_hybridized_strands',
-        #                'n_fully_hybridized_strands'):
-        #     stats_total[getter] = sysmgr.getter()
-        #stats_total['n_complexes'] = len(sysmgr.complexes)
-        ## Simulator stats:
-        if simulator is not None:
-            for attr in ('sim_system_time', ):
-                stats_total[attr] = getattr(simulator, attr)
-        if sys_time is not None:
-            stats_total['sim_system_time'] = sys_time
 
         ## Collect per-domain (specie) stats:
         domain_stats = {}
@@ -253,12 +242,12 @@ class StatsWriter():
         line = self.stats_field_sep.join(
             [self.stats_field_sep2.join([str(stats_total[field]) for field in sysfields])]+
             [self.stats_field_sep2.join([str(domain_stats[name][field]) for field in fields])
-            for name in self.stats_per_domain_species])
+             for name in self.stats_per_domain_species])
 
         self.stats_per_domain_file.write(line + "\n")
 
 
-    def write_per_strand_stats(self, tau, sys_time=None, sysfields=None, fields=None, species=None, init_stats=None):
+    def write_per_strand_stats(self, tau, sysfields=None, fields=None, species=None, init_stats=None):
         """
         Will first write constant fields, then domain species.
         sim_system_time, temperature, N_domains, n_hybridized_domains, N_strands, ...
@@ -270,7 +259,6 @@ class StatsWriter():
         if species is None:
             species = self.stats_per_strand_species
         sysmgr = self.sysmgr
-        simulator = self.simulator
         if init_stats is None:
             stats_total = {}
         else:
@@ -279,15 +267,8 @@ class StatsWriter():
         ## Collect data to a single stats line dict:
         stats_total['tau'] = tau
         ## System/reaction/component manager stats:
-        for attr in ('temperature', 'N_domains'):
+        for attr in ('system_time', 'temperature', 'N_domains'):
             stats_total[attr] = getattr(sysmgr, attr)
-
-        ## Simulator stats:
-        if simulator is not None:
-            for attr in ('sim_system_time', ):
-                stats_total[attr] = getattr(simulator, attr)
-        if sys_time is not None:
-            stats_total['sim_system_time'] = sys_time
 
         ## Collect per-domain (specie) stats:
         strand_stats = {}
@@ -323,20 +304,13 @@ class StatsWriter():
         msgpack.pack(self.complex_state_count_file, complex_state_count)
 
 
-    def load_complex_state_count(self, fn):
-        with open(fn) as fp:
-            data = list(msgpack.Unpacker(fp, encoding='utf-8'))
-        return data
-
 
     def write_post_simulation_stats(self, systime=None):
         if self.stats_post_simulation_file is None:
             print("statsmgr.stats_post_simulation_file is None, cannot collect post simulation stats...")
             return
         sysmgr = self.sysmgr
-        simulator = self.simulator
-        if systime is None:
-            systime = simulator.sim_system_time
+        systime = sysmgr.system_time
         stats = {}
         # remove defaultdict, etc:
         stats['reaction_throttle_cache'] = sysmgr.reaction_throttle_cache
