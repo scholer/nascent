@@ -127,17 +127,18 @@ def draw_with_graphviz(G, filename, export=('dot', 'png'), interface='pydot', pr
     :export:    A tuple/list of file formats to export to
     :prog:      The graphviz layout program to use, typically 'neato' or 'dot'.
     """
+    if filename.endswith(".png"):
+        filename = filename[:-4]
     if interface == 'pydot' or G.is_multigraph():
-
-        # Use the pydot interface to graphviz:
+        ## Use the pydot interface to graphviz:
         P = nx.to_pydot(G)
         if 'dot' in export:
             P.write_dot(filename + ".dot") # same as P.write(filename, format='dot', prog=None). Default prog is 'dot'.
         if 'png' in export:
             P.write_png(filename + ".png", prog=prog) # returns True on success.
     else:
-        # Gohlke's pygraphviz for Windows doesn't seem to support strict=False.
-        # Use the pygraphviz Agraph interface to graphviz:
+        # Note: Gohlke's pygraphviz for Windows doesn't seem to support strict=False.
+        ## Use the pygraphviz Agraph interface to graphviz:
         A = nx.to_agraph(G)
         A.write(filename + ".dot")
         try:

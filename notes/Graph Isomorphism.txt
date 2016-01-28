@@ -1,0 +1,25 @@
+
+
+Refs:
+
+Graph Isomorphism for Colored Graphs with Color Multiplicity Bounded by 3
+http://pages.cs.wisc.edu/~dieter/Papers/3gi.pdf
+
+
+Graph Isomorphism in Quasipolynimial Time I
+http://people.cs.uchicago.edu/~laci/quasipoly.html
+
+
+A Big Result On Graph Isomorphism (Nov 4th 2015)
+https://rjlipton.wordpress.com/2015/11/04/a-big-result-on-graph-isomorphism/
+
+
+A Quasipolynomial Time Algorithm for Graph Isomorphism: The Details (notes)
+http://jeremykun.com/2015/11/12/a-quasipolynomial-time-algorithm-for-graph-isomorphism-the-details/
+
+
+
+Wikipedia:
+* https://en.wikipedia.org/wiki/Graph_automorphism
+* https://en.wikipedia.org/wiki/Graph_canonization
+* https://en.wikipedia.org/wiki/Graph_isomorphism_problem

@@ -34,6 +34,7 @@ import traceback
 from pprint import pprint as org_pprint
 from collections import defaultdict, namedtuple
 import pdb
+import logging
 
 import pprint
 def info_pprint(*args, **kwargs):
@@ -56,6 +57,7 @@ from nascent.graph_sim_nx.fileio import parse_strand_domains_file, check_strands
 from nascent.graph_sim_nx.dispatcher import StateChangeDispatcher
 from nascent.graph_sim_nx.constants import N_AVOGADRO #, R
 from nascent.graph_sim_nx import debug
+from nascent.utils.logging import init_logging
 
 # Toggle debug printing:
 debug.do_print = False
@@ -104,6 +106,11 @@ def main():
         os.makedirs(run_directory)
 
     statsfolder = run_directory # os.path.join(strand_defs_folder, "simdata", structure)
+    log_args = {'loglevel': logging.DEBUG,
+                #'basic_logging': True,  # False = custom logging setup
+                #'rotating': False,
+               }
+    init_logging(args=log_args, logdir=run_directory)
 
     # Ensure that we have a unique filename:
     outputstatsfnfmt = os.path.join(statsfolder, "{statstype}.{ext}")
