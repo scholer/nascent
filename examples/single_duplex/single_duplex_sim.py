@@ -35,7 +35,7 @@ from pprint import pprint as org_pprint
 from collections import defaultdict, namedtuple
 import pdb
 import logging
-
+logger = logging.getLogger(__name__)
 import pprint
 def info_pprint(*args, **kwargs):
     from inspect import currentframe, getframeinfo
@@ -93,7 +93,22 @@ def main():
     print("Loading strand/domain defs from file:", strand_defs_file)
     input_oligos = parse_strand_domains_file(strand_defs_file, n_clones_default=n_strand_copies_default)
     check_strands(input_oligos)
-    n_domains = sum(len(s.domains) for s in input_oligos)
+    # Color the strands: (http://www.graphviz.org/doc/info/attrs.html#k:color)
+    # Color names: https://en.wikipedia.org/wiki/X11_color_names
+    colors = {"sienna": "#a0522d",
+              "blue": "#0000FF",
+              "dark magenta": "#8B008B",
+              "crimson": "#DC143C",
+              "turquoise": "#40e0d0",
+             }
+    # Or use colormgr?
+    for strand, color in zip(input_oligos, colors.values()):
+        for _, _, eattr in strand.edges(data=True):
+            eattr['color'] = color
+        for _, _, eattr in strand.ends5p3p_graph.edges(data=True):
+            eattr['color'] = color
+
+    #n_domains = sum(len(s.domains) for s in input_oligos)
 
     run_directory = os.path.join(scriptdir,
                                  "simdata",
@@ -245,6 +260,30 @@ def main():
         if 0:
             simulator.anneal(T_start=T_start, T_finish=T_finish, delta_T=step)
         else:
+            from nascent.energymodels.biopython import hybridization_dH_dS, R, binary_state_probability
+            from nascent.graph_sim_nx.constants import N_AVOGADRO, AVOGADRO_VOLUME_NM3
+            from math import exp, log as ln
+            T = 330
+            # Either add volume energy here or pass a Q=<conc> parameter to binary_state_probability
+            # conc = 1/(volume*N_AVOGADRO)
+            volume_energy = -R*T*ln(volume*N_AVOGADRO/n_strand_copies_default)
+            full_duplex_seq = "".join(domain.sequence for domain in input_oligos[0].domains)
+            duplex_dH, duplex_dS = hybridization_dH_dS(full_duplex_seq) # does not account for concentration
+            # kcal/mol for dH and cal/mol/K for dS.
+            duplex_dG = duplex_dH*1000 - T * duplex_dS  # Units of cal/mol
+            # Volume energy is for the un-bound state; subtract for duplex if unbound is defined as dG = 0.
+            dG = duplex_dG - volume_energy
+            print("Duplex sequence:", full_duplex_seq)
+            print("Duplex energy:      %0.01f cal/mol" % duplex_dG)
+            print(" - duplex_dH    : %0.01f" % (duplex_dH*1000))
+            print(" - duplex_dS*T  : %0.01f" % (T * duplex_dS))
+            print(" - volume_energy:   %0.01f" % volume_energy)
+            print("dG incl volume:     %0.01f cal/mol" % dG)
+            print("Duplex probability: %0.02f" % binary_state_probability(dG, T))
+            # binary state probability just calculates:
+            # print("dG/RT            = %0.01f" % (dG/(R*T)))
+            # print("exp(-dG/RT)      = %0.04f" % (exp(-dG/(R*T))))
+            # print("1/(1+exp(dG/RT)) = %0.04f" % (1/(1+exp(dG/(R*T)))))
             ## Just simulate at a sigle temperature:
             do_profile = 0 # True, False
             if do_profile:
@@ -262,8 +301,10 @@ def main():
                 s.sort_stats('time').print_stats(20)
             else:
                 # pdb.set_trace()
-                simulator.simulate(T=330, n_steps_max=10000, systime_max=1000)
-                # simulator.simulate(T=330, n_steps_max=400, systime_max=100)
+                # simulator.simulate(T=330, n_steps_max=10000, systime_max=1000)
+                #simulator.simulate(T=330, n_steps_max=1000, systime_max=10)
+                simulator.simulate(T=330, n_steps_max=400, systime_max=1000)
+                # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 
     except KeyboardInterrupt:
         print("\n\nABORT: KeyboardInterrupt.\n\n")

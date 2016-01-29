@@ -26,6 +26,7 @@ import itertools
 from itertools import chain, groupby
 from pprint import pprint
 from operator import itemgetter
+import pdb
 
 from .system_graphs import InterfaceGraph
 from .nx_utils import draw_graph_and_save
@@ -401,13 +402,16 @@ class GraphManager():
             # Helix 1   ----------3' : 5'----------
             # Helix 2   ----------5' : 3'----------
             #             h2end5p         h2end3p
-            path = shortest_path(self.interface_graph,
-                                 h1end3p.ifnode.top_delegate(),
-                                 h2end3p.ifnode.top_delegate())
-            slice_start = 1 if path[1] == h2end5p else 0
-            slice_end = -1 if path[-2] == h1end5p else None
-            if slice_start == 1 or slice_end is not None:
-                path = path[slice_start:slice_end]
+            dupend1_delegate, dupend2_delegate = h1end3p.ifnode.top_delegate(), h2end3p.ifnode.top_delegate()
+            path = shortest_path(self.interface_graph, dupend1_delegate, dupend2_delegate)
+            ## Adjusting path shouldn't be required for InterfaceGraph:
+            # slice_start = 1 if path[1] == h2end5p else 0
+            # slice_end = -1 if path[-2] == h1end5p else None
+            # if slice_start == 1 or slice_end is not None:
+            #     path = path[slice_start:slice_end]
+            # However, you MUST put the start and end nodes together as they would be when stacked,
+            # (unless you choose to resolve this by increasing unstacking rate (together with throttle)..
+            # - This is done AFTER getting the path segments/elements...
         else:
             assert isinstance(elem1, DomainEnd) and isinstance(elem2, DomainEnd)
             d1end5p, d2end5p = elem1, elem2
@@ -423,6 +427,45 @@ class GraphManager():
         # TODO: Rename to "path_summary"
         path_elements = self.interfaces_path_summary(path)
         # path_summary is a list of (stiffness, [length, sum_length_squared]) tuples
+        # where stiffness is (0 for ssDNA, 1 for dsDNA and 2 for helix-bundles).
+
+        ## Adjust path segments as they would be *after* reaction.
+        if reaction_type is STACKING_INTERACTION:
+            # A duplex end can either be connected through its own duplex (the domain backbone),
+            # or throught the backbone connection to the next domain.
+            # We have both cases for both duplex ends.
+            first_segment = path_elements[0]
+            if len(path_elements) > 1:
+                # Remove the last segment and apply it onto the first.
+                last_segment = path_elements[-1]
+                if last_segment[0] > 0 and first_segment[0] > 0:
+                    ## Both duplex ends are connected via their own (stiff) duplex;
+                    ## we should put their segments "together" as they would be when stacked:
+                    # stiffness = first_segment[0] if first_segment[0] >= last_segment[0] else last_segment[0]
+                    # Even though segment is a tuple, the segment lengths in segment[1] is still a mutable list:
+                    #path_elements[0] = (first_segment[0], []
+                    path_elements.pop()  # Remove the last segment and append it to the first
+                    first_segment[1][0] += last_segment[1][0]
+                    first_segment[1][1] += last_segment[1][1]
+                # else:
+                    # If the duplexes are not connected via their own stiff/duplexed domains, then downstream
+                    # calculation using LRE/SRE should produce correct result...
+            else:
+                # Only a single path element:
+                if first_segment[0] > 0:
+                    # We have a single, fully-stacked segment; this cannot ever stack back upon it self.
+                    return 0
+                else:
+                    # A single, flexible connection...
+                    # This must be just a single phosphate connection between upstream 3' and downstream 5' ends, right?
+                    # Lets just return 1 for this.
+                    mean_sq_ee_dist = first_segment[1][1]
+                    # effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2)
+                    # activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3
+                    assert mean_sq_ee_dist < 1 # nm2
+                    return 1
+
+
 
 
         ## TODO: CHECK FOR SECONDARY LOOPS!

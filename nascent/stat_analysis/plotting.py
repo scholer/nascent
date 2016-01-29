@@ -44,9 +44,9 @@ def plot_tot_vs_time(stats, fields=('f_hybridized_domains',), add_average=False,
     Plot "total" stats versus time. (As opposed to plotting per-domain stats).
     :stats: Pandas DataFrame (old: list of dicts) with total stats vs time.
     Be careful:
-    tau and sim_system_time refers to the stats in the *previous row*,
+    tau and system_time refers to the stats in the *previous row*,
     i.e. tau is the duration of the previous state;
-    sim_system_time is the time when the state *ended*.
+    system_time is the time when the state *ended*.
 
     """
     pyplot = load_pyplot(backend)
@@ -85,11 +85,19 @@ def plot_tot_vs_time(stats, fields=('f_hybridized_domains',), add_average=False,
         #   ScatterPlot._make_plot ONLY adds legend label and handle if self.legend = True (from legend kwargs):
         #       if self.legend and hasattr(self, 'label'):
         #           label = self.label
-        # x = 'duration_cum' or "sim_system_time" or "system_time_end"  # ("sim_system_time" should equal duration_cum)
+        # x = 'duration_cum' or "system_time" or "system_time_end"  # ("system_time" should equal duration_cum)
         ax = stats.plot(kind=kind, x=x,
                         y=field, **pltargs)  #
         pltargs = {'ax': ax}
     pyplot.xlabel(kwargs.pop("xlabel", "Simulation time / s"))
+    if 'ylim' not in kwargs:
+        #auto_x_min, auto_x_max = pyplot.xlim()
+        #pyplot.ylim(ymin=0.0) #xmax=1.0
+        #pyplot.ylim((0.0, 1.0)) #xmax=1.0
+        ax.set_ylim(0.0, 1.0) #xmax=1.0
+        print("Adjusting ymin, ymax...")
+        #if auto_x_max > 0.4:
+        #pyplot.xlim(xmax=1.0)
     if filename:
         #pyplot.savefig(os.path.join(statsfolder, "f_stacked_ends_ave_vs_time.png"))
         pyplot.savefig(filename)

@@ -71,8 +71,8 @@ def main():
     plot_tot_hyb = True
     plot_tot_stacked = False
     plot_melting_curve = False
-    structure = "duplex_16bp-d2" # "duplex2"
     # structure = "duplex2"
+    structure = "duplex_16bp-d2" # "duplex2"
 
     # stats, statsfolders = load_stats()
     runidxs = [-1] #

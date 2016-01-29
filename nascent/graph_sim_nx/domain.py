@@ -77,7 +77,7 @@ class Domain():
         else:
             self.strand = None
             self.domain_strand_specie = (None, name)
-            self.universal_name = "%s:%s" % (None, self.instance_name)
+            self.universal_name = "%s_%s" % (None, self.instance_name)
         self.sequence = seq
         ## TODO: Reach a consensus on "length" attributes
         ## Suggestions:
@@ -143,7 +143,7 @@ class Domain():
         self.domain_strand_specie = (strand.name, self.name)
         ## Concern: If you add support for strand nicking/ligation, then you cannot use strand to specify
         ## domain universal name (which must be invariant throughout the simulation).
-        self.universal_name = "%s:%s" % (self.strand.instance_name, self.instance_name)
+        self.universal_name = "%s_%s" % (self.strand.instance_name, self.instance_name)
 
 
     def print_history(self, history=None, level=0, indent_str="    ", search_str=None, entrylimit=20):
@@ -287,7 +287,7 @@ class Domain():
     def __repr__(self):
         #frameinfo = inspect.getframeinfo(inspect.currentframe().f_back)
         #print("Domain repr called from:", frameinfo.filename, frameinfo.lineno)
-        return "%s:%s#%s" % (self.strand, self.name, self.duid)
+        return "%s-%s#%s" % (self.strand, self.name, self.duid)
         #return self.fqdn()
 
     def __str__(self):
@@ -347,10 +347,10 @@ class DomainEnd():
         return (self.domain.state_fingerprint(), self.end)
 
     def __str__(self):
-        return str(self.domain)+":"+self.end
+        return str(self.domain)+"_"+self.end
 
     def __repr__(self):
-        return repr(self.domain)+":"+self.end # + " at " id(self)
+        return repr(self.domain)+"-"+self.end # + " at " id(self)
 
 
 class Domain5pEnd(DomainEnd):

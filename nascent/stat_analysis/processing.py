@@ -107,7 +107,7 @@ def process_stats(stats, shift_tau_for_duration=False, shift_systime_for_end=Tru
         df['duration'] = df['tau'].shift(-1)
     if shift_systime_for_end:
         try:
-            df['system_time_end'] = df['sim_system_time'].shift(-1)
+            df['system_time_end'] = df['system_time'].shift(-1)
         except KeyError as e:
             print(type(e), e)
             print("df.keys():")
@@ -141,7 +141,7 @@ def process_stats(stats, shift_tau_for_duration=False, shift_systime_for_end=Tru
     # drop=True means you cannot access the column except as an index.
     # append=True means you get multiple indices.
     # inplace=True, otherwise it returns a copy and leave current DataFrame as it is.
-    # df.set_index('sim_system_time', drop=True, append=False, inplace=True)
+    # df.set_index('system_time', drop=True, append=False, inplace=True)
     # df.set_index('duration_cum', drop=True, append=False, inplace=True)
 
 

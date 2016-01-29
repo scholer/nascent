@@ -110,6 +110,14 @@ class Complex(nx.MultiDiGraph):
                         A vertice represents the interface between two domains,
                         or four domais if they are stacked.
         junctionI graph: Like helixI, but represents N-way junctions, e.g. a Holliday junction.
+
+    Discussion: What graph representation do we need for complexes?
+      - I thought we would use the complex graph to calculate intra-complex activity,
+        but that was never the case: We use system-level graphs, either ends5p3p_graph or interface_graph
+      - So, what graph, if any, do we need the complexes to be?
+      - It *is* nice to have per-complex graphs, if only to visualize the different complexes.
+      - Do we need the per-complex graphs to be directed graphs or undirected?
+    Discussion: How to generate proper state fingerprints?
     """
     def __init__(self, data=None, strands=None, origin="o", reaction_deque_size=5): #, reaction_spec_pair=None):
         self.cuid = next(make_sequential_id)
@@ -595,7 +603,7 @@ class Complex(nx.MultiDiGraph):
         ## TODO: Add fall-back to using domain instances (rather than state species) for fingerprint.
         ## This will not be useful for caching between complexes, but might still be used within the same
         ## complex, as long as we don't have strand swapping.
-        if not self._state_fingerprint:
+        if self._state_fingerprint is None:
             ## TODO: Re-enable hashing when I'm done debugging
             ## Must not include anything unique to this complex instance such as str(self)
             self._state_fingerprint = hash((

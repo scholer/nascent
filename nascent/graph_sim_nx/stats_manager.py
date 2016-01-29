@@ -124,7 +124,7 @@ class StatsWriter():
             self.stats_per_domain_file = fh = open(self.stats_per_domain_file, 'w')
             self.open_files.append(fh)
             # Has two headers, the first is for the "outer" fields: [sys-specs, domA, domB, ...]
-            # The second header line is for the "inner" fields: [tau, sim_system_time, ...], [n_hybridized, ...]
+            # The second header line is for the "inner" fields: [tau, system_time, ...], [n_hybridized, ...]
             header1 = self.stats_field_sep.join(["sysfields"] + self.stats_per_domain_species)
             header2 = self.stats_field_sep2.join(self.stats_per_domain_sysfields +
                                                  self.stats_per_domain_fields*len(self.stats_per_domain_species))
@@ -137,7 +137,7 @@ class StatsWriter():
             self.stats_per_strand_file = fh = open(self.stats_per_strand_file, 'w')
             self.open_files.append(fh)
             # Has two headers, the first is for the "outer" fields: [sys-specs, domA, domB, ...]
-            # The second header line is for the "inner" fields: [tau, sim_system_time, ...], [n_hybridized, ...]
+            # The second header line is for the "inner" fields: [tau, system_time, ...], [n_hybridized, ...]
             header1 = self.stats_field_sep.join(["sysfields"] + self.stats_per_strand_species)
             header2 = self.stats_field_sep2.join(self.stats_per_strand_sysfields +
                                                  self.stats_per_strand_fields*len(self.stats_per_strand_species))
@@ -211,7 +211,7 @@ class StatsWriter():
     def write_per_domain_stats(self, tau, sysfields=None, fields=None, species=None, init_stats=None):
         """
         Will first write constant fields, then domain species.
-        sim_system_time, temperature, N_domains, n_hybridized_domains, N_strands, ...
+        system_time, temperature, N_domains, n_hybridized_domains, N_strands, ...
         """
         if fields is None:
             sysfields = self.stats_per_domain_sysfields
@@ -250,7 +250,7 @@ class StatsWriter():
     def write_per_strand_stats(self, tau, sysfields=None, fields=None, species=None, init_stats=None):
         """
         Will first write constant fields, then domain species.
-        sim_system_time, temperature, N_domains, n_hybridized_domains, N_strands, ...
+        system_time, temperature, N_domains, n_hybridized_domains, N_strands, ...
         """
         if fields is None:
             sysfields = self.stats_per_domain_sysfields
@@ -279,7 +279,7 @@ class StatsWriter():
             strand_stats[name]['n_fully_hybridized'] = sum(1 for strand in strands if strand.is_fully_hybridized())
 
         ## Write data to file:
-        # tau, sim_system_time, temperature \t
+        # tau, system_time, temperature \t
         line = self.stats_field_sep.join(
             [self.stats_field_sep2.join([str(stats_total[field]) for field in sysfields])]+
             [self.stats_field_sep2.join([str(strand_stats[name][field]) for field in fields])
@@ -333,7 +333,7 @@ class StatsWriter():
         # self.reaction_graph_output_fnfmt = config.get('reaction_graph_output_fnfmt')
         # self.reaction_graph_output_formats = config.get('reaction_graph_output_formats')
         g = self.sysmgr.reaction_graph
-        systime = self.simulator.sim_system_time
+        systime = self.sysmgr.system_time
         output_funcs = {method: getattr(nx, "write_"+method)
                         for method in ("yaml", "edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek")}
         output_funcs['png'] = draw_graph_and_save
@@ -360,7 +360,7 @@ class StatsReader():
     def load_total_stats_file(self, fn):
         """
         Then the fields header:
-            tau, sim_system_time, temperature, N_domains, n_hybridized_domains, ...
+            tau, system_time, temperature, N_domains, n_hybridized_domains, ...
         Returns a list of stats-dicts
 
         """
@@ -378,7 +378,7 @@ class StatsReader():
         First line is a super-header spec:
             # sysspecs, domainA, domainB, ... domain names.
         Then the fields header:
-            tau, sim_system_time, temperature \t n_total, n_hybridized, n_fully_hubridized \t (continue for next domain)
+            tau, system_time, temperature \t n_total, n_hybridized, n_fully_hubridized \t (continue for next domain)
         The first three fields before the tab specifies the system state.
         The last three fields are "per-strand" stats field.
         Next line is values corresponding to the header.
@@ -391,7 +391,7 @@ class StatsReader():
             names = first_row[1:]
 
             second_row = next(fp).strip().split(self.stats_field_sep)
-            # [[tau, sim_system_time, temperature], [n_total, n_hybridized, n_fully_hubridized], [...], ...]
+            # [[tau, system_time, temperature], [n_total, n_hybridized, n_fully_hubridized], [...], ...]
             headers = [substr.split(self.stats_field_sep2) for substr in second_row]
 
             rows = ([[float(val) for val in substr.split(self.stats_field_sep2)]
@@ -410,7 +410,7 @@ class StatsReader():
         First line is a super-header spec:
             # sysspecs, domainA, domainB, ... domain names.
         Then the fields header:
-            tau, sim_system_time, temperature \t n_total, n_hybridized, n_fully_hubridized \t (continue for next domain)
+            tau, system_time, temperature \t n_total, n_hybridized, n_fully_hubridized \t (continue for next domain)
         The first three fields before the tab specifies the system state.
         The last three fields are "per-strand" stats field.
         Next line is
@@ -421,7 +421,7 @@ class StatsReader():
             names = first_row[1:]
 
             second_row = next(fp).strip().split(self.stats_field_sep)
-            # [[tau, sim_system_time, temperature], [n_total, n_hybridized, n_fully_hubridized], [...], ...]
+            # [[tau, system_time, temperature], [n_total, n_hybridized, n_fully_hubridized], [...], ...]
             headers = [substr.split(self.stats_field_sep2) for substr in second_row]
 
             rows = ([[float(val) for val in substr.split(self.stats_field_sep2)]

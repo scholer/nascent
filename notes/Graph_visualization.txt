@@ -5,3 +5,5 @@ Other notes:
 Plotting network graphs with Plotly:
 * https://plot.ly/ipython-notebooks/network-graphs/
 
+Graphviz:
+* http://www.graphviz.org/doc/info/attrs.html

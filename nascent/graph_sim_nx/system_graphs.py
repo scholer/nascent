@@ -458,7 +458,7 @@ class InterfaceNode():
             return self.delegatee.top_delegate()
 
     def __str__(self, ):
-        return "I:" + self.domain_end.name
+        return "I" + self.domain_end.name
 
     def __repr__(self, ):
         #return "I:" + str(self.domain_end)

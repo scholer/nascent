@@ -2116,15 +2116,17 @@ class ReactionMgr(ComponentMgr):
             # create a graph visualization:
             # start_pos = cmplx.graph['pos'] # edit: saving 'pos' directly in node attr dict:
             # start_pos = nx.get_node_attributes(cmplx, 'pos')
-            pos = layout_graph(cmplx, save_pos_as_attr=True)
-            # cmplx.graph['pos'] = pos
-            # nx.set_node_attributes(cmplx, 'pos', pos)
             path = os.path.join(self.reaction_graph_complexes_directory,
                                 "%s.%s" % (state_fingerprint, "png"))
-            draw_graph_and_save(cmplx, path, pos=pos)
+            #pos = layout_graph(cmplx, save_pos_as_attr=True)
+            # cmplx.graph['pos'] = pos  # Nope, pos is an attr for each node.
+            # nx.set_node_attributes(cmplx, 'pos', pos)
+            #draw_graph_and_save(cmplx, path, pos=pos)
+            draw_with_graphviz(cmplx, path)
             complexes_overview_fn = os.path.join(self.reaction_graph_complexes_directory, "complexes_overview.txt")
             with open(complexes_overview_fn, 'a') as fd:
                 fd.write("%s\t%s\n" % (self.system_time, state_fingerprint))
+            printd("New complex state %s save to file. (%s)" % (state_fingerprint, cmplx))
 
 
     def save_reaction_graph(self, ):
@@ -2150,6 +2152,7 @@ class ReactionMgr(ComponentMgr):
             # (defaults: k=sqrt(N_nodes), scale=1.0, weight='weight')
             #draw_graph_and_save(graph, path, pos=pos) # draw graph with matplotlib
             draw_with_graphviz(graph, path)
+            printd("%s saved to file %s" % (graph_name, path))
 
 
 
@@ -2273,6 +2276,21 @@ class ReactionMgr(ComponentMgr):
         if not is_good:
             pdb.set_trace()
 
+
+    def get_complexes_stats_strs(self, ):
+        """ Get a string with information on the current complexes. """
+        lines = ["\t".join(str(hash(itm) if isinstance(itm, frozenset) else itm) for itm in (
+            cmplx, cmplx._state_fingerprint, cmplx._strands_fingerprint,
+            cmplx._hybridization_fingerprint, cmplx._stacking_fingerprint))
+                 for cmplx in self.complexes]
+        return lines
+
+    def print_complexes_stats(self, ):
+        """ Print information on the current complexes. """
+        print("Current complexes and fingerprints:")
+        print("Complex   \tstate_fingerprint\tstrands_fingerprint\t"
+              "hybridization_fingerprint\tstacking_fingerprint")
+        print("\n".join(self.get_complexes_stats_strs()))
 
 
     def print_reaction_stats(self):

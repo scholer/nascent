@@ -222,7 +222,7 @@ def binary_state_probability(energy, T, unit='cal/mol', Q=1):
         beta = beta / 1000
     if Q is not None and Q != 1:
         energy = energy + math.log(Q)/beta # ΔG = ΔG° + RT ln(Q), beta = 1/RT
-    p_i = 1 / (1 + math.exp(beta*energy))   # Same as e^(ΔE/kT)...
+    p_i = 1 / (1 + math.exp(beta*energy))   # Same as 1/(1+e^(ΔE/kT))
     # The minus in part = e^(-ΔE/kT) is lost during algebraic transformation:
     # p_i = exp(-ΔE/kT) / (exp(-ΔE/kT) + 1) = 1/(1+exp(ΔE/kT))
     return p_i

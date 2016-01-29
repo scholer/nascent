@@ -113,15 +113,14 @@ class Strand(nx.MultiGraph):
             # networkx.draw* uses matplotlib, which takes rgb tuples:
             # TODO: This should probably be visualizer-specific properties
             rgb_tup = colormgr.domain_rgb(self, frac)
-            node_attrs = {'color_rgb': rgb_tup,
-                          'color_hsv': hsv_str,
-                          'Label': domain.name,
-                          'ds_dist_ee_nm': domain.ds_dist_ee_nm,
-                          #'size': math.sqrt(domain.ds_dist_ee_nm),
-                          'R': rgb_tup[0],
-                          'G': rgb_tup[1],
-                          'B': rgb_tup[2],
-                         }
+            node_attrs = {
+                'Label': domain.name,
+                'ds_dist_ee_nm': domain.ds_dist_ee_nm,
+                #'size': math.sqrt(domain.ds_dist_ee_nm),
+                #'color_rgb': rgb_tup,
+                #'color_hsv': hsv_str,
+                #'R': rgb_tup[0], 'G': rgb_tup[1], 'B': rgb_tup[2],
+            }
             ## TODO: We don't really need all these node attributes:
             for attr in "n_nt ss_dist_ee_sq ss_dist_ee_nm ds_dist_ee_nm ds_dist_ee_sq".split():
                 node_attrs[attr] = getattr(domain, attr)

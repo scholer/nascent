@@ -58,6 +58,7 @@ from .constants import (N_AVOGADRO, R,
                         HYBRIDIZATION_INTERACTION,
                         PHOSPHATEBACKBONE_INTERACTION,
                         STACKING_INTERACTION)
+from . import debug # Toggle debug.do_print from driver script before to alter behaviour.
 from .debug import printd, pprintd
 
 # Module-level constants and variables
@@ -222,10 +223,14 @@ class DM_Simulator(Simulator):
             sysmgr.check_system()
             # printd(" - precheck OK.")
 
+            if debug.do_print:
+                sysmgr.print_complexes_stats()
+
             # sysmgr.possible_hybridization_reactions is dict with  {domspec_pair: (c_j, is_forming)}
             # sysmgr.hybridization_propensity_functions is dict with              {domspec_pair: a_j}
-            # printd(" ---- Reaction stats: ----")
-            # sysmgr.print_reaction_stats()
+            if debug.do_print:
+                printd(" ---- Reaction stats: ----")
+                sysmgr.print_reaction_stats()
             # printd("\n".join(sysmgr.reaction_stats_strs()))
 
             # Step 1. (I expect that hybridization_propensity_functions is up-to-date)
@@ -320,11 +325,11 @@ class DM_Simulator(Simulator):
             sysmgr.system_time += tau
 
             ## 3b: Perform reaction and update reactions:
-            print("\n\nPerforming reaction: %s, %s\n - propensity c_j = %0.04g / %0.04g" %
-                  (reaction_spec, reaction_attr, a[j],
-                   sysmgr.possible_hybridization_reactions[reaction_spec] if reaction_type is HYBRIDIZATION_INTERACTION
-                   else sysmgr.possible_stacking_reactions[reaction_spec]),
-                  end="\n\n")
+            printd("\n\nPerforming reaction: %s, %s\n - propensity c_j = %0.04g / %0.04g" %
+                   (reaction_spec, reaction_attr, a[j],
+                    sysmgr.possible_hybridization_reactions[reaction_spec] if reaction_type is HYBRIDIZATION_INTERACTION
+                    else sysmgr.possible_stacking_reactions[reaction_spec]),
+                   end="\n\n")
             if reaction_type == HYBRIDIZATION_INTERACTION:
                 c_j = sysmgr.possible_hybridization_reactions[reaction_spec]
                 # Determine reaction attributes:
@@ -474,10 +479,10 @@ class DM_Simulator(Simulator):
             #          "'q' to quit;"
             #          "any other key to continue... "))
             # if 'g' in answer:
-            #     sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, self.sim_system_time))
+            #     sysmgr.draw_and_save_graphs(n="%s_%0.03fs" % (n_done, sysmgr.system_time))
             #     # if mirror_grouped_system:
             #     #     sysmgr_grouped.draw_and_save_graphs(prefix="grouped",
-            #     #                                         n="%s_%0.03fs" % (n_done, self.sim_system_time))
+            #     #                                         n="%s_%0.03fs" % (n_done, sysmgr.system_time))
             # if 'q' in answer:
             #     return
             # if 'd' in answer:

@@ -110,19 +110,30 @@ def thermodynamic_meltingcurve(T_start, T_finish, delta_T, volume,
 
 def solvetwocomponent(Ai, Bi, K):
     """
-     0  = D^2 + (-Bi-Ai-1/K)*D + Ai*Bi
+    Solve the equation:
+         0  = D^2 + (-Bi-Ai-1/K)*D + Ai*Bi
+    Originating from the two-component reaction system:
+        [A] + [B]  <-->  [D]     with equilibrium constant K
+    Where Ai and Bi are the initial (starting concentrations) of A and B,
+    before any product has formed (initial [D] concentration is zero).
+    Returns:
+        D, A, B, K
+    Where D, A, B are equilibrium concentrations of A, B and D,
+    and K is the equilibrium constant calculated afterwards K=D/(A*B).
+    (Which should equal the input K else something is wrong).
     """
     a = 1
     b = (-Bi-Ai-1/K)
     c = Ai*Bi
-    #print("a=%s, b=%s, c=%s" % (a, b, c))
+    # Find the two possible solutions to the equation: ax² + bx + c = 0
+    # where x is the amount of product formed (aka [D]).
     x1, x2, _ = solvepol2(a, b, c)
     D = None
     if not any(M-x1 < 0 for M in (Ai, Bi)):
         # x1 is a viable solution
         D = x1
     if not any(M-x2 < 0 for M in (Ai, Bi)):
-        # x1 is a viable solution
+        # x2 is a viable solution
         if D:
             print("Both x1 and x2 seems to be good solutions?!?!")
             report_weird(x1, x2, Ai, Bi)
@@ -136,6 +147,13 @@ def solvetwocomponent(Ai, Bi, K):
     return D, A, B, K
 
 def solvepol2(a, b, c):
+    """
+    Solve the second-order equation:
+        ax² + bx + c = 0
+    Returns the two roots (possible solutions) and the system determinant:
+        x1, x2, det
+    If the system does not have any solutions, raises ValueError: math domain error
+    """
     det = math.sqrt(b**2-4*a*c)
     x1, x2 = (-b + det) / (2*a), (-b - det) / (2*a)
     return x1, x2, det
