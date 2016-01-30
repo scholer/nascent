@@ -149,7 +149,8 @@ class ReactionMgr(ComponentMgr):
         # On second thought, it's probably better to detect this as early as possible,
         # rather than through later analysis. Let reaction_spec_pair and reaction_attr be a entries in edge_attr,
         # and then check that these are the same whenever we traverse an existing edge.
-        self.reaction_graph = nx.MultiDiGraph()  # [source][target][(reacted_spec_pair, reaction_attr)] = eattr
+        # Fixed: Reaction_graph was initially a MultiDiGraph with edges keyed by (reacted_spec_pair, reaction_attr).
+        self.reaction_graph = nx.DiGraph()
         self.reaction_graph.add_node(0) # The "null" node from which all new complexes emerge.
         self.reaction_graph_complexes_directory = params.get("reaction_graph_complexes_directory")
         if self.reaction_graph_complexes_directory is not None:
@@ -1925,28 +1926,23 @@ class ReactionMgr(ComponentMgr):
             # Note: We really do not expect there to be more than one edge from source to target,
             # in fact that would be an error, so it might be better to use a normal DiGraph rather than a MultiDiGraph?
 
-            target_by_key = {}
+            rxs_key = lambda eattr: (eattr['reaction_spec_pair'], eattr['reaction_attr'])
             ## If in checking mode, we should check that:
             ## (1) There is only one edge from source to target, and
             ## (2) all edge keys from source to targets are unique to that target.
-            for target, edges in self.reaction_graph[source_state].items():
-                assert len(edges) == 1
-                for key in edges:
-                    assert key not in target_by_key
-                    target_by_key[key] = target
-            # alternatively:
-            edge_key_count = Counter(key for target, edges in self.reaction_graph[source_state].items()
-                                     for key in edges)
-            assert all(count == 1 for count in edge_key_count.values())
-            target_by_key = {key: target for target, edges in self.reaction_graph[source_state].items()
-                             for key in edges}
+            # Update: reaction_graph is now a regular DiGraph, not MultiDiGraph
+            edge_keys_from_src = [rxs_key(eattrs) for target, eattrs in self.reaction_graph[source_state].items()]
+            assert all(count == 1 for count in Counter(edge_keys_from_src).values())
+            target_by_key = {rxs_key(eattrs): target for target, eattrs in self.reaction_graph[source_state].items()}
             ## TODO: Implement endstate_by_reaction as permanent data-structure.
             if edge_key in target_by_key:
                 expected_state_fingerprint = target_by_key[edge_key]
+            else:
+                expected_state_fingerprint = None
             # alternatively (without any check):
             try:
-                expected_state_fingerprint = next(target for target, edges in self.reaction_graph[source_state].items()
-                                                  if edge_key in edges)
+                expected_state_fingerprint = next(target for target, eattrs in self.reaction_graph[source_state].items()
+                                                  if edge_key == rxs_key(eattrs))
             except StopIteration:
                 expected_state_fingerprint = None
 
@@ -2059,13 +2055,19 @@ class ReactionMgr(ComponentMgr):
             assert source in self.reaction_graph
             assert target in self.reaction_graph
             # Can probably just add edge and increment afterwards... maybe
-            if target not in self.reaction_graph[source] \
-                or edge_key not in self.reaction_graph[source][target]:
+            if target not in self.reaction_graph[source]:
+                ## Currently no edge from source to target:
                 # weight = recurrences:
-                self.reaction_graph.add_edge(source, target, key=edge_key, weight=1)
+                self.reaction_graph.add_edge(source, target, #key=edge_key,
+                                             weight=1, reaction_attr=tuple(reaction_attr),
+                                             reaction_spec_pair=reacted_spec_pair)
                 self.save_reaction_graph()
             else:
-                self.reaction_graph[source][target][edge_key]['weight'] += 1
+                # Check that the edge is correct:
+                eattr = self.reaction_graph[source][target]
+                assert eattr['reaction_attr'] == reaction_attr
+                assert eattr['reaction_spec_pair'] == reacted_spec_pair
+                eattr['weight'] += 1
 
             ### 4. Detect/process reaction micro-cycles: (not needed any more) ###
             # if micro_cycle is not None:
@@ -2152,7 +2154,10 @@ class ReactionMgr(ComponentMgr):
 
 
     def save_reaction_graph(self, ):
-        """ Save reaction graph to file... """
+        """
+        Save reaction graph to file...
+        See also StatsManager.save_reaction_graph (!)
+        """
 
         if self.reaction_graph_complexes_directory is None:
             print("reaction_graph_complexes_directory is not set; cannot save reaction_graph/system graphs...")

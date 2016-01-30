@@ -328,6 +328,10 @@ class StatsWriter():
 
 
     def save_reaction_graph(self, **kwargs):
+        """
+        Save sysmgr.reaction_graph to file.
+        See also ReactionMgr.save_reaction_graph (!)
+        """
 
         # self.reaction_graph_output_directory = config.get('reaction_graph_output_directory')
         # self.reaction_graph_output_fnfmt = config.get('reaction_graph_output_fnfmt')
