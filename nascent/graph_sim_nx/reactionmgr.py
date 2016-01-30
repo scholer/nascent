@@ -72,8 +72,8 @@ import numpy as np
 import pdb
 import random
 
-from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS, energy_tables_in_units_of_R
-DNA_NN4_R = energy_tables_in_units_of_R['DNA_NN4']
+from nascent.energymodels.biopython import DNA_NN4_R, hybridization_dH_dS
+# DNA_NN4_R = energy_tables_in_units_of_R['DNA_NN4']
 from .constants import R, N_AVOGADRO # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K:
 # from .constants import AVOGADRO_VOLUME_NM3
 from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION
@@ -120,6 +120,9 @@ class ReactionMgr(ComponentMgr):
         self.volume = volume or params.get('volume')
         # Base single-molecule activity of two free single reactants in volume.
         self.specific_bimolecular_activity = 1/self.volume/N_AVOGADRO # × M
+        # Increase in entropy (in units of R) when a volume restriction is lifted (i.e. a duplex dissociates).
+        # Multiply by temperature (or R*T) to get change in free energy.
+        self.volume_entropy = -ln(self.specific_bimolecular_activity)
         self.include_steric_repulsion = False # True
         self.N_invoked_reactions_count = 0  # Keep count of how many reactions; See also simulator.N_steps
 
@@ -143,6 +146,9 @@ class ReactionMgr(ComponentMgr):
         # There really should be only ONE reaction that takes a complex from state A to state B.
         # However, just to make sure we detect that this is indeed true, for now we use a MultiDiGraph,
         # keyed by (reacted_spec_pair, reaction_attr):
+        # On second thought, it's probably better to detect this as early as possible,
+        # rather than through later analysis. Let reaction_spec_pair and reaction_attr be a entries in edge_attr,
+        # and then check that these are the same whenever we traverse an existing edge.
         self.reaction_graph = nx.MultiDiGraph()  # [source][target][(reacted_spec_pair, reaction_attr)] = eattr
         self.reaction_graph.add_node(0) # The "null" node from which all new complexes emerge.
         self.reaction_graph_complexes_directory = params.get("reaction_graph_complexes_directory")
@@ -499,7 +505,8 @@ class ReactionMgr(ComponentMgr):
                 d1, d2 = elem1, elem2
             assert d1.strand.complex == d2.strand.complex != None
 
-        if reaction_spec_pair in self.cache['intracomplex_activity']:
+        ## TODO: Re-enable cache
+        if False: # reaction_spec_pair in self.cache['intracomplex_activity']:
             return self.cache['intracomplex_activity'][reaction_spec_pair]
         activity = super().intracomplex_activity(elem1, elem2, reaction_type)
         self.cache['intracomplex_activity'][reaction_spec_pair] = activity
@@ -590,12 +597,14 @@ class ReactionMgr(ComponentMgr):
             else:
                 raise ValueError("Unknown reaction type %r for reaction_attr %s between %s and %s" %
                                  (reaction_attr.reaction_type, reaction_attr, elem1, elem2))
-            self.cache['stochastic_rate_constant'][c_j_cache_key] = (c_j, reaction_attr)
+            # self.cache['stochastic_rate_constant'][c_j_cache_key] = (c_j, reaction_attr)  # TODO: Re-enable cache
             # raise NotImplementedError("Not fully implemented yet...")
 
         if self.reaction_throttle:
+            print("THROTTLING!")
             if self.reaction_throttle_use_cache:
-                # Decrement reaction throttles on-the-fly with each reaction invocation, instead of calculating exp(...)
+                # Per-reaction throttle is adjusted in post_reaction_processing with each reaction invocation.
+                # This should be more efficient than calculating some exponential based on reaction invocation count.
                 if self.reaction_throttle_per_complex:
                     if reaction_attr.is_intra:
                         if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
@@ -617,6 +626,7 @@ class ReactionMgr(ComponentMgr):
                 else:
                     throttle_factor = self.reaction_throttle_cache[reaction_spec_pair]
             else:
+                # Calculate reaction throttle factor using function, typically exponentially decreasing with Nric.
                 throttle_factor = self.calculate_throttle_factor(elem1, elem2, reaction_attr, reaction_spec_pair)
                 if throttle_factor < 1 or (False or random.random() < max((0.1, throttle_factor))):
                     fmt_dict = dict(t=throttle_factor, inter_intra="intra" if reaction_attr.is_intra else "inter",
@@ -628,9 +638,9 @@ class ReactionMgr(ComponentMgr):
                            "\n(spec: {spec} [{ric} invocations])").format(**fmt_dict))
                     # print(" - reaction_spec_pair:", set(reaction_spec_pair))
             c_j *= throttle_factor
-        else:
-            # print("NOT throttling reaction:", elem1, elem2, reaction_attr)
-            pass
+        # else:
+        #     # print("NOT throttling reaction:", elem1, elem2, reaction_attr)
+        #     pass
         return c_j
 
 
@@ -1845,8 +1855,9 @@ class ReactionMgr(ComponentMgr):
         ##       The base-class can be used as-is for performance.
 
         self.reaction_invocation_count[(reacted_spec_pair, reaction_attr)] += 1
-        if self.reaction_throttle_use_cache:
+        if self.reaction_throttle and self.reaction_throttle_use_cache:
             if self.reaction_throttle_per_complex:
+                # throttle_cache_key = (reacted_spec_pair, reaction_attr)
                 ## Per-complex reaction_throttle_cache
                 ## We *could* do this in complex.assert_state_change; but then we would have to pass
                 ## in reaction_result as argument (if we want to distinguish intRA vs intER molecular reactions...)
@@ -1875,7 +1886,7 @@ class ReactionMgr(ComponentMgr):
                     # pdb.set_trace()
                     pass
             else:
-                ## Global reaction_throttle_cache:
+                ## Global reaction_throttle_cache (not per-complex):
                 if (reacted_spec_pair, reaction_attr) not in self.reaction_throttle_cache:
                     self.reaction_throttle_cache[(reacted_spec_pair, reaction_attr)] = 0.99
                 else:
@@ -1888,7 +1899,7 @@ class ReactionMgr(ComponentMgr):
         elif reaction_attr.reaction_type is STACKING_INTERACTION:
             # h1end3p.stack_string is only set when the DomainEnd is actually stacked.
             stack_string = "%s%s/%s%s" % (h1end3p.base, h1end5p.base, h2end5p.base, h2end3p.base)
-            if stack_string not in DNA_NN4:
+            if stack_string not in DNA_NN4_R:
                 stack_string = stack_string[::-1]
             dH, dS = DNA_NN4_R[stack_string]
         else:
@@ -1929,6 +1940,7 @@ class ReactionMgr(ComponentMgr):
             assert all(count == 1 for count in edge_key_count.values())
             target_by_key = {key: target for target, edges in self.reaction_graph[source_state].items()
                              for key in edges}
+            ## TODO: Implement endstate_by_reaction as permanent data-structure.
             if edge_key in target_by_key:
                 expected_state_fingerprint = target_by_key[edge_key]
             # alternatively (without any check):
@@ -1969,13 +1981,19 @@ class ReactionMgr(ComponentMgr):
                               (activity, reaction_attr.reaction_type, elem1, elem2))
                         dS_shape = 1000
                     else:
-                        dS_shape = -ln(activity)  # Lower activity means higher energy when forming...
+                        ## Activity is in implicit unit of Molar, so loop entropy is just -R*ln(activity)
+                        ## However, the "-R*ln(activity)" change in entropy is when releasing the loop.
+                        ## When we are forming the loop, the entropy is reduced; activity is << 1, so ln(activity) < 0.
+                        dS_shape = ln(activity)
                     cmplx.energies_dHdS[1]['shape'] += dS_shape
                     dS += dS_shape
                 else:
                     # IntER-strand/complex reaction; Two strands/complexes coming together.
                     assert reaction_attr.is_intra is False
-                    dS_volume = ln(self.specific_bimolecular_activity)  # Multiply by -R*T to get dG.
+                    # dS_volume = ln(self.specific_bimolecular_activity) # Multiply by -R*T to get dG.
+                    # self.volume_entropy is the (positive) increase in entropy (in units of R) when a
+                    # volume restriction is lifted. Here it's negative because the restriction is formed.
+                    dS_volume = -self.volume_entropy  # Multiply by -R*T to get dG.
                     cmplx.energies_dHdS[1]['volume'] += dS_volume
                     dS += dS_volume
             else:
@@ -1989,7 +2007,8 @@ class ReactionMgr(ComponentMgr):
 
                 if reaction_result['case'] <= 1:
                     # complex is broken up into two complexes/molecules.
-                    dS_volume = ln(self.specific_bimolecular_activity)  # Multiply by -R*T to get dG.
+                    # Increase in entropy (in units of R) when a volume restriction is lifted.
+                    dS_volume = self.volume_entropy  # Multiply by -R*T to get dG.
                     cmplx.energies_dHdS[1]['volume'] += dS_volume
                     dS += dS_volume
                 else:
@@ -2009,10 +2028,13 @@ class ReactionMgr(ComponentMgr):
                               (activity, elem1, elem2, reaction_attr))
                         dS_shape = 1000
                     else:
-                        dS_shape = ln(activity)
+                        # The loop restriction is lifted, so shape entropy should increase.
+                        # activity is << 1, so -ln(activity) (with the minus) is positive.
+                        dS_shape = -ln(activity)
                     dS += dS_shape
                     cmplx.energies_dHdS[1]['shape'] += dS_shape
-                cmplx.energy_total_dHdS = [sum(d.values()) for d in cmplx.energies_dHdS]
+                ## TODO: Use a more appropriate rounding, not just integer.
+                cmplx.energy_total_dHdS = [int(sum(d.values())) for d in cmplx.energies_dHdS]
 
             ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
             source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]

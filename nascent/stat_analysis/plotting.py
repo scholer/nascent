@@ -90,14 +90,13 @@ def plot_tot_vs_time(stats, fields=('f_hybridized_domains',), add_average=False,
                         y=field, **pltargs)  #
         pltargs = {'ax': ax}
     pyplot.xlabel(kwargs.pop("xlabel", "Simulation time / s"))
-    if 'ylim' not in kwargs:
-        #auto_x_min, auto_x_max = pyplot.xlim()
-        #pyplot.ylim(ymin=0.0) #xmax=1.0
-        #pyplot.ylim((0.0, 1.0)) #xmax=1.0
-        ax.set_ylim(0.0, 1.0) #xmax=1.0
-        print("Adjusting ymin, ymax...")
-        #if auto_x_max > 0.4:
-        #pyplot.xlim(xmax=1.0)
+    if 'ylim' in kwargs:
+        pyplot.ylim(kwargs['ylim']) #xmax=1.0
+    else:
+        auto_y_min, auto_y_max = pyplot.ylim()
+        if auto_y_max > 0.4:
+            #ax.set_ylim(0.0, 1.0) #xmax=1.0
+            pyplot.ylim(ymax=1.0)
     if filename:
         #pyplot.savefig(os.path.join(statsfolder, "f_stacked_ends_ave_vs_time.png"))
         pyplot.savefig(filename)

@@ -152,10 +152,15 @@ for tbl_name in "DNA_NN3, DNA_NN4, DNA_IMM1, DNA_TMM1, DNA_DE1".split(", "):
     tbl = globals()[tbl_name]
     energy_tables[tbl_name] = tbl  # Use energy_tables["DNA_NN4"] instead of globals()["DNA_NN4"] to get table.
     energy_tables_in_units_of_R[tbl_name] = {
-        # R is in cal/mol/K
+        # R is in cal/mol/K, 1.987 cal/mol/K to be exact.
         k: (H*1000/R, S/R) for k, (H, S) in tbl.items()
     }
-
+DNA_NN4_R = energy_tables_in_units_of_R['DNA_NN4']
+DNA_NN3_R = energy_tables_in_units_of_R['DNA_NN3']
+# The native energy tables are in units of kcal/mol for dH and cal/mol/K for dS.
+# The "in units of R" tables are (R=1.987 cal/mol/K):
+# dH = 1 (kcal/mol)*(1000/k)/R * R = 1000/1.987 K * R
+# dH = 1 (cal/mol/K)/R * R = 1/1.987 * R
 # To use energies in unit of R:
 # K = exp(-dG/T) = exp(dS-dH/T)  # Very simple to interpret and use, right?
 

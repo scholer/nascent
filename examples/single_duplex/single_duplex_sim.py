@@ -192,10 +192,11 @@ def main():
               # or only re-calculate for pairs against other changed domains?
               "reaction_update_pair_against_all": True,
               # Nric = normalized_reaction_invocation_count = sysmgr.reaction_invocation_count[reaction_spec]/len(sysmgr.domains_by_name[d.name])
-              "reaction_throttle": True, # True: default to c_j_throttle_factor = exp(-Nric/10)
-              # Use a reaction throttle cache, decrementing the throttle when reaction is triggered, rather than calculated in calculate_c_j from Nric
-              "reaction_throttle_use_cache": True,
-              "reaction_throttle_per_complex": True,
+              "reaction_throttle": False, # Enable/disable reaction throttling (all kinds).
+              # Use a reaction throttle cache, decrementing the throttle when reaction is triggered, rather than
+              # calculating throttle factor in calculate_c_j using a custom exponential decreasing with Nric.
+              "reaction_throttle_use_cache": True, # True: Throttle is decreased in post_reaction_processing.
+              "reaction_throttle_per_complex": False, # True: Have per-reaction throttles for each complex.
               "reaction_throttle_offset": 0,
               "reaction_throttle_reset_on_temperature_change": True,
               "dispatcher_enabled": False,  # True to use a dispatcher to save and visualize graph changes.
@@ -302,8 +303,8 @@ def main():
             else:
                 # pdb.set_trace()
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=1000)
-                #simulator.simulate(T=330, n_steps_max=1000, systime_max=10)
-                simulator.simulate(T=330, n_steps_max=400, systime_max=1000)
+                simulator.simulate(T=330, n_steps_max=5000, systime_max=20)
+                #simulator.simulate(T=330, n_steps_max=400, systime_max=1000)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 
     except KeyboardInterrupt:

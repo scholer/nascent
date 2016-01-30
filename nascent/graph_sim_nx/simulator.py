@@ -37,7 +37,7 @@ from datetime import datetime
 
 from nascent.energymodels.biopython import Tm_NN
 # Consider using NN table that has units of R, R/K:
-#from nascent.energymodels.biopython import energy_tables_in_units_of_R
+#from nascent.energymodels.biopython import DNA_NN4_R, energy_tables_in_units_of_R
 #DNA_NN4 = energy_tables_in_units_of_R["DNA_NN4"]
 from .thermodynamic_utils import thermodynamic_meltingcurve
 from .reactionmgr import ReactionMgr

@@ -59,7 +59,7 @@ from networkx.algorithms.components import connected_components, connected_compo
 # import numpy as np
 import pdb
 
-from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
+from nascent.energymodels.biopython import DNA_NN4_R, hybridization_dH_dS
 from .constants import R, N_AVOGADRO, AVOGADRO_VOLUME_NM3 #, R # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K
 from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION
 from .complex import Complex

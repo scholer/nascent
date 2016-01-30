@@ -110,7 +110,7 @@ def main():
                                   # x='system_time_end',
                                   figsize=(16, 10),
                                   #linestyles=("-", "None"),
-                                  colors=color*5,
+                                  #colors=color*5,
                                   #kind='line',
                                   #kind='scatter',
                                   # fields=('f_hybridized_domains_avg',),
@@ -137,7 +137,7 @@ def main():
         # ax.xlim(0, 100) # ax has no xlim attribute...
         #pyplot.xlim(0, 200)
         pyplot.xlim(xmin=-0.05)
-        pyplot.ylim(ymin=-0.05)
+        #pyplot.ylim(ymin=-0.05)
         # pyplot.ylim(ymin=0, ymax=1.0)
         pyplot.savefig(plotfilename)
         webbrowser.open(plotfilename)

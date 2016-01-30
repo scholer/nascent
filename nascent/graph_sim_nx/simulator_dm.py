@@ -46,7 +46,7 @@ else:
 # import numpy as np
 
 
-#from nascent.energymodels.biopython import DNA_NN4, hybridization_dH_dS
+#from nascent.energymodels.biopython import DNA_NN4_R, hybridization_dH_dS
 #from .thermodynamic_utils import thermodynamic_meltingcurve
 from .simulator import Simulator
 #from .reactionmgr_grouped import ReactionMgrGrouped

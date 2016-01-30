@@ -75,7 +75,8 @@ from .constants import HELIX_XOVER_DIST, HELIX_STACKING_DIST, HELIX_WIDTH
 from .complex import Complex
 from .graph_manager import GraphManager
 from .debug import printd, pprintd
-from nascent.energymodels.biopython import DNA_NN4, energy_tables_in_units_of_R
+ # Enthalpies in units of R*K, entropies in units of R = 1.987 cal/mol/K
+from nascent.energymodels.biopython import DNA_NN4_R
 from .utils import (sequential_number_generator, sequential_uuid_gen)
 
 
@@ -484,9 +485,9 @@ class ComponentMgr(GraphManager):
         # h1 5'---ATGCATG|C : A|TGCATGC---3'
         # h2 3'---TACGTAC|G : T|ACGTACG---5'
         #          h2end5p ^^^ h2end3p
-        if stack_string not in DNA_NN4:
+        if stack_string not in DNA_NN4_R:
             stack_string = stack_string[::-1]
-            assert stack_string in DNA_NN4
+            assert stack_string in DNA_NN4_R
 
         h1end3p.stack_string = h1end5p.stack_string = h2end3p.stack_string = h2end5p.stack_string = stack_string
 
