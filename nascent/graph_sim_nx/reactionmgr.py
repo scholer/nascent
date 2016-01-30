@@ -152,6 +152,8 @@ class ReactionMgr(ComponentMgr):
         # Fixed: Reaction_graph was initially a MultiDiGraph with edges keyed by (reacted_spec_pair, reaction_attr).
         self.reaction_graph = nx.DiGraph()
         self.reaction_graph.add_node(0) # The "null" node from which all new complexes emerge.
+        self.endstate_by_reaction = {}  # [startstate][(reaction_spec_pair, reaction_attr)] = endstate
+        self.endstate_by_reaction[0] = {} # Also adding the "null" node
         self.reaction_graph_complexes_directory = params.get("reaction_graph_complexes_directory")
         if self.reaction_graph_complexes_directory is not None:
             if not os.path.exists(self.reaction_graph_complexes_directory):
@@ -1934,16 +1936,12 @@ class ReactionMgr(ComponentMgr):
             edge_keys_from_src = [rxs_key(eattrs) for target, eattrs in self.reaction_graph[source_state].items()]
             assert all(count == 1 for count in Counter(edge_keys_from_src).values())
             target_by_key = {rxs_key(eattrs): target for target, eattrs in self.reaction_graph[source_state].items()}
+            # The above has been superseeded by a permanent endstate_by_reaction dict:
+            assert target_by_key == self.endstate_by_reaction[source_state]
             ## TODO: Implement endstate_by_reaction as permanent data-structure.
-            if edge_key in target_by_key:
-                expected_state_fingerprint = target_by_key[edge_key]
+            if edge_key in self.endstate_by_reaction[source_state]:
+                expected_state_fingerprint = self.endstate_by_reaction[source_state][edge_key]
             else:
-                expected_state_fingerprint = None
-            # alternatively (without any check):
-            try:
-                expected_state_fingerprint = next(target for target, eattrs in self.reaction_graph[source_state].items()
-                                                  if edge_key == rxs_key(eattrs))
-            except StopIteration:
                 expected_state_fingerprint = None
 
             cmplx.assert_state_change(reacted_spec_pair, reaction_attr,
@@ -2037,12 +2035,15 @@ class ReactionMgr(ComponentMgr):
             assert source == source_state
 
             ### 3. Update reaction_graph  ###
-            # 'target' is the new complex state
-            # Add target node if not present in the reaction graph.
+
+            ## 3.a: Add target node (the new complex state) if not present in the reaction graph.
             # Increment node 'encounters'/'size' and edge 'invocations'/'weight':
             if target not in self.reaction_graph.node:
-                # Add complex node to reaction_graph and write complex graph/state to file.
+                ## Add complex node to reaction_graph and write complex graph/state to file.
                 self.record_new_complex_state(cmplx, target)
+                ## Add target to self.endstate_by_reaction as well:
+                assert target not in self.endstate_by_reaction
+                self.endstate_by_reaction[target] = {}
             else:
                 self.reaction_graph.node[target]['encounters'] += 1  # could also simply be 'size'?
                 # For now, we keep statistics of the different complex energies that have been calculated
@@ -2052,22 +2053,32 @@ class ReactionMgr(ComponentMgr):
                     self.reaction_graph.node[target]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] += 1
                 except KeyError:
                     self.reaction_graph.node[target]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] = 1
+                ## Check that target is in self.endstate_by_reaction:
+                assert target in self.endstate_by_reaction
             assert source in self.reaction_graph
             assert target in self.reaction_graph
-            # Can probably just add edge and increment afterwards... maybe
+
+            ## 3.b: Add edge from source (start state) to target (end state):
             if target not in self.reaction_graph[source]:
-                ## Currently no edge from source to target:
+                ## There is currently no edge from source to target, so add new edge:
                 # weight = recurrences:
                 self.reaction_graph.add_edge(source, target, #key=edge_key,
                                              weight=1, reaction_attr=tuple(reaction_attr),
                                              reaction_spec_pair=reacted_spec_pair)
                 self.save_reaction_graph()
+                # Update self.endstate_by_reaction[source_state]
+                assert edge_key not in self.endstate_by_reaction[source_state]
+                self.endstate_by_reaction[source_state][edge_key] = target
             else:
-                # Check that the edge is correct:
+                # There is already an edge from source to target: Check that the edge is correct
                 eattr = self.reaction_graph[source][target]
                 assert eattr['reaction_attr'] == reaction_attr
                 assert eattr['reaction_spec_pair'] == reacted_spec_pair
                 eattr['weight'] += 1
+                # Check self.endstate_by_reaction[source_state]
+                assert edge_key in self.endstate_by_reaction[source_state]
+                assert self.endstate_by_reaction[source_state][edge_key] == target
+
 
             ### 4. Detect/process reaction micro-cycles: (not needed any more) ###
             # if micro_cycle is not None:
