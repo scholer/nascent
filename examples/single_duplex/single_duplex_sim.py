@@ -204,6 +204,7 @@ def main():
               "stats_total_file": outputfn(statstype="time_totstats", ext="txt"),
               "stats_per_domain_file": outputfn(statstype="time_domain_stats", ext="txt"),
               "stats_per_strand_file": outputfn(statstype="time_strand_stats", ext="txt"), #
+              "stats_complex_state_file": outputfn(statstype="time_complex_stats", ext="txt"), #
               "stats_post_simulation_file": outputfn(statstype="post_simulation_stats", ext="yaml"), #
               # complexes - these are saved by reactionmgr as new complex assemblies (states) are encountered.
               "reaction_graph_complexes_directory": os.path.join(statsfolder, "complexes"), #
@@ -304,7 +305,7 @@ def main():
                 # pdb.set_trace()
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=1000)
                 simulator.simulate(T=330, n_steps_max=5000, systime_max=20)
-                #simulator.simulate(T=330, n_steps_max=400, systime_max=1000)
+                # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 
     except KeyboardInterrupt:

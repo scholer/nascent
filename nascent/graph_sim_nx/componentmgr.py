@@ -276,6 +276,9 @@ class ComponentMgr(GraphManager):
             result = self.join_complex_at(domain_pair=(domain1, domain2), edge_kwargs=edge_kwargs)
         else:
             c1 = strand1.complex
+            result = {'changed_complexes': [c1] if c1 is not None else None,
+                      'new_complexes': None, 'obsolete_complexes': None,
+                      'free_strands': None, 'case': -1}
             if c1 is not None:
                 # c1.history.append("hybridize: Adding edge (%r, %r, %r)." % (domain1, domain2, edge_key))
                 # I'm experimenting having Complex being a DiGraph...
@@ -284,7 +287,7 @@ class ComponentMgr(GraphManager):
                 # c1.add_edge(domain2, domain1, key=edge_key, attr_dict=edge_kwargs)
                 # c1._hybridization_fingerprint = None
                 # c1._state_fingerprint = None
-            result = None
+
 
         assert strand1.complex == strand2.complex != None
 
@@ -363,38 +366,40 @@ class ComponentMgr(GraphManager):
 
         ## If domain is stacked, break the stacking interaction before breaking complex:
         ## Edit/new: Domains CANNOT dehybridize if they are stacked
-        unstacking_results = {}
-        for d, h2d in ((domain1, domain2), (domain2, domain1)):
-            h1end3p = d.end3p
-            h2end5p = h2d.end5p  # Is "unpartnered" above, so cannot use end.partner
-            #             h1end3p         h1end5p
-            # Helix 1   ----------3' : 5'----------
-            # Helix 2   ----------5' : 3'----------
-            #             h2end5p         h2end3p
-            if h1end3p.stack_partner is not None:
-                ## Variable unpacking:
-                h1end5p = h1end3p.stack_partner
-                h2end3p = h2end5p.stack_partner
-                assert h2end3p == h1end5p.hyb_partner  # Other stacking end is still intact.
-                # Edit: When I do domain.partner = None above, it also sets domain.end5p/3p = None! (property)
-                # assert h2end5p is h1end3p.hyb_partner
-                # With break_complex=False, unstack() will update system-graphs and complex domain graph,
-                # but not check if complex is broken apart.
-                # But wait - we SHOULD check if complex breaks apart. That can EASILY happen.
-                ## TODO: FIX THIS!!
-                ## Hypothesis: We can ONLY break a hybridization that is NOT stacked?
-                ## - Must give correct result for the "1 vs 2 vs N split" example case.
-                ## Can domains dehybridize if stacked? If not, why?
-                ## - We currently only consider stacking of hybridized domains (duplexes), NOT single-stranded domains.
-                ## - If we cannot stack domains that are not hybridized, then we cannot dehybridize domains that are
-                ##   stacked (the reverse rx). All reactions must be reversible,
-                ##   otherwise we would get a net cyclic transport in our reaction network.
-                unstacking_results[frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))] = \
-                    self.unstack(h1end3p, h2end5p, h2end3p, h1end5p, break_complex=False)
-                # printd("Unstack result for domain %r:" % (d,))
-                # pprintd(unstacking_results[-1][1])
-            # else:
-                # printd("Domain %r 3p end is not stacked...")
+        assert all(endp.stack_partner is None for endp in
+                   (domain1.end3p, domain2.end3p, domain2.end5p, domain1.end5p))
+        # unstacking_results = {}
+        # for d, h2d in ((domain1, domain2), (domain2, domain1)):
+        #     h1end3p = d.end3p
+        #     h2end5p = h2d.end5p  # Is "unpartnered" above, so cannot use end.partner
+        #     #             h1end3p         h1end5p
+        #     # Helix 1   ----------3' : 5'----------
+        #     # Helix 2   ----------5' : 3'----------
+        #     #             h2end5p         h2end3p
+        #     if h1end3p.stack_partner is not None:
+        #         ## Variable unpacking:
+        #         h1end5p = h1end3p.stack_partner
+        #         h2end3p = h2end5p.stack_partner
+        #         assert h2end3p == h1end5p.hyb_partner  # Other stacking end is still intact.
+        #         # Edit: When I do domain.partner = None above, it also sets domain.end5p/3p = None! (property)
+        #         # assert h2end5p is h1end3p.hyb_partner
+        #         # With break_complex=False, unstack() will update system-graphs and complex domain graph,
+        #         # but not check if complex is broken apart.
+        #         # But wait - we SHOULD check if complex breaks apart. That can EASILY happen.
+        #         ## TODO: FIX THIS!!
+        #         ## Hypothesis: We can ONLY break a hybridization that is NOT stacked?
+        #         ## - Must give correct result for the "1 vs 2 vs N split" example case.
+        #         ## Can domains dehybridize if stacked? If not, why?
+        #         ## - We currently only consider stacking of hybridized domains (duplexes), NOT single-stranded domains.
+        #         ## - If we cannot stack domains that are not hybridized, then we cannot dehybridize domains that are
+        #         ##   stacked (the reverse rx). All reactions must be reversible,
+        #         ##   otherwise we would get a net cyclic transport in our reaction network.
+        #         unstacking_results[frozenset(((h1end3p, h2end5p), (h2end3p, h1end5p)))] = \
+        #             self.unstack(h1end3p, h2end5p, h2end3p, h1end5p, break_complex=False)
+        #         # printd("Unstack result for domain %r:" % (d,))
+        #         # pprintd(unstacking_results[-1][1])
+        #     # else:
+        #         # printd("Domain %r 3p end is not stacked...")
 
         if break_complex:
             result = self.break_complex_at(domain_pair=(domain1, domain2))
@@ -403,6 +408,9 @@ class ComponentMgr(GraphManager):
         else:
             # Manually remove complex edges (but don't break it into two):
             c1 = strand1.complex
+            result = {'changed_complexes': [c1],
+                      'new_complexes': None, 'obsolete_complexes': None,
+                      'free_strands': None, 'case': -1}
             if c1 is not None:
                 c1.history.append("dehybridize: Removing edge (%r, %r, %r)." %
                                   (domain1, domain2, HYBRIDIZATION_INTERACTION))
@@ -411,9 +419,9 @@ class ComponentMgr(GraphManager):
                 # c1.hybridized_pairs.remove(frozenset((domain1, domain2)))
                 # c1._hybridization_fingerprint = None
                 # c1._state_fingerprint = None
-            result = {}
 
-        result['unstacking_results'] = unstacking_results
+
+        # result['unstacking_results'] = unstacking_results
         # We return unstacking_results as a dict of: {<ends four-tuple>: result), ....}
         # for use in ReactionMgr.hybridize_and_process which invokes ReactionMgr.update_possible_stacking_reactions(...)
 
@@ -523,6 +531,9 @@ class ComponentMgr(GraphManager):
             result = self.join_complex_at(stacking_pair=stacking_tuple, edge_kwargs=edge_kwargs)
         else:
             assert False  # Making sure this doesn't happen during testing...
+            result = {'changed_complexes': [c1],
+                      'new_complexes': None, 'obsolete_complexes': None,
+                      'free_strands': None, 'case': -1}
             if c1 is not None:
                 c1.history.append(("stack: Manually adding stacking edges (%r, %r) (%r, %r) "
                                    "but not performing merge (if relevant).") %
@@ -532,7 +543,6 @@ class ComponentMgr(GraphManager):
                 # c1.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
                 # c1._stacking_fingerprint = None  # Reset hybridization fingerprint
                 # c1._state_fingerprint = None
-            result = None
 
         self.N_stacked_ends += 4
 
@@ -628,6 +638,12 @@ class ComponentMgr(GraphManager):
         else:
             # Manually update complex domain graph, but do not process/break the complex into two (if applicable).
             # assert False # checking that this does not happen during testing..
+            ## Changed: Even if we don't explicitly break the complex (e.g. for stacking/unstacking),
+            ##    we should still return a results dict including a 'changed_complexes' entry,
+            ##    and maybe use case = -1 to indicate that no breaking was attempted.
+            result = {'changed_complexes': [c1],
+                      'new_complexes': None, 'obsolete_complexes': None,
+                      'free_strands': None, 'case': -1}
             if c1 is not None:
                 # c1.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
                 # c1._hybridization_fingerprint = None
@@ -648,8 +664,6 @@ class ComponentMgr(GraphManager):
                 # new_fingerprints = c1.get_all_fingerprints()
                 # assert new_fingerprints != old_fingerprints2
 
-            result = None
-
         self.N_stacked_ends -= 4
 
         if self.hyb_dehyb_file:
@@ -667,7 +681,9 @@ class ComponentMgr(GraphManager):
                   'obsolete_complexes': None,
                   'free_strands': None,
                   'case': None}
-        Case is any of:
+        'case' is any of:
+            Case -1: No complex merge/break was attempted,
+                     used e.g. for stacking where we don't always want to look for inter-complex reactions.
             Case 0 : intRA-STRAND hybridization.
             Case 1 : IntRA-complex hybridization
             Case 2 : IntER-complex hybridization between two complexes. Merge the two complexs:
@@ -722,7 +738,7 @@ class ComponentMgr(GraphManager):
 
         if strand1 == strand2:
             # If forming an intra-strand connection, we don't need to check if we make or merge any Complexes
-            print("hybridize case 0: intra-strand hybridization.")
+            print("hybridize case 0: intra-strand hybridization/stacking.")
             result['case'] = 0
             assert c1 == c2
             if c1 is None:
@@ -831,19 +847,20 @@ class ComponentMgr(GraphManager):
         Make sure to break edges in system graphs before calling this method to determine and
         process complex breakage.
 
-        Old:
+        Case enumeration, conforming to cases returned by join_complex_at:
+            Case -1:  Join/break_complex was not attempted (e.g. if check is disabled).
+            CASE  0:  NO COMPLEX PRESENT, intra-strand reaction.
+            Case  1:  The two strands are still connected: No need to do anything further
+            Case  2:  Two smaller complexes - must create a new complex for detached domain:
+            Case  3:  One complex and one unhybridized strand - no need to do much further
+            Case  4:  Two unhybridized strands
+        Cases 0-1 has no change in volume entropy; cases 2-4 has 1 unit of volume entropy change.
+
+        Old case enumeration:
             ## Case 0: No complexes; Intra-strand (e.g. hairpin) de-hybridization.
             ## Case 1/(a) Two smaller complexes - must create a new complex for detached domain:
             ## Case 2/(b) One complex and one unhybridized strand - no need to do much further
             ## Case 3/(c) Two unhybridized strands
-
-        Edit, new, to conform to join_complex_at(...):
-            CASE 0: NO COMPLEX PRESENT, intra-strand reaction.
-            Case 1: The two strands are still connected: No need to do anything further
-            Case 2 Two smaller complexes - must create a new complex for detached domain:
-            Case 3 One complex and one unhybridized strand - no need to do much further
-            Case 4 Two unhybridized strands
-
         """
         if domain_pair is None and stacking_pair is None:
             raise ValueError("Must provide either domain_pair or stacking_pair.")

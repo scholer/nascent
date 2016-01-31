@@ -31,7 +31,8 @@ Formats:
 
 import os
 import pdb
-from collections import Counter
+from collections import Counter, defaultdict
+from itertools import chain
 import yaml
 import networkx as nx
 try:
@@ -148,6 +149,24 @@ class StatsWriter():
         if self.complex_state_count_file:
             self.complex_state_count_file = open(self.complex_state_count_file, 'wb') # msgpack - open in binary mode
             self.open_files.append(self.complex_state_count_file)
+
+
+        ## File to collect complex states:
+        self.stats_complex_state_file = config.get('stats_complex_state_file')
+        complex_state_fields = [
+            ## TODO: Add N_hybridized_domains as well.
+            "ComplexID", "system_time", "reaction",
+            "cached_state_hash", "state_hash", "cached_state_hash2",
+            "N_strands", "N_domains", "N_hybridized_pairs", "N_stacked_pairs",
+            'total_dH', 'total_dS', 'volume_dH', 'volume_dS', 'shape_dH', 'shape_dS',
+            'hybridization_dH', 'hybridization_dS', 'stacking_dH', 'stacking_dS'
+        ]
+        if self.stats_complex_state_file:
+            print("Writing stats to stats_complex_state_file:", self.stats_complex_state_file)
+            self.stats_complex_state_file = fh = open(self.stats_complex_state_file, 'w')
+            self.open_files.append(fh)
+            header = self.stats_field_sep.join(complex_state_fields)
+            self.stats_complex_state_file.write(header+"\n")
 
 
         #### Post-simulation stats: ####
@@ -304,8 +323,59 @@ class StatsWriter():
         msgpack.pack(self.complex_state_count_file, complex_state_count)
 
 
+    def write_complex_state_stats(self, result, reaction_attr):
+        """
+        Args:
+            :result:    The result dict with case and changed complexes from react_and_process method.
+
+        Will, for each complex, write a line with:
+            <complex uuid>, system_time, N_strands, N_hybridized_domains, N_stacked_domains,
+                and all fields from complex.energies_dHdS
+        This should be easy. The tricky part is parsing the result...
+        You will have to create a table *for each complex* before you start calculating the duration
+        of each complex state.
+        """
+        system_time = self.sysmgr.system_time
+        if result['changed_complexes'] is not None and result['new_complexes'] is not None:
+            changed_complexes = result['changed_complexes'] + result['new_complexes']
+        elif result['changed_complexes'] is not None:
+            changed_complexes = result['changed_complexes']
+        elif result['new_complexes'] is not None:
+            changed_complexes = result['new_complexes']
+        else:
+            return
+        reaction_str = reaction_attr.reaction_type + ("+" if reaction_attr.is_forming else "-")
+        for cmplx in changed_complexes:
+            ## Done: Add N_hybridized_domains, N_stacked_ends
+            ## Done: h+, h-, s+, s- field to denote whether it is a forming/breaking hybridization/stacking reaction.
+            ## "ComplexID", "system_time", "reaction",
+            ## TODO: Add complex fingerprints, perhaps even hybridized/stacked?
+            ## in ReactionMgr we track N_domains_hybridized explicitly, but not for complexes.
+            line = self.stats_field_sep.join(str(val) for val in (
+                cmplx.cuid, system_time, reaction_str,
+                cmplx._state_fingerprint, cmplx.state_fingerprint(), cmplx._state_fingerprint,
+                len(cmplx.strands), len(list(cmplx.domains())),
+                len(cmplx.hybridized_pairs), len(list(cmplx.stacked_pairs)),
+                cmplx.energy_total_dHdS[0], cmplx.energy_total_dHdS[1],
+                cmplx.energies_dHdS[0]['volume'], cmplx.energies_dHdS[1]['volume'],
+                cmplx.energies_dHdS[0]['shape'], cmplx.energies_dHdS[1]['shape'],
+                cmplx.energies_dHdS[0]['hybridization'], cmplx.energies_dHdS[1]['hybridization'],
+                cmplx.energies_dHdS[0]['stacking'], cmplx.energies_dHdS[1]['stacking'],
+            ))
+            self.stats_complex_state_file.write(line+"\n")
+
 
     def write_post_simulation_stats(self, systime=None):
+        """
+        Append a dict with stats:
+            sysmgr_cache, reaction_attrs, reaction_throttle_cache, reaction_invocation_count
+        to post_simulation_stats.yaml file.
+        Note that I write the stats by appending the stats dict as:
+            yaml.dump([stats])
+        Doing this, I can append [stats] multiple times to the same file
+        and still get a readable yaml-formatted list.
+        (I typically append [stats] before and after a simulation.)
+        """
         if self.stats_post_simulation_file is None:
             print("statsmgr.stats_post_simulation_file is None, cannot collect post simulation stats...")
             return
@@ -371,8 +441,6 @@ class StatsReader():
         with open(fn) as fp:
             headers = next(fp).strip().split(self.stats_field_sep)
             rows = ([float(val) for val in line.strip().split(self.stats_field_sep)] for line in fp)
-            # each row is like: [[0.2, 1.2, 330], [10, 5, 2], [...], ...]
-            #sysstats, *domainstats =
             stats = [dict(zip(headers, row)) for row in rows]
         return stats
 
@@ -437,3 +505,24 @@ class StatsReader():
                       {name: dict(zip(headers[1:], domvalues)) for name, domvalues in zip(names, row[1:])})
                      for row in rows]
         return stats
+
+
+    def load_complex_state_stats(self, fn):
+        """
+        returns
+            stats, stats_by_cuid
+        Where stats is a list of dicts with all entries
+
+        and stats_by_cuid is the entries grouped by ComplexID.
+        (This grouping could probably also be done by Pandas and a filter...)
+        """
+        with open(fn) as fp:
+            headers = next(fp).strip().split(self.stats_field_sep)
+            rows = ([float(val) for val in line.strip().split(self.stats_field_sep)] for line in fp)
+            stats = [dict(zip(headers, row)) for row in rows]
+            stats_by_cuid = defaultdict(list)
+            # This could probably also be done by Pandas and a filter...
+            for stat in stats:
+                stats_by_cuid[stat['ComplexID']].append(stat)
+        return stats, stats_by_cuid
+

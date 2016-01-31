@@ -127,7 +127,7 @@ class Complex(nx.MultiDiGraph):
             strands = []
         for strand in strands:
             strand.complex = self
-        self.domains = self.nodes  # alias
+        self.domains = self.node.keys  # alias.. but perhaps better to have a separate set?
         # Should strands be a set or list? Set is most natural, but a list might play better with a adjacency matrix.
         # Then, you could just have a dict mapping strand -> index of the matrix
         self.strands = set(strands)
@@ -246,6 +246,7 @@ class Complex(nx.MultiDiGraph):
         # stacking- and hybridization energies. For each, we have both dH and dS.
         # self.energies_dHdS = {'volume': [0, 0], 'shape': [0, 0],
         #                       'stacking': [0, 0], 'hybridization': [0, 0]}
+        # Enthalpies in self.energies_dHdS[0], entropies in self.energies_dHdS[1]
         self.energies_dHdS = [{'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0},
                               {'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0}]
         self.energy_total_dHdS = [0, 0]
@@ -321,6 +322,9 @@ class Complex(nx.MultiDiGraph):
     #         self.remove_node(domain)
     #         # self.ends5p3p_graph.remove_nodes_from([domain.end5p, domain.end3p])
 
+    # @property
+    # def domains(self):
+    #     return list(self.node.keys())
 
 
     def print_history(self, history=None, level=0, indent_str="    ", search_str=None, limit=20, totlimit=100,

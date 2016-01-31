@@ -383,6 +383,10 @@ class DM_Simulator(Simulator):
             sysmgr.check_system()
             # printd(" - post reaction_and_process check OK.")
 
+            ## Save some stats
+            ## (not write_stats, which is invoked above after calculating tau but before perfoming reaction)
+            # if self.stats_writer.stats_complex_state_file:
+            self.stats_writer.write_complex_state_stats(result, reaction_attr)
 
             # Repeat for grouped system mgr:
             # mirror_grouped_system = False
