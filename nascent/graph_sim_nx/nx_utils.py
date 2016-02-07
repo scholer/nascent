@@ -120,7 +120,7 @@ def draw_graph_and_save(g, outputfn, pos=None, layout=nx.spring_layout, clear_gr
     return pos
 
 
-def draw_with_graphviz(G, filename, export=('dot', 'png'), interface='pydot', prog='neato'):
+def draw_with_graphviz(G, filename, output_formats=('dot', 'png'), interface='pydot', prog='neato'):
     """
     :G:         The graph to draw.
     :filename:  Filename basis (without the file extension).
@@ -129,13 +129,18 @@ def draw_with_graphviz(G, filename, export=('dot', 'png'), interface='pydot', pr
     """
     if filename.endswith(".png"):
         filename = filename[:-4]
+    if isinstance(output_formats, str):
+        output_formats = (output_formats, )
     if interface == 'pydot' or G.is_multigraph():
         ## Use the pydot interface to graphviz:
+        # pydot.Dot.write(filename, prog, format) simply invokes `prog -T{format} tmp_file` and output to PIPE.
+        # (or, for format='raw', just write Dot representation to file.)
         P = nx.to_pydot(G)
-        if 'dot' in export:
-            P.write_dot(filename + ".dot") # same as P.write(filename, format='dot', prog=None). Default prog is 'dot'.
-        if 'png' in export:
-            P.write_png(filename + ".png", prog=prog) # returns True on success.
+        for fmt in output_formats:
+            path = ".".join((filename, fmt))
+            if fmt == 'dot': # not to be confused with prog='dot'
+                fmt = 'raw'
+            P.write(path, prog=prog, format=fmt)
     else:
         # Note: Gohlke's pygraphviz for Windows doesn't seem to support strict=False.
         ## Use the pygraphviz Agraph interface to graphviz:

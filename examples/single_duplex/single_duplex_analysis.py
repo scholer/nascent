@@ -44,6 +44,7 @@ Plotting refs:
 import os
 import sys
 import webbrowser
+import shutil
 
 # Run from package home dir or have nascent on your python path:
 sys.path.insert(0, ".")
@@ -61,7 +62,7 @@ from nascent.stat_analysis.processing import load_multiple_stats #, process_stat
 from nascent.stat_analysis.meltingcurve import plot_thermodynamic_meltingcurve
 
 
-
+colors = list("rgbcmk") + "silver firebrick darkslategrey orange darkmagenta".split()
 
 
 
@@ -71,16 +72,37 @@ def main():
     plot_tot_hyb = True
     plot_tot_stacked = False
     plot_melting_curve = False
-    # structure = "duplex2"
-    structure = "duplex_16bp-d2" # "duplex2"
+
+    structure = "duplex2"
+    # structure = "duplex_16bp-d2"
+    structure = "duplex_16bp_2d_10b-loop"
+    structure = "duplex_20bp_2d_5T-loop"
+    structure = "duplex_20bp_2d_4T-loop"
+    structure = "duplex_20bp_2d_2T-loop"
 
     # stats, statsfolders = load_stats()
     runidxs = [-1] #
+    # runidxs = [-2] #
+    # runidxs = [-3] #
+    # runidxs = [-1, -2, -3, -6, -7, -8, -9, -10]
+    # runidxs = [-11] #
     # runidxs = [-1, -2]
-    # runidxs = [-1, -2, -3]
+    runidxs = [-1, -2, -3]
+    runidxs = [-1, -2, -3, -4]
+    runidxs = [-1, -2, -4]
+    runidxs = [-1, -2, -3, -5]
+    runidxs = [-1, -2, -3, -4, -6]
+    runidxs = [-1, -2, -3, -4, -5, -7]
+    runidxs = [-7]
+    # runidxs = [-1, -2, -3, -4, -5, -6, -8]
+    # runidxs = [-1, -3]
     # runidxs = [-1, -2, -3, -4, -5]
+    # runidxs = [-1, -2, -3, -4, -5, -6]
+    # runidxs = [-1, -2, -3, -4, -5, -6, -7, -8, -9]
     # runidxs = [-2, -3, -4, -5]
-    # runidxs = [-4, -5]
+    #runidxs = [-4, -5]
+    # runidxs = [-3, -4, -5]
+    # runidxs = [-2, -3, -4]
     stats, statsfolders = load_multiple_stats(runidxs=runidxs, basedir=scriptdir, structure=structure, process=True)
     statsfolder = statsfolders[0]
 
@@ -99,11 +121,13 @@ def main():
         # with pd.plot_params.use('logx', False):
         # "Specific lines can be excluded from the automatic legend element selection by defining a label
         # starting with an underscore."
-        for runstats, runidx, color in zip(stats, runidxs, 'rgbcmk'[:len(stats)]):
+        for runstats, runidx, color in zip(stats, runidxs, colors[:len(stats)]):
             plotfilename = os.path.join(statsfolder, "f_hybridized_domains_avg_vs_time.png")
             # labels, markers, colors, etc all match up against the equivalent data field.
             fields=('f_hybridized_domains_avg', 'f_partially_hybridized_strands_avg', 'f_fully_hybridized_strands_avg')
             fields=('f_partially_hybridized_strands_avg', 'f_fully_hybridized_strands_avg')
+            fields=('f_partially_hybridized_strands_avg', )
+            # fields=('f_fully_hybridized_strands_avg', )      # T-loop domains never hybridize...
             ax = plot_tot_vs_time(runstats, filename=None, #plotfilename,
                                   ax=ax,
                                   x='duration_cum',
@@ -141,6 +165,11 @@ def main():
         # pyplot.ylim(ymin=0, ymax=1.0)
         pyplot.savefig(plotfilename)
         webbrowser.open(plotfilename)
+        print("Plot save to file:", plotfilename)
+        plotfilename_with_runidxs = os.path.join(
+            statsfolder, "f_hybridized_domains_avg_vs_time" + "_".join(str(i) for i in runidxs) + ".png")
+        print("Extra copy of plot:", plotfilename_with_runidxs)
+        shutil.copy2(plotfilename, plotfilename_with_runidxs)
 
 
     ## Plot stacked ends:
@@ -148,6 +177,11 @@ def main():
         plotfilename = os.path.join(statsfolder, "f_stacked_ends_avg_vs_time.png")
         ax = plot_tot_vs_time(stats, fields=('f_stacked_ends_avg',), add_average=False, filename=plotfilename)
         webbrowser.open(plotfilename)
+        print("Plot save to file:", plotfilename)
+        plotfilename_with_runidxs = os.path.join(
+            statsfolder, "f_stacked_ends_avg_vs_time" + "_".join(str(i) for i in runidxs) + ".png")
+        print("Extra copy of plot:", plotfilename_with_runidxs)
+        shutil.copy2(plotfilename, plotfilename_with_runidxs)
 
 
 

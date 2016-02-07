@@ -665,11 +665,12 @@ class Complex(nx.MultiDiGraph):
         :reaction_spec_pair: The reaction_spec_pair for the reaction that caused the change to this new state.
 
         Returns:
-        If a micro-cycle containing reaction_pair is found, return a slice of reaction_deque with reaction_pairs:
+            new_state_fingerprint, microcycle
+
+        If a micro-cycle containing reaction_pair is found, microcycle is a slice of reaction_deque with reaction_pairs:
             [reaction_pair, pair2, pair3, ..., reaction_pair]
         where reaction_pair is the same reaction pair as the one provided as first arg, :reaction_pair:
-
-        Otherwise, returns None.
+        Otherwise, microcycle will be None.
 
         ### Micro-cycles ###
         Regarding reaction micro-cycles, do we record complex states:
@@ -713,7 +714,7 @@ class Complex(nx.MultiDiGraph):
         self.reaction_invocation_count[reaction_spec_pair] += 1
 
         # pdb.set_trace()
-        ## Detect reaction cycle:
+        ## Detect reaction cycle:  (obsolete)
         # if reaction_spec_pair in self.reaction_deque[-self.reaction_deque_size:]:
         #     # Using x in list is about 40% faster than list.index(x) - note: deque don't have an index because deques are not for random access.
         #     # This is a little complex since we want to make sure we have the highest index.
@@ -735,7 +736,7 @@ class Complex(nx.MultiDiGraph):
         # else:
         #     self.reaction_deque.append(reaction_spec_pair)
         #     return None
-
+        return state_fingerprint, None
 
 
     def get_all_fingerprints(self):

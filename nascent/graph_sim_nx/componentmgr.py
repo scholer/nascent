@@ -712,6 +712,10 @@ class ComponentMgr(GraphManager):
             domain_edge_kwargs = edge_kwargs
             #h1end3p = h1end5p = (h2end3p, h2end5p) = ()
         else:
+            #             h1end3p         h1end5p
+            # Helix 1   ----------3' : 5'----------
+            # Helix 2   ----------5' : 3'----------
+            #             h2end5p         h2end3p
             (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
             if edge_kwargs is None:
                 edge_kwargs = {"interaction": STACKING_INTERACTION,
@@ -738,7 +742,11 @@ class ComponentMgr(GraphManager):
 
         if strand1 == strand2:
             # If forming an intra-strand connection, we don't need to check if we make or merge any Complexes
-            print("hybridize case 0: intra-strand hybridization/stacking.")
+            # print("\nhybridize case 0: intra-strand hybridization/stacking.")
+            # if domain_pair:
+            #     print(domain_pair)
+            # if stacking_pair:
+            #     print(stacking_pair)
             result['case'] = 0
             assert c1 == c2
             if c1 is None:

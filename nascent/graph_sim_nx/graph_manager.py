@@ -390,8 +390,9 @@ class GraphManager():
             path = shortest_path(self.interface_graph,
                                  d1end5p.ifnode.top_delegate(),
                                  d2end5p.ifnode.top_delegate())
-            slice_start = 1 if path[1] == d1end3p else 0
-            slice_end = -1 if path[-2] == d2end3p else None
+            slice_start = 1 if path[1] == d1end3p.ifnode.top_delegate() else 0
+            slice_end = -1 if path[-2] == d2end3p.ifnode.top_delegate() else None
+            # pdb.set_trace()
             if slice_start == 1 or slice_end is not None:
                 path = path[slice_start:slice_end]
         elif reaction_type is STACKING_INTERACTION:
@@ -458,12 +459,13 @@ class GraphManager():
                 else:
                     # A single, flexible connection...
                     # This must be just a single phosphate connection between upstream 3' and downstream 5' ends, right?
-                    # Lets just return 1 for this.
-                    mean_sq_ee_dist = first_segment[1][1]
+                    # Nah, it's the same for duplex hybridization of duplex domains separated by T-loop.
+                    # Thus, we also need to check for loops, etc... Let's just let the general routine take its course.
+                    pass
+                    # mean_sq_ee_dist = first_segment[1][1]
                     # effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**(3/2)
                     # activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3
-                    assert mean_sq_ee_dist < 1 # nm2
-                    return 1
+                    # return 2.0
 
 
 
@@ -511,6 +513,11 @@ class GraphManager():
                 # SRE_lengths, SRE_sq_lengths = [], []
                 SRE_len, SRE_len_sq = 0, 0
 
+        ## Minor corrections to SRE_len and SRE_len_sq:
+        # SRE_len -= 0.25
+        # SRE_len_sq -= 0.35
+
+        ## Check if the contour-length is long enough for the elements to "touch":
         if LRE_len > SRE_len:
             # The domains cannot reach each other. (Unless we allow helical bending which is not yet implemented)
             return 0

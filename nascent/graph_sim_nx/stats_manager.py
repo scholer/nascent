@@ -178,6 +178,9 @@ class StatsWriter():
         self.reaction_graph_output_directory = config.get('reaction_graph_output_directory')
         self.reaction_graph_output_fnfmt = config.get('reaction_graph_output_fnfmt')
         self.reaction_graph_output_formats = config.get('reaction_graph_output_formats')
+        if isinstance(self.reaction_graph_output_formats, str):
+            # Ensure that is is a list/tuple:
+            self.reaction_graph_output_formats = [self.reaction_graph_output_formats]
 
 
     def close_all(self):
@@ -400,7 +403,12 @@ class StatsWriter():
     def save_reaction_graph(self, **kwargs):
         """
         Save sysmgr.reaction_graph to file.
-        See also ReactionMgr.save_reaction_graph (!)
+        See also ReactionMgr.save_reaction_graph (although this one actually saves all system graphs,
+        not just the reaction graph.)
+        And:
+            This method saves in more formats..
+            This method has different filename formatting, uses ReactionMgr.reaction_graph_output_fnfmt
+
         """
 
         # self.reaction_graph_output_directory = config.get('reaction_graph_output_directory')
@@ -411,6 +419,10 @@ class StatsWriter():
         output_funcs = {method: getattr(nx, "write_"+method)
                         for method in ("yaml", "edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek")}
         output_funcs['png'] = draw_graph_and_save
+        if not os.path.exists(self.reaction_graph_output_directory):
+            os.makedirs(self.reaction_graph_output_directory)
+        if not os.path.isdir(self.reaction_graph_output_directory):
+            print("Warning: output dir %s is not a director!" % self.reaction_graph_output_directory)
         for ext in self.reaction_graph_output_formats:
             path = os.path.join(self.reaction_graph_output_directory,
                                 self.reaction_graph_output_fnfmt.format(ext=ext, systime=systime, **kwargs))

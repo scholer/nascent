@@ -344,7 +344,7 @@ class DomainEnd():
         return self.domain.strand
 
     def state_fingerprint(self):
-        return (self.domain.state_fingerprint(), self.end)
+        return (self.domain.state_fingerprint(), self.end, self.stack_partner is not None)
 
     def __str__(self):
         return str(self.domain)+"_"+self.end

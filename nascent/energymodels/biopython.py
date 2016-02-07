@@ -172,6 +172,9 @@ def canonical_partitions(energies, T, unit='cal/mol'):
     # beta as in p_s = exp(-beta*E_s)
     if 'mol' in unit:
         beta = 1/(R_units_to_value['cal/mol/K' if 'cal' in unit else 'J/mol/K']*T)
+    elif 'R' in unit:
+        # Units of R*K and R
+        beta = 1/T
     else:
         beta = 1/(k_units_to_value['cal/K' if 'cal' in unit else 'J/K']*T)
     if unit[0] == 'k':

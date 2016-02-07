@@ -37,13 +37,14 @@ import pdb
 import logging
 logger = logging.getLogger(__name__)
 import pprint
+
 def info_pprint(*args, **kwargs):
     from inspect import currentframe, getframeinfo
     frameinfo = getframeinfo(currentframe().f_back)
     print(frameinfo.filename, frameinfo.lineno)
     org_pprint(*args, **kwargs)
 
-pprint.pprint = info_pprint
+# pprint.pprint = info_pprint  # If this module is imported multiple times, you get infinite recursion!
 
 
 # LIBPATH = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -75,14 +76,20 @@ def main():
     strand_defs_folder = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(nascent.__file__))), "testfiles")
     scriptdir = os.path.dirname(os.path.abspath(__file__))
+
     structure = "duplex2"
-    structure = "duplex_16bp-d2" # "duplex2"
+    # structure = "duplex_16bp-d2"
+    structure = "duplex_16bp_2d_10b-loop"
+    structure = "duplex_20bp_2d_5T-loop"
+    structure = "duplex_20bp_2d_4T-loop"
+    structure = "duplex_20bp_2d_2T-loop"
 
     #n_strand_copies_default = 400
     #n_strand_copies_default = 100
     # n_strand_copies_default = 40
     #n_strand_copies_default = 20
     # n_strand_copies_default = 10
+    # n_strand_copies_default = 4
     # n_strand_copies_default = 2
     n_strand_copies_default = 1
 
@@ -181,7 +188,7 @@ def main():
               # A filename str or True to save to working directory.
               "save_invoked_reactions_to_file": False, # True or False
               # A filename str or True to save to working directory.
-              "save_hybdehyb_to_file": True, # True or False
+              "save_hybdehyb_to_file": False, # True or False
               # Enable or disable bending of single helices:
               "enable_helix_bending": False,
               # Merge complexes upon stacking and break if unstacked (if no hybridization interactions):
@@ -192,10 +199,11 @@ def main():
               # or only re-calculate for pairs against other changed domains?
               "reaction_update_pair_against_all": True,
               # Nric = normalized_reaction_invocation_count = sysmgr.reaction_invocation_count[reaction_spec]/len(sysmgr.domains_by_name[d.name])
-              "reaction_throttle": False, # Enable/disable reaction throttling (all kinds).
+              "reaction_throttle": True, # Enable/disable reaction throttling (all kinds).
               # Use a reaction throttle cache, decrementing the throttle when reaction is triggered, rather than
               # calculating throttle factor in calculate_c_j using a custom exponential decreasing with Nric.
               "reaction_throttle_use_cache": True, # True: Throttle is decreased in post_reaction_processing.
+              "reaction_throttle_factor_base": 0.9997, # 1.00, #0.99, # 1.00, # True: Throttle is decreased in post_reaction_processing.
               "reaction_throttle_per_complex": False, # True: Have per-reaction throttles for each complex.
               "reaction_throttle_offset": 0,
               "reaction_throttle_reset_on_temperature_change": True,
@@ -210,8 +218,9 @@ def main():
               "reaction_graph_complexes_directory": os.path.join(statsfolder, "complexes"), #
               # reaction_graph - are saved by statsmgr after every simulation.
               "reaction_graph_output_directory": os.path.join(statsfolder, "reaction_graph"), #
-              "reaction_graph_output_fnfmt": "reaction_graph_{systime}.{ext}", #
-              "reaction_graph_output_formats": "png",
+              "reaction_graph_output_fnfmt": "reaction_graph_{systime:0.04f}.{ext}", #
+              # Supported output format: "yaml", "edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek", "png"
+              "reaction_graph_output_formats": ["png", "yaml"], # Should be a sequence of output formats
               # How far back to look when looking for reaction microcycles:
               "reaction_microcycles_slice_size": 5,
              }
@@ -303,8 +312,10 @@ def main():
                 s.sort_stats('time').print_stats(20)
             else:
                 # pdb.set_trace()
-                # simulator.simulate(T=330, n_steps_max=10000, systime_max=1000)
-                simulator.simulate(T=330, n_steps_max=5000, systime_max=20)
+                simulator.simulate(T=330, n_steps_max=100000, systime_max=2000)
+                # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
+                # simulator.simulate(T=330, n_steps_max=50000, systime_max=100000)
+                # simulator.simulate(T=330, n_steps_max=1000, systime_max=200)
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 
@@ -330,6 +341,7 @@ def main():
     # simulator.save_stats_cache()
 
     simulator.stats_writer.write_post_simulation_stats()
+    simulator.stats_writer.save_reaction_graph()
     simulator.stats_writer.close_all() # Close all open files...
 
     Tm_filename = outputfn(statstype="energies", ext="yaml")
