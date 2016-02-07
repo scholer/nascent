@@ -1932,8 +1932,50 @@ class ReactionMgr(ComponentMgr):
             raise ValueError("Unknown reaction type '%s'" % (reaction_attr.reaction_type,), reaction_attr.reaction_type)
 
 
+        ## List of all changed complexes (incl new complexes):
+        changed_complexes = [cmplx
+                             for lst in (reaction_result['changed_complexes'], reaction_result['new_complexes'])
+                             if lst is not None and len(lst) > 0
+                             for cmplx in lst]
 
-        ### Calculate state energy change used to update complex energies and reaction graph: ###
+        ### 1. Assert state change for all changed complexes: ###
+        for cmplx in changed_complexes:
+            ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
+            ## TODO: This would also prevent the bug where dS is altered multiple times!
+
+            ### 1. Assert that complex state fingerprint has been updated: ###
+            source_state = cmplx._historic_fingerprints[-1]
+            #rxs_key = lambda eattr: (eattr['reaction_spec_pair'], eattr['reaction_attr'])
+            # The previous has been superseeded by a permanent endstates_by_reaction dict: (Also, no need for checks)
+            #target_by_key = {rxs_key(eattrs): target for target, eattrs in self.reaction_graph[source_state].items()}
+            #assert target_by_key == self.endstates_by_reaction[source_state]  ## TODO: Remove assertion
+            expected_state_fingerprint = None
+            expected_state_fingerprints = None
+            if edge_key in self.endstates_by_reaction[source_state]:
+                # If a reaction produces multiple new/changed complexes, then that reaction
+                # effectively has two outgoing edges and
+                #   endstates_by_reaction[source][edge_key] should list MULTIPLE targets.
+                expected_state_fingerprints = self.endstates_by_reaction[source_state][edge_key]
+                if len(expected_state_fingerprints) == 1:
+                    expected_state_fingerprint = expected_state_fingerprints[0]
+
+            ## Assert complex state change (will update complex state fingerprint):
+            target_state, micro_cycle = cmplx.assert_state_change(
+                reacted_spec_pair, reaction_attr, expected_state_fingerprint=expected_state_fingerprint)
+            if expected_state_fingerprints is not None:
+                assert target_state in expected_state_fingerprints
+
+            ### 4. Detect/process reaction micro-cycles: (not needed any more) ###
+            # if micro_cycle is not None:
+            #     micro_cycle = tuple(micro_cycle)
+            #     if micro_cycle not in self.known_reaction_cycles:
+            #         self.known_reaction_cycles.add(micro_cycle)
+            #         for pair in micro_cycle[1:]:
+            #             self.reaction_cycles_by_pair[pair].add(micro_cycle)
+            #     self.reaction_cycles_count[micro_cycle] += 1
+
+
+        ### 2. Calculate state energy change used to update complex energies and reaction graph: ###
         dH, dS = 0, 0  # Total reaction enthalpy and entropy
         if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
             #dH, dS = self.domain_dHdS[(domain1, domain2)]
@@ -1950,7 +1992,7 @@ class ReactionMgr(ComponentMgr):
                 stack_string = stack_string[::-1]
             dH_stack, dS_stack = DNA_NN4_R[stack_string]
             if not reaction_attr.is_forming:
-                dH_stack, dS_stack = -dH_hyb, -dS_hyb
+                dH_stack, dS_stack = -dH_stack, -dS_stack
             dH += dH_stack
             dS += dS_stack
         else:
@@ -2032,8 +2074,137 @@ class ReactionMgr(ComponentMgr):
                 dS += dS_volume
 
 
+        ### 3. For all changed complexes: Update complex energies/entropies and update reaction graph: ###
+
+        # Note: We do this for both changed/existing complexes and *new* complexes;
+        # Although we don't need to check that the state-fingerprint has changed,
+        # we do need to add the new complex to the reaction_graph, and make the reaction_spec_pair edge.
+        for cmplx in changed_complexes:
+            ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
+            ## TODO: This would also prevent the bug where dS is altered multiple times!
+
+            ### 3(a). Update complex energy: ###
+            # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
+            # use result['case'] to determine if the volume energy of the complex is changed.
+            # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
+            # has been called. Also: Is this really state dependent? Can't we just let de-hybridization and unstacking
+            # be independent of complex state?
+            #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
+            # Made this more simple by inverting values once depending on is_forming, when calculating dH_hyb etc.
+            if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+                cmplx.energies_dHdS[0]['hybridization'] += dH_hyb
+                cmplx.energies_dHdS[1]['hybridization'] += dS_hyb
+            elif reaction_attr.reaction_type is STACKING_INTERACTION:
+                cmplx.energies_dHdS[0]['stacking'] += dH_stack
+                cmplx.energies_dHdS[1]['stacking'] += dS_stack
+            else:
+                raise ValueError("Un-supported reaction type %s" % reaction_attr.reaction_type)
+            # Cases:
+            #   Formation Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
+            #   Formation Case 2/3/4: IntER-complex hybridization between two complexes/strands.
+            #   Breaking  Case 0/1:   Complex is still intact.
+            #   Breaking  Case 2/3/4: Complex is split in two.
+            if reaction_result['case'] <= 1:
+                # IntRA-complex reaction. A single complex both before and after reaction.
+                cmplx.energies_dHdS[1]['shape'] += dS_shape
+            else:
+                # IntER-strand/complex reaction; Two strands/complexes coming together or splitting up.
+                cmplx.energies_dHdS[1]['volume'] += dS_volume
+
+            ## TODO: Use a more appropriate rounding, not just integer.
+            cmplx.energy_total_dHdS = [int(sum(d.values())) for d in cmplx.energies_dHdS]
+
+            ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
+            #source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]
+            assert source_state == cmplx._historic_fingerprints[-2]
+            assert target_state == cmplx._historic_fingerprints[-1]
 
 
+            ### 3(b) Update reaction_graph  ###
+
+            ## Add target node (the new complex state) if not present in the reaction graph.
+            # Increment node 'encounters'/'size' and edge 'invocations'/'weight':
+            if target_state not in self.reaction_graph.node:
+                ## Add complex node to reaction_graph and write complex graph/state to file.
+                self.record_new_complex_state(cmplx, target_state)
+                ## Add target to self.endstates_by_reaction as well:
+                assert target_state not in self.endstates_by_reaction
+                self.endstates_by_reaction[target_state] = defaultdict(list) # list of targets for same reaction
+                # used to be a dict {edge_key => target} but we can have multiple targets for a single reaction.
+            else:
+                self.reaction_graph.node[target_state]['encounters'] += 1  # could also simply be 'size'?
+                # For now, we keep statistics of the different complex energies that have been calculated
+                # https://treyhunner.com/2015/11/counting-things-in-python/
+                # Using Counter is fast, but doesn't work well when we want to serialize the graph, so using dict:
+                try:
+                    self.reaction_graph.node[target_state]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] += 1
+                except KeyError:
+                    self.reaction_graph.node[target_state]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] = 1
+                ## Check that target is in self.endstates_by_reaction:
+                assert target_state in self.endstates_by_reaction
+            assert source_state in self.reaction_graph
+            assert target_state in self.reaction_graph
+
+            ## Add edge from source (start state) to target (end state):
+            ## TODO: Add activity and possibly dH, dS as reaction edge attributes
+            edge_label_fmt = ("{reaction_type}{is_forming_str}{is_intra_str} {activity:0.1e} {c_j:0.1e}\n"
+                              "{throttle_factor:0.03g} {traversals}")
+            if target_state not in self.reaction_graph[source_state]:
+                ## There is currently no edge from source to target, so add new edge:
+                edge_attrs = {
+                    'edge_key': edge_key,
+                    'reaction_spec_pair': reacted_spec_pair,
+                    'reaction_attr': reaction_attr,
+                    'reaction_type': reaction_attr.reaction_type,
+                    'is_forming': reaction_attr.is_forming,
+                    'is_intra': reaction_attr.is_intra,
+                    'is_forming_str': "+" if reaction_attr.is_forming else "-",
+                    'is_intra_str': " " if reaction_attr.is_intra else "*",
+                    #'dHdS': dHdS,
+                    'dH': dH, #dHdS[0],
+                    'dS': dS, #dHdS[1],   # includes loop/volume entropy
+                    'activity': activity,
+                    'c_j': c_j,
+                    'c_j_throttled': c_j,
+                    # 'len': 4.0,     # optimal edge length, default = 1.0
+                    # Above attrs are (should be) constant; below attrs change during simulation:
+                    'throttle_factor': throttle_factor,
+                    #'throttle_factor': self.reaction_throttle_cache[edge_key][0],
+                    'traversals': 1, # Number of edge traversals = N_reaction_invocation_count
+                    'weight': 1,    # higher weight = more inclined to have actual edge length close to "len".
+                }
+                edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
+                self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
+                self.save_reaction_graph()
+                # Update self.endstates_by_reaction[source_state]
+                assert edge_key not in self.endstates_by_reaction[source_state]
+                self.endstates_by_reaction[source_state][edge_key].append(target_state)
+                if edge_key not in self.reverse_reaction_key:
+                    if source_state in self.reaction_graph.adj[target_state]:
+                        rev_edge_key = self.reaction_graph.adj[target_state][source_state]['edge_key']
+                        self.reverse_reaction_key[edge_key] = rev_edge_key
+                        self.reverse_reaction_key[rev_edge_key] = edge_key
+            else:
+                # There is already an edge from source to target: Check that the edge is correct
+                edge_attrs = self.reaction_graph[source_state][target_state]
+                assert edge_attrs['reaction_attr'] == reaction_attr
+                assert edge_attrs['reaction_spec_pair'] == reacted_spec_pair
+                edge_attrs['traversals'] += 1
+                edge_attrs['weight'] += 1.0/edge_attrs['traversals']   # Should make weight logarithmic with traversals
+                edge_attrs['throttle_factor'] = throttle_factor # the float or the encapsulating mutable list/object?
+                edge_attrs['c_j_throttled'] = c_j # the float or the encapsulating mutable list/object?
+                # edge_attrs['throttle_factor'] = self.reaction_throttle_cache[edge_key][0]
+                edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
+                # Check self.endstates_by_reaction[source_state]
+                assert edge_key in self.endstates_by_reaction[source_state]
+                assert target_state in self.endstates_by_reaction[source_state][edge_key]
+                if edge_key in self.reverse_reaction_key:
+                    rev_edge_key = self.reverse_reaction_key[edge_key]
+                    assert self.reaction_throttle_cache[edge_key] is self.reaction_throttle_cache[rev_edge_key]
+        # end for cmplx in changed_complexes:
+
+
+        ### 4. For all freed strands: Update reaction graph: ###
         if reaction_result['free_strands']:
             """
             Wait, is this proper? I mean, what if we are in a state with two strands bound to the scaffold and
@@ -2105,172 +2276,8 @@ class ReactionMgr(ComponentMgr):
                     assert self.reaction_throttle_cache[edge_key] is self.reaction_throttle_cache[rev_edge_key]
 
 
-        ### For all changed complexes: Assert state change and update reaction graph: ###
-        changed_complexes = chain(*[lst
-                                    for lst in (reaction_result['changed_complexes'], reaction_result['new_complexes'])
-                                    if lst is not None and len(lst) > 0])
-        # Note: We do this for both changed/existing complexes and *new* complexes;
-        # Although we don't need to check that the state-fingerprint has changed,
-        # we do need to add the new complex to the reaction_graph, and make the reaction_spec_pair edge.
-        _dH, _dS = dH, dS  # Save these so they are not altered permanently
-        for cmplx in changed_complexes:
-            ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
-            ## TODO: This would also prevent the bug where dS is altered multiple times!
 
-            ### 1. Assert that complex state fingerprint has been updated: ###
-            source_state = cmplx._historic_fingerprints[-1]
-            #rxs_key = lambda eattr: (eattr['reaction_spec_pair'], eattr['reaction_attr'])
-            # The previous has been superseeded by a permanent endstates_by_reaction dict: (Also, no need for checks)
-            #target_by_key = {rxs_key(eattrs): target for target, eattrs in self.reaction_graph[source_state].items()}
-            #assert target_by_key == self.endstates_by_reaction[source_state]  ## TODO: Remove assertion
-            expected_state_fingerprint = None
-            expected_state_fingerprints = None
-            if edge_key in self.endstates_by_reaction[source_state]:
-                # If a reaction produces multiple new/changed complexes, then that reaction
-                # effectively has two outgoing edges and
-                #   endstates_by_reaction[source][edge_key] should list MULTIPLE targets.
-                expected_state_fingerprints = self.endstates_by_reaction[source_state][edge_key]
-                if len(expected_state_fingerprints) == 1:
-                    expected_state_fingerprint = expected_state_fingerprints[0]
-
-            ## Assert complex state change (will update complex state fingerprint):
-            target_state, _ = cmplx.assert_state_change(
-                reacted_spec_pair, reaction_attr, expected_state_fingerprint=expected_state_fingerprint)
-            if expected_state_fingerprints is not None:
-                assert target_state in expected_state_fingerprints
-
-            ### 2. Update complex energy: ###
-            # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
-            # use result['case'] to determine if the volume energy of the complex is changed.
-            # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
-            # has been called. Also: Is this really state dependent? Can't we just let de-hybridization and unstacking
-            # be independent of complex state?
-            #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
-            # Made this more simple by inverting values once depending on is_forming, when calculating dH_hyb etc.
-            if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-                cmplx.energies_dHdS[0]['hybridization'] += dH_hyb
-                cmplx.energies_dHdS[1]['hybridization'] += dS_hyb
-            elif reaction_attr.reaction_type is STACKING_INTERACTION:
-                cmplx.energies_dHdS[0]['stacking'] += dH_stack
-                cmplx.energies_dHdS[1]['stacking'] += dS_stack
-            else:
-                raise ValueError("Un-supported reaction type %s" % reaction_attr.reaction_type)
-            # Cases:
-            #   Formation Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
-            #   Formation Case 2/3/4: IntER-complex hybridization between two complexes/strands.
-            #   Breaking  Case 0/1:   Complex is still intact.
-            #   Breaking  Case 2/3/4: Complex is split in two.
-            if reaction_result['case'] <= 1:
-                # IntRA-complex reaction. A single complex both before and after reaction.
-                cmplx.energies_dHdS[1]['shape'] += dS_shape
-            else:
-                # IntER-strand/complex reaction; Two strands/complexes coming together or splitting up.
-                cmplx.energies_dHdS[1]['volume'] += dS_volume
-
-            ## TODO: Use a more appropriate rounding, not just integer.
-            cmplx.energy_total_dHdS = [int(sum(d.values())) for d in cmplx.energies_dHdS]
-
-            ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
-            #source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]
-            assert source_state == cmplx._historic_fingerprints[-2]
-            assert target_state == cmplx._historic_fingerprints[-1]
-
-
-            ### 3. Update reaction_graph  ###
-
-            ## 3.a: Add target node (the new complex state) if not present in the reaction graph.
-            # Increment node 'encounters'/'size' and edge 'invocations'/'weight':
-            if target_state not in self.reaction_graph.node:
-                ## Add complex node to reaction_graph and write complex graph/state to file.
-                self.record_new_complex_state(cmplx, target_state)
-                ## Add target to self.endstates_by_reaction as well:
-                assert target_state not in self.endstates_by_reaction
-                self.endstates_by_reaction[target_state] = defaultdict(list) # list of targets for same reaction
-                # used to be a dict {edge_key => target} but we can have multiple targets for a single reaction.
-            else:
-                self.reaction_graph.node[target_state]['encounters'] += 1  # could also simply be 'size'?
-                # For now, we keep statistics of the different complex energies that have been calculated
-                # https://treyhunner.com/2015/11/counting-things-in-python/
-                # Using Counter is fast, but doesn't work well when we want to serialize the graph, so using dict:
-                try:
-                    self.reaction_graph.node[target_state]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] += 1
-                except KeyError:
-                    self.reaction_graph.node[target_state]['dH_dS_count'][tuple(cmplx.energy_total_dHdS)] = 1
-                ## Check that target is in self.endstates_by_reaction:
-                assert target_state in self.endstates_by_reaction
-            assert source_state in self.reaction_graph
-            assert target_state in self.reaction_graph
-
-            ## 3.b: Add edge from source (start state) to target (end state):
-            ## TODO: Add activity and possibly dH, dS as reaction edge attributes
-            edge_label_fmt = ("{reaction_type}{is_forming_str}{is_intra_str} {activity:0.1e} {c_j:0.1e}\n"
-                              "{throttle_factor:0.03g} {traversals}")
-            if target_state not in self.reaction_graph[source_state]:
-                ## There is currently no edge from source to target, so add new edge:
-                edge_attrs = {
-                    'edge_key': edge_key,
-                    'reaction_spec_pair': reacted_spec_pair,
-                    'reaction_attr': reaction_attr,
-                    'reaction_type': reaction_attr.reaction_type,
-                    'is_forming': reaction_attr.is_forming,
-                    'is_intra': reaction_attr.is_intra,
-                    'is_forming_str': "+" if reaction_attr.is_forming else "-",
-                    'is_intra_str': " " if reaction_attr.is_intra else "*",
-                    #'dHdS': dHdS,
-                    'dH': dH, #dHdS[0],
-                    'dS': dS, #dHdS[1],   # includes loop/volume entropy
-                    'activity': activity,
-                    'c_j': c_j,
-                    'c_j_throttled': c_j,
-                    # 'len': 4.0,     # optimal edge length, default = 1.0
-                    # Above attrs are (should be) constant; below attrs change during simulation:
-                    'throttle_factor': throttle_factor,
-                    #'throttle_factor': self.reaction_throttle_cache[edge_key][0],
-                    'traversals': 1, # Number of edge traversals = N_reaction_invocation_count
-                    'weight': 1,    # higher weight = more inclined to have actual edge length close to "len".
-                }
-                edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
-                self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
-                self.save_reaction_graph()
-                # Update self.endstates_by_reaction[source_state]
-                assert edge_key not in self.endstates_by_reaction[source_state]
-                self.endstates_by_reaction[source_state][edge_key].append(target_state)
-                if edge_key not in self.reverse_reaction_key:
-                    if source_state in self.reaction_graph.adj[target_state]:
-                        rev_edge_key = self.reaction_graph.adj[target_state][source_state]['edge_key']
-                        self.reverse_reaction_key[edge_key] = rev_edge_key
-                        self.reverse_reaction_key[rev_edge_key] = edge_key
-            else:
-                # There is already an edge from source to target: Check that the edge is correct
-                edge_attrs = self.reaction_graph[source_state][target_state]
-                assert edge_attrs['reaction_attr'] == reaction_attr
-                assert edge_attrs['reaction_spec_pair'] == reacted_spec_pair
-                edge_attrs['traversals'] += 1
-                edge_attrs['weight'] += 1.0/edge_attrs['traversals']   # Should make weight logarithmic with traversals
-                edge_attrs['throttle_factor'] = throttle_factor # the float or the encapsulating mutable list/object?
-                edge_attrs['c_j_throttled'] = c_j # the float or the encapsulating mutable list/object?
-                # edge_attrs['throttle_factor'] = self.reaction_throttle_cache[edge_key][0]
-                edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
-                # Check self.endstates_by_reaction[source_state]
-                assert edge_key in self.endstates_by_reaction[source_state]
-                assert target_state in self.endstates_by_reaction[source_state][edge_key]
-                if edge_key in self.reverse_reaction_key:
-                    rev_edge_key = self.reverse_reaction_key[edge_key]
-                    assert self.reaction_throttle_cache[edge_key] is self.reaction_throttle_cache[rev_edge_key]
-
-            ### 4. Detect/process reaction micro-cycles: (not needed any more) ###
-            # if micro_cycle is not None:
-            #     micro_cycle = tuple(micro_cycle)
-            #     if micro_cycle not in self.known_reaction_cycles:
-            #         self.known_reaction_cycles.add(micro_cycle)
-            #         for pair in micro_cycle[1:]:
-            #             self.reaction_cycles_by_pair[pair].add(micro_cycle)
-            #     self.reaction_cycles_count[micro_cycle] += 1
-
-        # end for cmplx in changed_complexes:
-
-
-        ### Adjust throttle: ###
+        ### 5. Adjust throttle: ###
 
         # self.reaction_invocation_count[(reaction_spec_pair, reaction_attr)] += 1
         # if self.reaction_throttle_use_cache:
