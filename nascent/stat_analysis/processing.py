@@ -31,6 +31,24 @@ from pprint import pprint
 from nascent.graph_sim_nx.stats_manager import StatsReader
 
 
+def get_datafile(statsfile="time_totstats.txt", structure="duplex2",
+                 statsfolder=None, data_root_dir=None, basedir=".", runidx=-1):
+    if not os.path.exists(statsfile):
+        if statsfolder is None:
+            if data_root_dir is None:
+                #scriptdir = os.path.dirname(os.path.abspath(__file__))
+                data_root_dir = os.path.join(basedir, "simdata", structure)
+                print("Using data root directory:", data_root_dir)
+            cands = (os.path.join(data_root_dir, folder) for folder in os.listdir(data_root_dir))
+            cands = list(filter(os.path.isdir, cands))
+            cands.sort(reverse=False)
+            statsfolder = cands[runidx]
+            print("Using stats in folder:", statsfolder)
+        statsfile = os.path.join(statsfolder, statsfile)
+    else:
+        statsfolder = "."
+    return statsfile, statsfolder
+
 
 def load_stats(statsfile="time_totstats.txt", structure="duplex2",
                statsfolder=None, data_root_directory=None, basedir=".", runidx=-1):
@@ -44,21 +62,8 @@ def load_stats(statsfile="time_totstats.txt", structure="duplex2",
     """
 
     statsreader = StatsReader(config=None)
-
-    if not os.path.exists(statsfile):
-        if statsfolder is None:
-            if data_root_directory is None:
-                #scriptdir = os.path.dirname(os.path.abspath(__file__))
-                data_root_directory = os.path.join(basedir, "simdata", structure)
-                print("Using data root directory:", data_root_directory)
-            cands = (os.path.join(data_root_directory, folder) for folder in os.listdir(data_root_directory))
-            cands = list(filter(os.path.isdir, cands))
-            cands.sort(reverse=False)
-            statsfolder = cands[runidx]
-            print("Using stats in folder:", statsfolder)
-        statsfile = os.path.join(statsfolder, statsfile)
-    else:
-        statsfolder = "."
+    statsfile, statsfolder = get_datafile(statsfile=statsfile, structure=structure, statsfolder=statsfolder,
+                                          data_root_dir=data_root_directory, basedir=basedir, runidx=runidx)
     stats = statsreader.load_total_stats_file(statsfile)
     print("%s stats entries loaded from file %s" % (len(stats), statsfile))
     return stats, statsfolder

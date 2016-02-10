@@ -68,7 +68,7 @@ ln = log
 from pprint import pprint
 import networkx as nx
 # from networkx.algorithms.components import connected_components, connected_component_subgraphs
-import numpy as np
+# import numpy as np
 import pdb
 import random
 
@@ -84,10 +84,71 @@ from .nx_utils import draw_graph_and_save, layout_graph, draw_with_graphviz
 from .debug import printd, pprintd
 from .domain import Domain, DomainEnd
 from .utils import sequential_number_generator
-from .reaction_graph import reaction_attr_str, reaction_str
+from .reaction_graph import reaction_attr_to_str, reaction_to_str
+
 
 ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
 reaction_graph_sequantial_number_generator = sequential_number_generator()
+
+
+debug_test_throttles = False
+test_throttles = {True: 0}
+test_throttles0 = {
+    'h+*': {'a': 1.0, 'b': 1.0},
+    'h+ ': {'a': 1.0, 'b': 1.0},
+    's+ ': {'a': 1.0, 'b': 1.0},
+}
+# Actual, precise throttles after a run:
+test_throttles1 = {
+    'h+*': {'a': 0.6895, 'b': 0.076233},
+    'h+ ': {'a': 0.00349, 'b': 0.02856},
+    's+ ': {'a': 0.6, 'b': 0.06, 'A': 0.6, 'B': 0.06},
+}
+# Approximated valus:
+test_throttles2 = {
+    'h+*': {'a': 0.7, 'b': 0.8},
+    'h+ ': {'a': 0.003, 'b': 0.03},
+    's+ ': {'a': 0.6, 'b': 0.06},
+}
+# Throttling intra-complex hyb and stack;
+# Making inter-strand reactions un-throttled: -- This shifts equilibrium.
+test_throttles3 = {
+    'h+*': {'a': 1.0, 'b': 1.0},
+    'h+ ': {'a': 0.003, 'b': 0.03},
+    's+ ': {'a': 0.6, 'b': 0.06},
+}
+# Making one side of the graph high, but keeping the other side low:
+test_throttles4 = {
+    'h+*': {'a': 1.0, 'b': 0.1},
+    'h+ ': {'a': 0.003, 'b': 0.1},
+    's+ ': {'a': 0.6, 'b': 0.06},
+}
+# Only throttle stacking: -- Does NOT shift equilibria
+test_throttles5 = {
+    'h+*': {'a': 1.0, 'b': 1.0},
+    'h+ ': {'a': 1.0, 'b': 1.0},
+    's+ ': {'a': 0.06, 'b': 0.06},
+}
+# Only throttle inter-complex hybridization and stacking: - This does NOT shift equilibrium.
+# Well, maybe, it does shift *in the other direction* (more dehybridized)
+test_throttles6 = {
+    'h+*': {'a': 0.1, 'b': 0.1},  # IntER throttled
+    'h+ ': {'a': 1.0, 'b': 1.0},  # intra un-throttled
+    's+ ': {'a': 0.06, 'b': 0.06},# stack throttled
+}
+# Only throttle inter-complex hybridization
+test_throttles7 = {
+    'h+*': {'a': 0.1, 'b': 0.1},  # IntER throttled
+    'h+ ': {'a': 1.0, 'b': 1.0},  # intra un-throttled
+    's+ ': {'a': 1.0, 'b': 1.0},  # stack un-throttled
+}
+# Throttling intra-complex hyb and stack;
+# Making inter-strand reactions un-throttled: -- This shifts equilibrium.
+test_throttles8 = {
+    'h+*': {'a': 1.0, 'b': 1.0},
+    'h+ ': {'a': 0.03, 'b': 0.03},
+    's+ ': {'a': 1.0, 'b': 1.0},
+}
 
 
 
@@ -113,7 +174,7 @@ class ReactionMgr(ComponentMgr):
     Loops and intra-complex activity calculation, etc.
     """
 
-    def __init__(self, volume, strands, params, domain_pairs=None):
+    def __init__(self, volume, strands, params, domain_pairs=None, init_reactions=False):
         ComponentMgr.__init__(self, strands=strands, params=params, domain_pairs=None)
         self.params = params
         self.temperature = params.get('temperature', 300)
@@ -266,7 +327,7 @@ class ReactionMgr(ComponentMgr):
         # TODO: Change to generic (reaction_type, is_forming, is_intra)
         self.reaction_pairs_by_domain = defaultdict(set) # domain => {d1, d2} domain_pair of valid reactions.
 
-        self.stacking_interactions = {}         # {(end5p, end3p), (end5p, end3p)}
+        # self.stacking_interactions = {}         # {(end5p, end3p), (end5p, end3p)}
         self.possible_stacking_reactions = {}   # {(end5p, end3p), (end5p, end3p)} => c_j
         ## What stacking interactions to keep track of?
         ## end5p:end3p
@@ -286,7 +347,7 @@ class ReactionMgr(ComponentMgr):
         self.hybridization_propensity_functions = self.possible_hybridization_reactions
         self.stacking_propensity_functions = self.possible_stacking_reactions
 
-        if strands is not None:
+        if init_reactions and strands is not None:
             self.init_possible_reactions()
 
         ## Invoked reactions file, for re-playing the simulation:
@@ -536,7 +597,7 @@ class ReactionMgr(ComponentMgr):
         #     activity, reaction_type, elem1, elem2))
         # reaction will always be forming and intra:
         reaction_attr = ReactionAttrs(reaction_type=reaction_type, is_forming=True, is_intra=True)
-        print("activity %0.03f for reaction %s" % (activity, reaction_str(reaction_spec_pair, reaction_attr)))
+        print("activity %0.03f for reaction %s" % (activity, reaction_to_str(reaction_spec_pair, reaction_attr)))
         self.cache['intracomplex_activity'][reaction_spec_pair] = activity
         return activity
 
@@ -644,7 +705,11 @@ class ReactionMgr(ComponentMgr):
                                  (reaction_attr.reaction_type, reaction_attr, elem1, elem2))
             # Make sure to save c_j before applying throttle:
             self.cache['stochastic_rate_constant'][c_j_cache_key] = c_j
-            print("c_j = %0.02e for reaction %s" % (c_j, reaction_str(reaction_spec_pair, reaction_attr)))
+            print("c_j = %0.02e for reaction %s" % (c_j, reaction_to_str(reaction_spec_pair, reaction_attr)))
+
+        if c_j == 0: # or perhaps something like c_j < 1e-12?
+            # Short-circuit; do not attempt to apply throttle.
+            return c_j
 
         ## Apply throttle: ##
         if self.reaction_throttle:
@@ -676,7 +741,14 @@ class ReactionMgr(ComponentMgr):
                 try:
                     throttle_factor = self.reaction_throttle_cache[(reaction_spec_pair, reaction_attr)][0]
                 except KeyError:
-                    # print("Un-throttled reaction:", reaction_str(reaction_spec_pair, reaction_attr))
+                    if debug_test_throttles:
+                        print("\nUn-throttled reaction:\n  ", reaction_to_str(reaction_spec_pair, reaction_attr))
+                        print("Reaction throttle cache:")
+                        print("\n".join("  %s: %s" % (reaction_to_str(*k), v) for k, v in self.reaction_throttle_cache.items()))
+                        pdb.set_trace()
+                    # It seems we are calculating c_j for reaction
+                    # s+ :s2_A3p >_< s2_B5p / s1_b3p >_< s1_a5p    (67283)
+                    # However, state "67283" is the already-stacked state. It should be for the unstacked state 19968.
                     throttle_factor = 1.0
             # else:
             #     raise NotImplementedError("Obsolete settings")
@@ -689,37 +761,37 @@ class ReactionMgr(ComponentMgr):
         return c_j
 
 
-    def calculate_throttle_factor(self, elem1, elem2, reaction_attr, reaction_spec_pair):
-        """
-        :reaction_spec_pair: Must be a state-species pair; not instances. Symmetric degeneracy is acceptable.
-        """
-        assert reaction_spec_pair is not None and reaction_attr.reaction_type is not None
-        if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-            N_dom_copies = sum(len(self.domains_by_name[d.name]) for d in (elem1, elem2))
-        elif reaction_attr.reaction_type is STACKING_INTERACTION:
-            N_dom_copies = sum(len(self.domains_by_name[end.domain.name])
-                               for endpair in (elem1, elem2) for end in endpair)
-        if self.reaction_throttle_per_complex:
-            if reaction_attr.is_intra:
-                if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-                    cmplx = elem1.strand.complex
-                elif reaction_attr.reaction_type is STACKING_INTERACTION:
-                    cmplx = elem1[0].domain.strand.complex
-                Nric = cmplx.reaction_invocation_count[reaction_spec_pair]
-                if Nric == 0:
-                    return 1
-            else:
-                return 1
-        else:
-            Nric = self.reaction_invocation_count[reaction_spec_pair]/N_dom_copies
-        if Nric < self.reaction_throttle_offset:
-            return 1
-        # if self.reaction_throttle_rolling_fraction:
-        #     frac = self.reaction_invocation_deque.count(reaction_spec_pair)/len(self.reaction_invocation_deque)
-        #     if frac < self.reaction_throttle_rolling_fraction:
-        #         return 1
-        return self.reaction_throttle_fun(Nric-self.reaction_throttle_offset)
-
+    # def calculate_throttle_factor(self, elem1, elem2, reaction_attr, reaction_spec_pair):
+    #     """
+    #     :reaction_spec_pair: Must be a state-species pair; not instances. Symmetric degeneracy is acceptable.
+    #     """
+    #     assert reaction_spec_pair is not None and reaction_attr.reaction_type is not None
+    #     if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+    #         N_dom_copies = sum(len(self.domains_by_name[d.name]) for d in (elem1, elem2))
+    #     elif reaction_attr.reaction_type is STACKING_INTERACTION:
+    #         N_dom_copies = sum(len(self.domains_by_name[end.domain.name])
+    #                            for endpair in (elem1, elem2) for end in endpair)
+    #     if self.reaction_throttle_per_complex:
+    #         if reaction_attr.is_intra:
+    #             if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+    #                 cmplx = elem1.strand.complex
+    #             elif reaction_attr.reaction_type is STACKING_INTERACTION:
+    #                 cmplx = elem1[0].domain.strand.complex
+    #             Nric = cmplx.reaction_invocation_count[reaction_spec_pair]
+    #             if Nric == 0:
+    #                 return 1
+    #         else:
+    #             return 1
+    #     else:
+    #         Nric = self.reaction_invocation_count[reaction_spec_pair]/N_dom_copies
+    #     if Nric < self.reaction_throttle_offset:
+    #         return 1
+    #     # if self.reaction_throttle_rolling_fraction:
+    #     #     frac = self.reaction_invocation_deque.count(reaction_spec_pair)/len(self.reaction_invocation_deque)
+    #     #     if frac < self.reaction_throttle_rolling_fraction:
+    #     #         return 1
+    #     return self.reaction_throttle_fun(Nric-self.reaction_throttle_offset)
+    #
 
     def calculate_hybridization_c_j(self, d1, d2, is_forming, is_intra, reaction_type=HYBRIDIZATION_INTERACTION,
                                     reaction_spec_pair=None):
@@ -814,6 +886,8 @@ class ReactionMgr(ComponentMgr):
                     draw_graph_and_save(self.domain_graph, outputfn=os.path.join(workdir, "domain_graph.png"))
                     draw_graph_and_save(self.ends5p3p_graph, outputfn=os.path.join(workdir, "ends5p3p_graph.png"))
                     raise e
+                if stochastic_activity == 0:
+                    return 0
             else:
                 # Inter-complex reaction:
                 stochastic_activity = self.specific_bimolecular_activity # Same as 1/self.volume/N_AVOGADRO × M
@@ -930,6 +1004,8 @@ class ReactionMgr(ComponentMgr):
                 # printd("reaction_spec_pair:")
                 # pprintd(reaction_spec_pair)
                 # printd(" - stacking stochastic_activity (intra reaction) = %s" % stochastic_activity)
+                if stochastic_activity == 0:
+                    return 0
             else:
                 # Inter-complex reaction:
                 stochastic_activity = self.specific_bimolecular_activity # Same as 1/self.volume/N_AVOGADRO × M
@@ -1246,7 +1322,10 @@ class ReactionMgr(ComponentMgr):
             # Stacking interaction between duplex ends was broken and is available for new rections.
             # This is treated together with the changed domains below:
             if reaction_attr.reaction_type is STACKING_INTERACTION:
-                #duplexend1, duplexend2 = reacted_pair  # for stacking/unstacking reaction
+                # reaction_pair grouped as {duplexend1, duplexend2} = {(h1end3p, h2end5p), (h2end3p, h1end5p)}
+                (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(reacted_pair) # for stacking/unstacking reaction
+                reacted_ends = (h1end3p, h2end5p, h2end3p, h1end5p)
+                # We just stacked duplexend1:duplexend2; Make sure it is actually stacked...
                 # assert reaction_attr.reaction_type == STACKING_INTERACTION
                 assert all(isinstance(tup, tuple) for tup in reacted_pair)
                 # Note: We don't process for if reaction_attr.reaction_type == HYBRIDIZATION_INTERACTION:
@@ -1255,6 +1334,8 @@ class ReactionMgr(ComponentMgr):
                 ## as {(h1end3p, h2end5p), (h2end3p, h1end5p)} instead of {(h1end3p, h1end5p), (h2end3p, h2end5p)}
                 ## i.e. we have pairs of {duplexend1, duplexend2}.
                 if reaction_attr.is_forming:
+                    # We have just performed stacking reaction, so the ends should be stacked by now:
+                    assert all(end.stack_partner is not None for end in reacted_ends)
                     ## We just formed a new stack, remove other stacking reactions involving these duplex ends:
                     obsolete_reactions = [other_pair for other_pair in self.possible_stacking_reactions
                                           if len(reacted_pair & other_pair) > 0]
@@ -1264,10 +1345,12 @@ class ReactionMgr(ComponentMgr):
                         # printd("Removing from possible_stacking_reactions obsolete stacking_pair:", reaction_pair)
                         del self.possible_stacking_reactions[reaction_pair]
                         del self.reaction_attrs[reaction_pair]
-
+                else:
+                    # We have just performed un-stacking reaction, so the ends should be stacked by now:
+                    assert all(end.stack_partner is None for end in reacted_ends)
                 ## TODO: Check to make sure that all reacted_pairs domains are in changed_domains
                 # {(h1end3p, h1end5p), (h2end3p, h2nd5p)}
-                for end in (end for tup in reacted_pair for end in tup):
+                for end in reacted_ends: # (end for tup in reacted_pair for end in tup):
                     if not end.domain in changed_domains:
                         # printd(" - update_possible_stacking_reactions: Adding %s's domain to changed_domains." % end)
                         #changed_domains.add(end.domain)
@@ -1282,9 +1365,12 @@ class ReactionMgr(ComponentMgr):
                 if reaction_attr.is_forming:
                     # We just formed a new duplex (hybridization reaction),
                     # Detecting new stacking reactions should be done below when running through changed_domains below
-                    pass
+                    # But we might want to check that the now-hybridized domains are actually hybridized:
+                    assert all(d1.partner is not None for d in (d1, d2))
                 else:
-                    # We just eliminated a duplex (de-hybridization reaction),
+                    # We just eliminated a duplex (de-hybridization reaction).
+                    # Assert that the domains are actually de-hybridized:
+                    assert all(d1.partner is None for d in (d1, d2))
                     # remove forming stacking reactions involving any of the de-hybridized domains:
                     dehybridized_duplex_ends = {(d1.end3p, d2.end5p), (d2.end3p, d1.end5p)}
                     obsolete_reactions = [other_pair for other_pair in self.possible_stacking_reactions
@@ -1362,24 +1448,23 @@ class ReactionMgr(ComponentMgr):
             if stacking_pair not in self.possible_stacking_reactions or \
                 (recalculate_stacked and stacking_pair not in updated_reactions):
                 ## TODO: Reaction throttle should probably be inserted here. Edit: Use calculate_c_j() to add throttle.
-                ra = ReactionAttrs(reaction_type=STACKING_INTERACTION,
-                                              is_forming=False, is_intra=True) #, reactionspec_pair=stackspec_pair)
+                ra = ReactionAttrs(reaction_type=STACKING_INTERACTION, is_forming=False, is_intra=True)
                 # Use calculate_c_j to add caching and throttling:
-                c_j = self.calculate_c_j(dupend1, dupend2, reaction_attr=ra,
-                                         reaction_spec_pair=stacking_spec_pair)
+                c_j = self.calculate_c_j(dupend1, dupend2, reaction_attr=ra, reaction_spec_pair=stacking_spec_pair)
                 # self.possible_stacking_reactions[stacking_pair] = \
                 #     self.calculate_stacking_c_j(h1end3p, h2end5p, h2end3p, h1end5p, is_forming=False, is_intra=True)
                 if c_j > 0:
                     self.possible_stacking_reactions[stacking_pair] = c_j
                     self.reaction_attrs[stacking_pair] = ra
                 updated_reactions.add(stacking_pair)
-        # unstacked_ends is a list of unstacked DomainEnd3p on hybridized domains in changed_domains:
+        # unstacked_ends is a list of unstacked DomainEnd3p on hybridized domains *in changed_domains*:
+        # all_unstacked_ends is a list of unstacked DomainEnd3p on hybridized domains for *all* duplex ends:
         for h1end3p in unstacked_duplex_ends3p:
             #             h1end3p         h1end5p
             # Helix 1   ----------3' : 5'----------
             # Helix 2   ----------5' : 3'----------
             #             h2end5p         h2end3p
-            #
+            # reaction_pair grouped as {duplexend1, duplexend2} = {(h1end3p, h2end5p), (h2end3p, h1end5p)}
             for h2end3p in all_unstacked_duplex_ends3p:
                 if h2end3p is h1end3p:
                     continue # Ends cannot stack to them self
@@ -1392,8 +1477,10 @@ class ReactionMgr(ComponentMgr):
                 h1end5p = h2end3p.hyb_partner
                 h1s2 = h1end5p.domain.strand
                 h1c2 = h1s2.complex
+                is_intra = h1s1 is h1s2 or (h1c1 is not None and h1c1 is h1c2)
                 if not self.enable_intercomplex_stacking and (h1c1 != h1c2 if h1c1 is not None else h1s1 != h1s2):
                     # Interaction between different complexes (or strands):
+                    assert is_intra is False
                     continue
                 if h2end3p.hyb_partner == h1end3p.stacked_upstream() and not self.enable_helix_bending:
                     # Don't allow duplex to hybridize to itself (opposite ends).
@@ -1404,7 +1491,7 @@ class ReactionMgr(ComponentMgr):
                     # printd("update_possible_stacking_reactions: Ignoring stacking  %r vs %r" % (h1end3p, h2end3p))
                     continue
                 ## Assertions:
-                assert all(end is not None for end in [h1end5p, h1end3p, h2end3p, h2end5p])
+                assert all(end is not None for end in (h1end5p, h1end3p, h2end3p, h2end5p))
                 if h1end3p in self.ends5p3p_graph[h1end5p]:
                     assert STACKING_INTERACTION not in self.ends5p3p_graph[h1end5p][h1end3p]
                 if h1end5p in self.ends5p3p_graph[h1end3p]:
@@ -1420,14 +1507,9 @@ class ReactionMgr(ComponentMgr):
                                                 (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
 
                 if stacking_pair not in updated_reactions: # self.possible_stacking_reactions:
-                    is_intra = False
-                    if h1c1 is not None and h1c1 is h1c2:
-                        is_intra = 'complex'
-                    elif h1s1 is h1s2:
-                        is_intra = 'strand'
                     # print("  %s -: :- %s \n  %s -: :- %s  " % (h1end3p, h1end5p, h2end5p, h2end3p))
-
                     # Use calculate_c_j to add caching and throttling:
+                    assert all(end.stack_partner is None for end in (h1end5p, h1end3p, h2end3p, h2end5p))
                     ra = ReactionAttrs(reaction_type=STACKING_INTERACTION, is_forming=True, is_intra=is_intra)
                     c_j = self.calculate_c_j(dupend1, dupend2, reaction_attr=ra,
                                              reaction_spec_pair=stacking_spec_pair)
@@ -1795,88 +1877,6 @@ class ReactionMgr(ComponentMgr):
             Case 0-1: Inter/uni-molecular reaction; No change in volume energy.
             Case 2-5: Inter/bi-molecular reaction; Change in volume energy.
 
-        How to throttle without shifting equilibrium:
-        * Both reaction edges (both directions) must be throttled equally.
-        * This can be tricky for cyclic areas of the graph e.g.:           k11      k12
-            if hybridization happens at constant rate left-to-right       ,----- B -----.
-            but at dehybridize at different rates in the reaction graph  0               AB
-            to the right: k₊₁₁ == k₊₂₁ and  k₊₁₂ == k₊₂₂                  `----- A -----´
-                            k₋₂₂ + k₋₂₁ == k₋₁₂ + k₋₁₁                      k21      k22
-            The last because self-consistency dictates clock-wise cycle == counter-clockwise cycle, so:
-                k₊₁₁ + k₊₁₂ + k₋₂₂ + k₋₂₁ == k₊₂₁ + k₊₂₂ + k₋₁₂ + k₋₁₁
-            <=>      +      + k₋₂₂ + k₋₂₁ ==      +      + k₋₁₂ + k₋₁₁
-        * Perhaps the problem is that *any* random fluctuation produced by different throttle_factors
-            in the two directions will produce a shift in apparent equilibrium?
-
-        How to ensure symmetric throttling (the same throttle_factor in both directions)?
-            a. Have a single, mutable throttle_factor, either as a list or custom object.
-            b. Have a "shared edge attrs" dict associated with each directed edge.
-            c. When calculating new throttle factor in post_reaction_processing, update
-                self.reaction_throttle_cache[reaction_spec_pair] for reaction_spec_pair in both directions.
-            d. When applying throttle_factor in calculate_c_j, check throttle in both directions
-                and use either the smallest, the largest, or the average of the two.
-        Pros and cons:
-            - Options (b) and (d) both require knowing reaction_spec_pair in both directions,
-                which is not provided by default to calculate_c_j.
-            + Alternatively, the shared edge attr dict in (b) could be used as a simple mutable objecct, similar to (a).
-            + Option (b) could be used for other shared attrs as well, although this is seems limited.
-            + Option (a) is closest to the current implementation, just use "throttle_factor[0]" instead of
-                "throttle_factor". It still requires checking to ensure that we only create one list
-                for both edges, but that should be easy using self.endstates_by_reaction[source_state],
-                and only needs to be done once.
-            o Option (d) might be nice for the extra stats, although this is redundant with traversals count.
-            - Option (c) and (d) requires the most additional logic.
-        Selection option (a) for now...
-
-        Still doesn't work, throttling still shifts the equilibrium...
-
-        New idea: Do we properly update the hybridized reaction? Maybe we need to calculate new c_j?
-        We could also keep constant c_j (without applying throttle) and just apply throttle_factors
-        in the simulator when we calculate a_j and a_sum ?
-        But, throttle_factor should increase state life-times by decreasing reaction propensities.
-        So if a reaction is not updated after decreasing throttle_factor..
-        For hybridization reactions:
-            decrease-throttle, then update_hybridization_reaction.
-        For de-hybridization reactions:
-            decrease-throttle, then update reactions
-
-        Other idea: Is it a cumulative effect?
-        E.g. if every time a reaction is performed and the throttle altered, then the system is thrown slightly off
-        * I.e. some sort of "burned bridges" effect.
-
-        Question: If I "freeze" the throttles, will the system equilibrium correct it self?
-        * Freezing the throttle also seems to freeze the equilibrium. It does not revert it.
-
-        What if I turn throttling completely off?
-        (Probably won't work if looking at cummulative stats, needs rolling window)
-
-        What if you load the throttle factors from one run and use it in the next?
-        * Does the shift in equilibrium still occur?
-        * Implement saving and loading of throttle factors
-        * (complex state fingerprints must be the same betwen runs)
-
-        What happens if you only have intra-complex reactions?
-        Can simulate that by covalently "linking" two strands.
-
-        What about single-domain duplexes? Does throttling affect these?
-
-        Is the shift only observed when we have a cycle in the reaction graph?
-
-        What is the nature of throttling? Does it change energies or only act catalytically?
-        * It really should be the latter, but check to make sure.
-        * Throttle factor could be perceived as having the same effect as loop activity,
-            which could be interpreted as shape energy. But the throttle is applied
-            in both directions, unlike loop activity.
-        * "Narrowing the connecting tubes does not change the volume of the containers."
-
-        Are you doing any calculations or stats data processing that induces the shift,
-        * Is it an actual shift in the system or only perceived, or just a dumb bug?
-        * Are you accessing self.cache['stochastic_rate_constant'] outside of calculate_c_j?
-
-        Hey, when we find c_j below, we use:
-            c_j = self.possible_hybridization_reactions[reacted_pair]
-        However, this does not change during run. Set that up so it does.
-
         """
         ## TODO: Throttle, consider alternatively have reaction_invocation_count on a per-domain basis.
 
@@ -1890,8 +1890,10 @@ class ReactionMgr(ComponentMgr):
         edge_key = (reacted_spec_pair, reaction_attr)
         self.reaction_invocation_count[edge_key] += 1
         throttle_factor = self.reaction_throttle_cache[edge_key][0] if edge_key in self.reaction_throttle_cache else 1.0
-        edge_label_fmt = ("{reaction_type}{is_forming_str}{is_intra_str} {activity:0.01g} {c_j:0.01e}\n"
-                          "{traversals}  {throttle_factor:0.03g}  {c_j_throttled}")
+        edge_label_fmt = ("{reaction_attr_str}  {activity:0.01g}  {c_j:0.01e}\n"
+                          "{traversals}  {throttle_factor:0.03g}  {c_j_throttled:0.01e}")
+        reaction_attr_str = (reaction_attr.reaction_type + ("+" if reaction_attr.is_forming else "-")
+                             + (" " if reaction_attr.is_intra else "*"))
 
         if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
             c_j = self.possible_hybridization_reactions[reacted_pair]
@@ -1931,24 +1933,16 @@ class ReactionMgr(ComponentMgr):
         else:
             raise ValueError("Unknown reaction type '%s'" % (reaction_attr.reaction_type,), reaction_attr.reaction_type)
 
-
         ## List of all changed complexes (incl new complexes):
         changed_complexes = [cmplx
                              for lst in (reaction_result['changed_complexes'], reaction_result['new_complexes'])
                              if lst is not None and len(lst) > 0
                              for cmplx in lst]
 
+
         ### 1. Assert state change for all changed complexes: ###
         for cmplx in changed_complexes:
-            ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
-            ## TODO: This would also prevent the bug where dS is altered multiple times!
-
-            ### 1. Assert that complex state fingerprint has been updated: ###
             source_state = cmplx._historic_fingerprints[-1]
-            #rxs_key = lambda eattr: (eattr['reaction_spec_pair'], eattr['reaction_attr'])
-            # The previous has been superseeded by a permanent endstates_by_reaction dict: (Also, no need for checks)
-            #target_by_key = {rxs_key(eattrs): target for target, eattrs in self.reaction_graph[source_state].items()}
-            #assert target_by_key == self.endstates_by_reaction[source_state]  ## TODO: Remove assertion
             expected_state_fingerprint = None
             expected_state_fingerprints = None
             if edge_key in self.endstates_by_reaction[source_state]:
@@ -1958,21 +1952,11 @@ class ReactionMgr(ComponentMgr):
                 expected_state_fingerprints = self.endstates_by_reaction[source_state][edge_key]
                 if len(expected_state_fingerprints) == 1:
                     expected_state_fingerprint = expected_state_fingerprints[0]
-
             ## Assert complex state change (will update complex state fingerprint):
-            target_state, micro_cycle = cmplx.assert_state_change(
+            target_state, _ = cmplx.assert_state_change(
                 reacted_spec_pair, reaction_attr, expected_state_fingerprint=expected_state_fingerprint)
             if expected_state_fingerprints is not None:
                 assert target_state in expected_state_fingerprints
-
-            ### 4. Detect/process reaction micro-cycles: (not needed any more) ###
-            # if micro_cycle is not None:
-            #     micro_cycle = tuple(micro_cycle)
-            #     if micro_cycle not in self.known_reaction_cycles:
-            #         self.known_reaction_cycles.add(micro_cycle)
-            #         for pair in micro_cycle[1:]:
-            #             self.reaction_cycles_by_pair[pair].add(micro_cycle)
-            #     self.reaction_cycles_count[micro_cycle] += 1
 
 
         ### 2. Calculate state energy change used to update complex energies and reaction graph: ###
@@ -2147,8 +2131,6 @@ class ReactionMgr(ComponentMgr):
 
             ## Add edge from source (start state) to target (end state):
             ## TODO: Add activity and possibly dH, dS as reaction edge attributes
-            edge_label_fmt = ("{reaction_type}{is_forming_str}{is_intra_str} {activity:0.1e} {c_j:0.1e}\n"
-                              "{throttle_factor:0.03g} {traversals}")
             if target_state not in self.reaction_graph[source_state]:
                 ## There is currently no edge from source to target, so add new edge:
                 edge_attrs = {
@@ -2158,8 +2140,7 @@ class ReactionMgr(ComponentMgr):
                     'reaction_type': reaction_attr.reaction_type,
                     'is_forming': reaction_attr.is_forming,
                     'is_intra': reaction_attr.is_intra,
-                    'is_forming_str': "+" if reaction_attr.is_forming else "-",
-                    'is_intra_str': " " if reaction_attr.is_intra else "*",
+                    'reaction_attr_str': reaction_attr_str,
                     #'dHdS': dHdS,
                     'dH': dH, #dHdS[0],
                     'dS': dS, #dHdS[1],   # includes loop/volume entropy
@@ -2234,8 +2215,7 @@ class ReactionMgr(ComponentMgr):
                     'reaction_type': reaction_attr.reaction_type,
                     'is_forming': reaction_attr.is_forming,
                     'is_intra': reaction_attr.is_intra,
-                    'is_forming_str': "+" if reaction_attr.is_forming else "-",
-                    'is_intra_str': " " if reaction_attr.is_intra else "*",
+                    'reaction_attr_str': reaction_attr_str,
                     #'dHdS': dHdS,
                     'dH': dH, 'dS': dS,
                     'activity': activity,
@@ -2279,7 +2259,6 @@ class ReactionMgr(ComponentMgr):
 
         ### 5. Adjust throttle: ###
 
-        # self.reaction_invocation_count[(reaction_spec_pair, reaction_attr)] += 1
         # if self.reaction_throttle_use_cache:
         #     self.reaction_throttle_cache[(reaction_spec_pair, reaction_attr)] = \
         #         0.95 * self.reaction_throttle_cache[(reaction_spec_pair, reaction_attr)]
@@ -2287,8 +2266,7 @@ class ReactionMgr(ComponentMgr):
         ## Unless we also are throttling inter-complex reactions? That might actually be easier to get right.
         ## But, of course, then we don't have any way to keep track of reaction counts.
 
-        if self.reaction_throttle and self.reaction_throttle_use_cache and not \
-            self.reaction_throttle_freeze:
+        if self.reaction_throttle and self.reaction_throttle_use_cache and not self.reaction_throttle_freeze:
             if self.reaction_throttle_per_complex:
                 print("Per-complex throttle...")
                 ## TODO: This really should be done when looping over changed complexes
@@ -2332,7 +2310,6 @@ class ReactionMgr(ComponentMgr):
                     # New: Make sure to use the same throttle in both directions.
                     # Check whether we have an edge in the other direction before creating a new:
                     # TODO: Re-implement as try...except KeyError
-                    throttle_factor = [self.reaction_throttle_factor_base]
                     # # if edge_key in self.endstates_by_reaction[source_state]:
                     #     # Uhm... how does this work when splitting a complex in two, i.e. we have two
                     #     # outgoing edges with the same (reaction_spec_pair, reaction_attr) edge key...?
@@ -2351,11 +2328,26 @@ class ReactionMgr(ComponentMgr):
                     # # Edit: Use self.reverse_reaction_key instead.
                     if edge_key in self.reverse_reaction_key:
                         rev_edge_key = self.reverse_reaction_key[edge_key]
-                        if rev_edge_key in self.reaction_throttle_cache:
-                            throttle_factor = self.reaction_throttle_cache[rev_edge_key]
+                        assert rev_edge_key in self.reaction_throttle_cache
+                        throttle_factor = self.reaction_throttle_cache[rev_edge_key]
+                    else:
+                        throttle_factor = [self.reaction_throttle_factor_base]
                     # else if edge_key not in self.reverse_reaction_key, then we risk
                     # creating two throttle_factor encapsulating lists:
                     self.reaction_throttle_cache[edge_key] = throttle_factor
+                elif test_throttles:
+                    if reaction_attr_str in test_throttles:
+                        if reaction_attr.reaction_type is STACKING_INTERACTION:
+                            domain1, domain2 = h1end3p.domain, h2end5p.domain
+                        if domain1.name in test_throttles[reaction_attr_str]:
+                            self.reaction_throttle_cache[edge_key][0] = test_throttles[reaction_attr_str][domain1.name]
+                        elif domain2.name in test_throttles[reaction_attr_str]:
+                            self.reaction_throttle_cache[edge_key][0] = test_throttles[reaction_attr_str][domain2.name]
+                        elif len(test_throttles) > 1 and debug_test_throttles:
+                            pdb.set_trace()
+                    elif len(test_throttles) > 1 and debug_test_throttles:
+                        if edge_key not in self.reaction_throttle_cache:
+                            pdb.set_trace()
                 else:
                     self.reaction_throttle_cache[edge_key][0] *= self.reaction_throttle_factor_base
                     if edge_key in self.reverse_reaction_key:
@@ -2363,8 +2355,8 @@ class ReactionMgr(ComponentMgr):
                         assert self.reaction_throttle_cache[edge_key] is self.reaction_throttle_cache[rev_edge_key]
                     # else:
                     #     print("\nWARNING: edge_key\n\t%s\nnot in self.reverse_reaction_key:"
-                    #           % reaction_str(*edge_key))
-                    #     print("\n".join("%s => %s" % (reaction_str(*k), reaction_str(*v))
+                    #           % reaction_to_str(*edge_key))
+                    #     print("\n".join("%s => %s" % (reaction_to_str(*k), reaction_to_str(*v))
                     #                     for k, v in self.reverse_reaction_key.items()))
                     #     pdb.set_trace()
 
@@ -2372,7 +2364,11 @@ class ReactionMgr(ComponentMgr):
                 #       (self.reaction_throttle_cache[(reacted_spec_pair, reaction_attr)],
                 #        reacted_spec_pair, reaction_attr))
 
-
+        # print("\n".join("\n%s: %s\n%s:%s" % (
+        #     reaction_to_str(*k), v, reaction_to_str(*self.reverse_reaction_key[k]),
+        #     self.reaction_throttle_cache[self.reverse_reaction_key[k]])
+        #                 for k, v in sorted(self.reaction_throttle_cache.items())))
+        # print("\n".join("\n%-52s: %s\n%-52s: %s" % (reaction_to_str(*k), v, reaction_to_str(*self.reverse_reaction_key[k]), self.reaction_throttle_cache[self.reverse_reaction_key[k]]) for k, v in sorted(self.reaction_throttle_cache.items())))
 
 
     def record_new_complex_state(self, cmplx, state_fingerprint):
@@ -2658,7 +2654,6 @@ class ReactionMgr(ComponentMgr):
             d1, d2 = tuple(reactant_pair)
             domain1, domain2 = reactant_pair_str
             reaction_attr = self.reaction_attrs[reactant_pair]
-            #reaction_str = ("" if reaction_attr.is_forming else "de-") + reaction_attr.reaction_type
             reaction_desc = REACTION_NAMES[reaction_attr.is_forming][reaction_attr.reaction_type]
             # Use %10s or %18r for domain str/repr
             stat = ("%42s %9s %s %42s" % (domain1, reaction_desc[:8], #reaction_attr.is_intra, domain2),

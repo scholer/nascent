@@ -62,8 +62,10 @@ def graph_state_partitions(g, T, update=False, unit='R'):
     return partitions
 
 
-def reaction_attr_str(reaction_attr):
+def reaction_attr_to_str(reaction_attr):
     """
+    Alternative name: reaction_attr_repr ?   ("to_str" vs "repr")
+    Would be nice to have a generic, overloadable, Julia-style multiple-dispatch, global "repr" function...
     Return
         h+ for forming  hybridization reactions,
         h- for breaking hybridization reactions,
@@ -75,16 +77,20 @@ def reaction_attr_str(reaction_attr):
                     "+" if reaction_attr.is_forming else "-",
                     " " if reaction_attr.is_intra else "*"))
 
+
 def reaction_spec_pair_str(reaction_spec_pair):
     """
+    Alternative name: reaction_spec_pair_repr ?
     Return
+
     Appends an asterix (*) for inter-molecular reactions.
     """
     return ", ".join(sorted(reaction_spec_pair))
 
 
-def reaction_str(reaction_spec_pair, reaction_attr):
+def reaction_to_str(reaction_spec_pair, reaction_attr):
     """
+    Alternative names: reaction_repr, reaction_as_str, reaction_str_repr ?
     Return
         h+*: s1_A > < s2_a  (0, 0)  for inter-complex hybridization
         h+ : s1_A >_< s2_a          for intra-complex hybridization
@@ -118,8 +124,8 @@ def reaction_str(reaction_spec_pair, reaction_attr):
                 cstates.append(d['cstate'])
         states_str = ", ".join(cstates)
         form_str = (">%s<" if reaction_attr.is_forming else "<%s>") % ("_" if reaction_attr.is_intra else " ")
-        fmt = "{ra}:  {d1[dspecie]}{d1[hyb]}{form_str}{d2[hyb]}{d2[dspecie]}\t({states_str})"
-        return fmt.format(ra=reaction_attr_str(reaction_attr), form_str=form_str, d1=d1, d2=d2, states_str=states_str)
+        fmt = "{ra}:  {d1[dspecie]}{d1[hyb]}{form_str}{d2[hyb]}{d2[dspecie]}    ({states_str})"
+        return fmt.format(ra=reaction_attr_to_str(reaction_attr), form_str=form_str, d1=d1, d2=d2, states_str=states_str)
     elif reaction_attr.reaction_type is STACKING_INTERACTION:
         h1end3p, h2end5p, h2end3p, h1end5p = {}, {}, {}, {}
         for d, efp in zip((h1end3p, h2end5p, h2end3p, h1end5p),
@@ -138,38 +144,43 @@ def reaction_str(reaction_spec_pair, reaction_attr):
                 cstates.append(d['cstate'])
         states_str = ", ".join(cstates)
         form_str = (">%s<" if reaction_attr.is_forming else "<%s>") % ("_" if reaction_attr.is_intra else " ")
+        #             h1end3p         h1end5p
+        # Helix 1   ----------3' : 5'----------
+        # Helix 2   ----------5' : 3'----------
+        #             h2end5p         h2end3p
+        # Note: Biopython's "stack_string" is h1end3p h1end5p/h2end5p h2end3p
+        # But the format below is in format   h1end3p h1end5p/h2end3p h2end5p
         fmt = ("{ra}:"
                "{h1end3p[dspecie]}{h1end3p[end]}{h1end3p[stacked]}{form_str}"
                "{h1end5p[stacked]}{h1end5p[dspecie]}{h1end5p[end]} / "
-               "{h1end3p[dspecie]}{h1end3p[end]}{h1end3p[stacked]}{form_str}"
-               "{h2end5p[stacked]}{h2end5p[dspecie]}{h2end5p[end]} \t"
+               "{h2end3p[dspecie]}{h2end3p[end]}{h2end3p[stacked]}{form_str}"
+               "{h2end5p[stacked]}{h2end5p[dspecie]}{h2end5p[end]}    "
                #"({h1end3p[cstate]}, {h1end5p[cstate]}, {h2end3p[cstate]}, {h2end5p[cstate]})"
                "({states_str})"
               )
-        return fmt.format(ra=reaction_attr_str(reaction_attr), form_str=form_str, states_str=states_str,
+        return fmt.format(ra=reaction_attr_to_str(reaction_attr), form_str=form_str, states_str=states_str,
                           h1end3p=h1end3p, h2end5p=h2end5p, h2end3p=h2end3p, h1end5p=h1end5p)
 
 
-def reaction_eattrs(reaction_attr, activity, c_j, throttle_factor, dHdS):
-    """
-    """
-    return
+# def reaction_eattrs(reaction_attr, activity, c_j, throttle_factor, dHdS):
+#     """
+#     """
+#     return
 
 
-def reaction_edge_label(eattr):
-    """
-    Add a suitable label to reaction edge attribute dict :eattr:.
-    eattr dict should already contain the following entries:
-    * reaction_attr tuple values:
-    * reaction_type, is_forming, is_intra
-    * is_forming_str
-    * is_intra_str
-    * dS
-    * dH
-    * loop type enum (0=no loop, 1, 2)
-    * activity
-    * c_j
-    * throttle_factor
-    """
-    return "{reaction_type}{is_forming_str}{is_intra_str} {c_j:0.1e}"
-
+# def reaction_edge_label(eattr):
+#     """
+#     Add a suitable label to reaction edge attribute dict :eattr:.
+#     eattr dict should already contain the following entries:
+#     * reaction_attr tuple values:
+#     * reaction_type, is_forming, is_intra
+#     * is_forming_str
+#     * is_intra_str
+#     * dS
+#     * dH
+#     * loop type enum (0=no loop, 1, 2)
+#     * activity
+#     * c_j
+#     * throttle_factor
+#     """
+#     return "{reaction_type}{is_forming_str}{is_intra_str} {c_j:0.1e}"

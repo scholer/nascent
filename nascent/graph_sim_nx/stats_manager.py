@@ -42,7 +42,7 @@ except ImportError as e:
     print(" - msgpack output not available to stats writer.")
 
 
-from nascent.graph_sim_nx.reactionmgr import ReactionAttrs
+# from nascent.graph_sim_nx.reactionmgr import ReactionAttrs
 from .nx_utils import draw_graph_and_save, layout_graph
 
 
@@ -50,7 +50,7 @@ def simplify(data, _list=list, _set=set):
     if isinstance(data, dict):
         # cannot simplify if k is frozenset... :(
         return {simplify(k, _list=tuple, _set=frozenset): simplify(v, _list=_list, _set=_set)
-                         for k, v in data.items()}
+                for k, v in data.items()}
     if isinstance(data, (tuple, list)):
         return _list(simplify(v, _list=_list, _set=_set) for v in data)
     if isinstance(data, (set, frozenset)):
@@ -75,7 +75,7 @@ class StatsWriter():
         self.simulator = simulator
         self.config = config
         self.open_files = []
-
+        self.monitored_strands = []   # Add strands to monitor throughout the simulation.
 
         self.stats_field_sep = config.get('stats_field_sep', '\t')
         self.stats_field_sep2 = config.get('stats_field_sep2', ', ')
@@ -144,19 +144,34 @@ class StatsWriter():
                                                  self.stats_per_strand_fields*len(self.stats_per_strand_species))
             self.stats_per_strand_file.write(header1+"\n"+header2+"\n")
 
-        ## Collect complex_state_count (for each step)
-        self.complex_state_count_file = config.get('complex_state_count_file')
+
+        ## Collect complex_state_count (for each step) - using msgpack format
+        self.complex_state_count_file = config.get('stats_complex_state_count_file')
         if self.complex_state_count_file:
             self.complex_state_count_file = open(self.complex_state_count_file, 'wb') # msgpack - open in binary mode
             self.open_files.append(self.complex_state_count_file)
 
 
+        ## File to collect stats for monitored strands:
+        self.stats_monitored_strands_file = config.get('stats_monitored_strands_file')
+        # grouping-fields, then index field, then weight (tau), then values or secondary group fields (?)
+        monitored_strands_fields = ("strand_uid, strand_name, system_time, tau, "
+                                    "complex_uid, complex_state, N_domains, N_hybridized_domains").split(", ")
+        if self.stats_monitored_strands_file:
+            print("Writing monitored strands stats file:", self.stats_monitored_strands_file)
+            self.stats_monitored_strands_file = fh = open(self.stats_monitored_strands_file, 'w')
+            self.open_files.append(fh)
+            header = self.stats_field_sep.join(monitored_strands_fields)
+            self.stats_monitored_strands_file.write(header+"\n")
+
+
         ## File to collect complex states:
         self.stats_complex_state_file = config.get('stats_complex_state_file')
         complex_state_fields = [
-            ## TODO: Add N_hybridized_domains as well.
-            "ComplexID", "system_time", "reaction",
-            "cached_state_hash", "state_hash", "cached_state_hash2",
+            "complex_uid", "system_time", "tau", "reaction_str",
+            #"cached_state_hash",   # Is always None
+            "state_hash",           # Obtained with cmplx.state_fingerprint()
+            #"cached_state_hash2",  # Same as state_hash
             "N_strands", "N_domains", "N_hybridized_pairs", "N_stacked_pairs",
             'total_dH', 'total_dS', 'volume_dH', 'volume_dS', 'shape_dH', 'shape_dS',
             'hybridization_dH', 'hybridization_dS', 'stacking_dH', 'stacking_dS'
@@ -189,14 +204,21 @@ class StatsWriter():
             fh.close()
 
 
-    def write_stats(self, tau):
+    def write_stats(self, tau, reaction_attr=None, result=None):
         """ Write all stats to all file. """
+        ## TODO: Consider including reaction_spec_pair, reaction_attr (for the *next* or the *previous* reaction?)
         if self.stats_total_file is not None:
             self.write_total_stats(tau)
         if self.stats_per_domain_file is not None:
             self.write_per_domain_stats(tau)
         if self.stats_per_strand_file is not None:
             self.write_per_strand_stats(tau)
+        if self.stats_monitored_strands_file is not None and self.monitored_strands:
+            self.write_monitored_strands_stats(tau)
+        # write_complex_state_stats currently works by writing state changes...
+        if self.stats_complex_state_file and result is not None:
+            self.write_complex_state_stats(tau, result, reaction_attr)
+
 
 
     def write_total_stats(self, tau, fields=None, init_stats=None):
@@ -326,7 +348,35 @@ class StatsWriter():
         msgpack.pack(self.complex_state_count_file, complex_state_count)
 
 
-    def write_complex_state_stats(self, result, reaction_attr):
+
+    def write_monitored_strands_stats(self, tau):
+        """
+        Args:
+            :result:    The result dict with case and changed complexes from react_and_process method.
+
+        Will, for each monitored strand, write a line with:
+            strand_uid, strand_name, system_time, tau, complex_uid, complex_state, N_domains, N_hybridized_domains
+        This should be easy. The tricky part is parsing the result...
+        You will have to create a table *for each complex* before you start calculating the duration
+        of each complex state.
+
+        To read the data, simply use something like:
+            pandas.read_table(filename)
+        """
+        system_time = self.sysmgr.system_time
+        for strand in self.monitored_strands:
+            cmplx = strand.complex
+            cuid, cstate = (-1, 0) if cmplx is None else (cmplx.cuid, cmplx.state_fingerprint())
+            line = self.stats_field_sep.join((#"%s" % val for val in (
+                "%s" % strand.suid, strand.name,
+                "%0.05f" % system_time, "%0.04e" % tau, #reaction_str,
+                "%s" % cuid, "%s" % cstate,
+                "%s" % len(strand.domains), "%s" % sum(1 for d in strand.domains if d.partner is not None)
+            ))
+            self.stats_monitored_strands_file.write(line+"\n")
+
+
+    def write_complex_state_stats(self, tau, result, reaction_attr):
         """
         Args:
             :result:    The result dict with case and changed complexes from react_and_process method.
@@ -347,28 +397,30 @@ class StatsWriter():
             changed_complexes = result['new_complexes']
         else:
             return
-        reaction_str = reaction_attr.reaction_type + ("+" if reaction_attr.is_forming else "-")
+        reaction_attr_str = (reaction_attr.reaction_type + ("+" if reaction_attr.is_forming else "-")
+                             + ("*" if reaction_attr.is_intra else " "))
+
         for cmplx in changed_complexes:
-            ## Done: Add N_hybridized_domains, N_stacked_ends
-            ## Done: h+, h-, s+, s- field to denote whether it is a forming/breaking hybridization/stacking reaction.
-            ## "ComplexID", "system_time", "reaction",
-            ## TODO: Add complex fingerprints, perhaps even hybridized/stacked?
             ## in ReactionMgr we track N_domains_hybridized explicitly, but not for complexes.
-            line = self.stats_field_sep.join(str(val) for val in (
-                cmplx.cuid, system_time, reaction_str,
-                cmplx._state_fingerprint, cmplx.state_fingerprint(), cmplx._state_fingerprint,
-                len(cmplx.strands), len(list(cmplx.domains())),
-                len(cmplx.hybridized_pairs), len(list(cmplx.stacked_pairs)),
-                cmplx.energy_total_dHdS[0], cmplx.energy_total_dHdS[1],
-                cmplx.energies_dHdS[0]['volume'], cmplx.energies_dHdS[1]['volume'],
-                cmplx.energies_dHdS[0]['shape'], cmplx.energies_dHdS[1]['shape'],
-                cmplx.energies_dHdS[0]['hybridization'], cmplx.energies_dHdS[1]['hybridization'],
-                cmplx.energies_dHdS[0]['stacking'], cmplx.energies_dHdS[1]['stacking'],
+            ## Using %s string interpolation seems to be the fastest way to produce strings:
+            line = self.stats_field_sep.join((
+                "%s" % cmplx.cuid, "%0.04e" % system_time, "%0.04e" % tau,
+                reaction_attr_str,
+                # cmplx._state_fingerprint,
+                "%s" % cmplx.state_fingerprint(),
+                # cmplx._state_fingerprint,
+                "%s" % len(cmplx.strands), "%s" % len(list(cmplx.domains())),
+                "%s" % len(cmplx.hybridized_pairs), "%s" % len(list(cmplx.stacked_pairs)),
+                "%0.04f" % cmplx.energy_total_dHdS[0], "%0.04f" % cmplx.energy_total_dHdS[1],
+                "%0.02f" % cmplx.energies_dHdS[0]['volume'], "%0.03f" % cmplx.energies_dHdS[1]['volume'],
+                "%0.02f" % cmplx.energies_dHdS[0]['shape'], "%0.03f" % cmplx.energies_dHdS[1]['shape'],
+                "%0.02f" % cmplx.energies_dHdS[0]['hybridization'], "%0.03f" % cmplx.energies_dHdS[1]['hybridization'],
+                "%0.02f" % cmplx.energies_dHdS[0]['stacking'], "%0.03f" % cmplx.energies_dHdS[1]['stacking'],
             ))
             self.stats_complex_state_file.write(line+"\n")
 
 
-    def write_post_simulation_stats(self, systime=None):
+    def write_post_simulation_stats(self, fnpostfix=""):
         """
         Append a dict with stats:
             sysmgr_cache, reaction_attrs, reaction_throttle_cache, reaction_invocation_count
@@ -383,15 +435,22 @@ class StatsWriter():
             print("statsmgr.stats_post_simulation_file is None, cannot collect post simulation stats...")
             return
         sysmgr = self.sysmgr
-        systime = sysmgr.system_time
+        # systime = sysmgr.system_time
         stats = {}
         # remove defaultdict, etc:
         stats['reaction_throttle_cache'] = sysmgr.reaction_throttle_cache
+        # ReactionMgr.cache has: domain_hybridization_energy, intracomplex_activity, stochastic_rate_constant,
         stats['sysmgr_cache'] = sysmgr.cache
         stats['reaction_attrs'] = sysmgr.reaction_attrs
+        stats['reaction_spec_pairs'] = sysmgr.reaction_spec_pairs
         stats['reaction_invocation_count'] = sysmgr.reaction_invocation_count
+        stats['possible_hybridization_reactions'] = sysmgr.possible_hybridization_reactions
+        stats['possible_stacking_reactions'] = sysmgr.possible_stacking_reactions
         stats = simplify(stats)
-        with open(self.stats_post_simulation_file, 'a') as fp:
+        fn = self.stats_post_simulation_file.format(
+            fnpostfix=fnpostfix,
+            system_time=sysmgr.system_time, T=sysmgr.temperature)
+        with open(fn, 'a') as fp:
             # dump yaml as list to make it easy to append.
             # otherwise, use msgpack format.
             before = fp.tell()
@@ -537,4 +596,3 @@ class StatsReader():
             for stat in stats:
                 stats_by_cuid[stat['ComplexID']].append(stat)
         return stats, stats_by_cuid
-

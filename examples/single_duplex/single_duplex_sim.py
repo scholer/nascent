@@ -57,7 +57,7 @@ from nascent.graph_sim_nx.simulator_dm import DM_Simulator as Simulator
 from nascent.graph_sim_nx.fileio import parse_strand_domains_file, check_strands
 from nascent.graph_sim_nx.dispatcher import StateChangeDispatcher
 from nascent.graph_sim_nx.constants import N_AVOGADRO #, R
-from nascent.graph_sim_nx import debug
+from nascent.graph_sim_nx import debug, reactionmgr
 from nascent.utils.logging import init_logging
 
 # Toggle debug printing:
@@ -209,11 +209,12 @@ def main():
               "reaction_throttle_reset_on_temperature_change": True,
               "dispatcher_enabled": False,  # True to use a dispatcher to save and visualize graph changes.
               "dispatcher_config": dispatcher_config,
-              "stats_total_file": outputfn(statstype="time_totstats", ext="txt"),
-              "stats_per_domain_file": outputfn(statstype="time_domain_stats", ext="txt"),
-              "stats_per_strand_file": outputfn(statstype="time_strand_stats", ext="txt"), #
-              "stats_complex_state_file": outputfn(statstype="time_complex_stats", ext="txt"), #
-              "stats_post_simulation_file": outputfn(statstype="post_simulation_stats", ext="yaml"), #
+              "stats_total_file": outputfn(statstype="time_totstats", ext="tsv"),
+              "stats_per_domain_file": outputfn(statstype="time_domain_stats", ext="tsv"),
+              "stats_per_strand_file": outputfn(statstype="time_strand_stats", ext="tsv"), #
+              "stats_complex_state_file": outputfn(statstype="time_complex_stats", ext="tsv"), #
+              "stats_monitored_strands_file": outputfn(statstype="monitored_strands_stats", ext="tsv"), #
+              "stats_post_simulation_file": outputfn(statstype="post_simulation_stats_{system_time:.0f}", ext="yaml"), #
               # complexes - these are saved by reactionmgr as new complex assemblies (states) are encountered.
               "reaction_graph_complexes_directory": os.path.join(statsfolder, "complexes"), #
               # reaction_graph - are saved by statsmgr after every simulation.
@@ -312,17 +313,53 @@ def main():
                 s.sort_stats('time').print_stats(20)
             else:
                 # pdb.set_trace()
-                simulator.simulate(T=330, n_steps_max=100000, systime_max=2000)
+                simulator.stats_writer.monitored_strands = [input_oligos[0]]
+                #simulator.simulate(T=330, n_steps_max=100000, systime_max=2000)
+                # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
-                # simulator.simulate(T=330, n_steps_max=50000, systime_max=100000)
+                # simulator.simulate(T=330, n_steps_max=4000, systime_max=200)
                 # simulator.simulate(T=330, n_steps_max=1000, systime_max=200)
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 
+                #simulator.simulate(T=330, n_steps_max=200000, simulation_time=200)
+
+                #reactionmgr.test_throttles = reactionmgr.test_throttles0  # UN-throttled (all 1.0)
+                reactionmgr.test_throttles = reactionmgr.test_throttles1  # Actual throttle values after a run
+                # reactionmgr.test_throttles = reactionmgr.test_throttles5  # Only throttle stacking: Does not shift equilibrium
+                # reactionmgr.test_throttles = reactionmgr.test_throttles3  # Only intRA-complex hyb and stacking. Does shift.
+                # reactionmgr.test_throttles = reactionmgr.test_throttles6  # Only intER-complex hyb, h+*, and stacking, s+. Does not shift, only de-stabilizes a little.
+                # reactionmgr.test_throttles = reactionmgr.test_throttles7  # Only intER-complex hyb, h+*. Does not shift. Well, maybe de-stabilizes a little.
+                # reactionmgr.test_throttles = reactionmgr.test_throttles8  # Only intRA-complex hyb, h+*. DOES shift equilibrium.
+                # Preliminary conclusion: Only throttling of intRA-complex reactions shift equilibrium.
+                # Perhaps the throttle does not apply properly to intER-complex/strand h+* or h-* reactions?
+                simulator.simulate(T=330, n_steps_max=10000, simulation_time=20)
+                reactionmgr.debug_test_throttles = True
+                simulator.simulate(T=330, n_steps_max=100000, simulation_time=200)
+                # simulator.simulate(T=330, n_steps_max=200000, simulation_time=600)
+                #
+                # # reactionmgr.test_throttles = reactionmgr.test_throttles2
+                # # simulator.simulate(T=330, n_steps_max=200000, simulation_time=600)
+                #
+                # # reactionmgr.test_throttles = reactionmgr.test_throttles3
+                # # simulator.simulate(T=330, n_steps_max=200000, simulation_time=600)
+                #
+                # # reactionmgr.test_throttles = reactionmgr.test_throttles4
+                # simulator.reactionmgr.init_possible_reactions()
+                # simulator.simulate(T=330, n_steps_max=200000, simulation_time=200)
+                #
+                # reactionmgr.test_throttles = reactionmgr.test_throttles0
+                # # simulator.reactionmgr.reset_temperature(T=330)
+                # # simulator.reactionmgr.init_possible_reactions()
+                # simulator.simulate(T=330, n_steps_max=200000, simulation_time=400)
+
+
     except KeyboardInterrupt:
         print("\n\nABORT: KeyboardInterrupt.\n\n")
         print(traceback.format_exc()) # or print(sys.exc_info()[0])
-        # answer = input("Do you want to enter debug mode? [yes]/no  ")
+        answer = input("Do you want to enter debug mode? yes/[no]  ")
+        if answer and answer[0].lower() == 'y':
+            pdb.set_trace()
         # answer = input("Do you want to save the simulation data for this aborted run? [yes]/no  ")
         # if answer and answer[0].lower() == 'n':
         #     return
@@ -340,8 +377,8 @@ def main():
 
     # simulator.save_stats_cache()
 
-    simulator.stats_writer.write_post_simulation_stats()
-    simulator.stats_writer.save_reaction_graph()
+    # simulator.stats_writer.write_post_simulation_stats()
+    # simulator.stats_writer.save_reaction_graph()
     simulator.stats_writer.close_all() # Close all open files...
 
     Tm_filename = outputfn(statstype="energies", ext="yaml")

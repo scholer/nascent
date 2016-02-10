@@ -146,14 +146,13 @@ class DM_Simulator(Simulator):
         self.timings = {}  # Performance profiling of the simulator (real-world or cpu time)
         self.system_stats['tau_deque'] = deque(maxlen=10)
         self.step_sleep_factor = self.params.get('simulator_step_sleep_factor', 0)
-        self.print_post_step_fmt = ("{self.N_steps: 5} "
+        self.print_post_step_fmt = ("{self.N_steps: 6} "
                                     "[{sysmgr.system_time:0.02e}"
                                     " {stats[tau]:0.02e}"
                                     " {stats[tau_mean]:0.02e}] "
                                     "[{timings[step_time]:0.02e}] "
-                                    #"[{timings[step_time]:0.02e}] "
-                                    "[sleep: {sleep_time:0.02e}]"
-                                    "[tf: {throttle_factor:0.02e}]"
+                                    "[sleep: {sleep_time:0.02e}] "
+                                    "[tf: {throttle_factor:0.02e}] "
                                    )
         # Must specify: time, tau, T, nodes
         self.state_change_hybridization_template = {'change_type': 1,  # 0=Nodes, 1=Edges
@@ -190,27 +189,21 @@ class DM_Simulator(Simulator):
             n_steps_max = self.params["n_steps_per_T"]
         if simulation_time is None:
             simulation_time = self.params["time_per_T"]
-        self.timings['simulation_start_time'] = timer()
-        self.timings['step_start_time'] = self.timings['step_end_time'] = self.timings['simulation_start_time']
 
         # sysmgr_grouped = self.reactionmgr_grouped
         sysmgr = self.reactionmgr
         if systime_max is None:
-            systime_max = sysmgr.system_time + simulation_time
+            systime_max = self.reactionmgr.system_time + simulation_time
         if T is None:
-            T = sysmgr.temperature
+            T = self.reactionmgr.temperature
         else:
-            if T != sysmgr.temperature:
+            if T != self.reactionmgr.temperature:
                 print("Re-setting temperature (and temperature-dependent caches)...")
-                sysmgr.reset_temperature(T)
+                self.reactionmgr.reset_temperature(T)
         # sysmgr_grouped.temperature = T
-        sleep_time = 0
-
-        n_done = 0
-        tau = 0
 
         print("sysmgr.domain_pairs:")
-        pprint(sysmgr.domain_pairs)
+        pprint(self.reactionmgr.domain_pairs)
 
         print(self.print_post_step_fmt)
         # print(self.print_post_step_fmt.format(
@@ -218,10 +211,39 @@ class DM_Simulator(Simulator):
         #     sleep_time=sleep_time),
         #       end="")
 
-        while n_done < n_steps_max:
+        print("Simulating until system_time = %s (at most %s steps)" % (systime_max, n_steps_max))
+        n_done = self.simulate_until(systime_max=systime_max, n_steps_max=n_steps_max)
+        print("\nSimulate: completed %s steps at T=%sK , system_time=%s...\n"
+              % (n_done, sysmgr.temperature, sysmgr.system_time))
 
-            # if n_done > 40000:
-            #     sysmgr.reaction_throttle_freeze = True
+        ## Post-simulation stuff:
+        self.reactionmgr.save_reaction_graph(fnpostfix="_endsim")
+        self.stats_writer.write_post_simulation_stats(fnpostfix="_endsim")
+        self.stats_writer.save_reaction_graph()
+        return n_done
+
+
+
+    def simulate_until(self, systime_max, n_steps_max):
+        """
+        Simulate until either:
+            system time has reached or exceeded systime_max,
+        or
+            the while loop has done :n_steps_max: steps/cycles.
+        This is usually called through simulate(T, n_steps_max, simulation_time) method,
+        which takes care to reset temperature and calculate systime_max.
+        """
+
+        self.timings['simulation_start_time'] = timer()
+        self.timings['step_start_time'] = self.timings['step_end_time'] = self.timings['simulation_start_time']
+        sysmgr = self.reactionmgr
+        sleep_time = 0
+        n_done = 0
+        tau = 0
+        reaction_attr = None
+        result = None # Dict describing the result of each reaction, includes 'case' and 'changed_complexes' entries.
+
+        while n_done < n_steps_max:
 
             printd("\n\n------ Step %03s -----------\n" % n_done)
             sysmgr.check_system()
@@ -246,7 +268,7 @@ class DM_Simulator(Simulator):
                       " - ABORTING SIMULATION.\n\n")
                 pdb.set_trace()
                 sysmgr.update_possible_hybridization_reactions(changed_domains=None)
-                return
+                return n_done
             # For ungrouped simulation, hybridization_propensity_functions is just
             #   possible_hybridization_reactions + possible_stacking_reactions + ...
             # Discussion: Do we need to key/index reactions by type/reaction_attr?
@@ -280,11 +302,10 @@ class DM_Simulator(Simulator):
             tau = ln(1/r1)/a0_sum
             if systime_max and sysmgr.system_time + tau > systime_max:
                 tau = systime_max - sysmgr.system_time
-                if self.stats_writer:
-                    self.stats_writer.write_stats(tau=tau)
                 sysmgr.system_time = systime_max
-                print("\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
-                sysmgr.save_reaction_graph(fnpostfix="_endsim")
+                if self.stats_writer:
+                    self.stats_writer.write_stats(tau=tau, reaction_attr=reaction_attr, result=result)
+                print("\n\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
                 return n_done
 
             # NEW: Collecting stats *before* executing reaction, but *before* incrementing system_time.
@@ -385,12 +406,6 @@ class DM_Simulator(Simulator):
             # pprintd(result)
 
 
-            ## Save some stats
-            ## (not write_stats, which is invoked above after calculating tau but before perfoming reaction)
-            # if self.stats_writer.stats_complex_state_file:
-            self.stats_writer.write_complex_state_stats(result, reaction_attr)
-
-
             ## Post-hybridization (and processing) assertions:
             ## Check the system (while debugging)
             sysmgr.check_system()
@@ -431,10 +446,12 @@ class DM_Simulator(Simulator):
                 pprint(sysmgr.reaction_throttle_cache)
                 # pdb.set_trace()
 
+            reaction_edge_key = (reaction_spec_pair, reaction_attr)
+            throttle_factor = (sysmgr.reaction_throttle_cache[reaction_edge_key][0]
+                               if reaction_edge_key in sysmgr.reaction_throttle_cache else 1.0)
             print(self.print_post_step_fmt.format(
                 self=self, stats=self.system_stats, timings=self.timings, sysmgr=self.reactionmgr,
-                sleep_time=sleep_time,
-                throttle_factor=sysmgr.reaction_throttle_cache.get((reaction_spec_pair, reaction_attr), [1.0])[0]),
+                sleep_time=sleep_time, throttle_factor=throttle_factor),
                   end="\r")
 
             ## SLEEP, if required: ##
@@ -461,7 +478,6 @@ class DM_Simulator(Simulator):
 
 
         # end while loop
-        sysmgr.save_reaction_graph(fnpostfix="_endsim")
         return n_done
 
 

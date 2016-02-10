@@ -46,7 +46,7 @@ import networkx as nx
 from pprint import pprint
 from functools import wraps
 import pdb
-import numpy as np
+# import numpy as np
 
 # Relative imports
 from .connected_multigraph import ConnectedMultiGraph
@@ -171,7 +171,7 @@ class Complex(nx.MultiDiGraph):
         self.reaction_deque = deque([0], maxlen=reaction_deque_size)
         #self.reaction_deque = [0]    # deque(maxlen=reaction_deque_size)
         # self.reaction_deque_size = reaction_deque_size
-        self.reaction_invocation_count = Counter()
+        self.reaction_invocation_count = Counter()  # maps reaction_key => Number of times that reaction has occured.
         self.reaction_throttle_cache = {}
         self.previous_reaction_attrs = {}
         self.N_strand_changes = 0

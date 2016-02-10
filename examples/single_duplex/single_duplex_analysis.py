@@ -82,11 +82,11 @@ def main():
 
     # stats, statsfolders = load_stats()
     runidxs = [-1] #
-    # runidxs = [-2] #
+    runidxs = [-2] #
     # runidxs = [-3] #
     # runidxs = [-1, -2, -3, -6, -7, -8, -9, -10]
     # runidxs = [-11] #
-    # runidxs = [-1, -2]
+    runidxs = [-1, -2]
     # runidxs = [-1, -2, -3]
     # runidxs = [-1, -2, -3, -4]
     # runidxs = [-1, -2, -4]
@@ -115,6 +115,7 @@ def main():
 
     ## Plot fraction of hybridized domains:
     if plot_tot_hyb:
+        plotfilename = os.path.join(statsfolder, "f_hybridized_domains_avg_vs_time.png")
         ax = None
         # Instead of passing plot parameters through via function args, consider using the
         # pd.plot_params.use context manager. EDIT: Currently only works for xaxis.compat option :\
@@ -122,7 +123,6 @@ def main():
         # "Specific lines can be excluded from the automatic legend element selection by defining a label
         # starting with an underscore."
         for runstats, runidx, color in zip(stats, runidxs, colors[:len(stats)]):
-            plotfilename = os.path.join(statsfolder, "f_hybridized_domains_avg_vs_time.png")
             # labels, markers, colors, etc all match up against the equivalent data field.
             fields=('f_hybridized_domains_avg', 'f_partially_hybridized_strands_avg', 'f_fully_hybridized_strands_avg')
             fields=('f_partially_hybridized_strands_avg', 'f_fully_hybridized_strands_avg')
