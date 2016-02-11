@@ -23,6 +23,7 @@ Utility functions for dom_simulation.
 
 """
 
+from __future__ import absolute_import, print_function, division
 from collections import defaultdict
 
 from .strand import Strand

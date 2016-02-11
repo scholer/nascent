@@ -55,10 +55,14 @@ Reactions: (this could be a separate object, but for now system state and reacti
 
 """
 
+from __future__ import absolute_import, print_function, division
 import os
 #import random
 from collections import defaultdict, namedtuple, Counter, deque
-from itertools import zip_longest, chain
+try:
+    from itertools import zip_longest, chain
+except ImportError:
+    from itertools import izip_longest as zip_longest, chain
 # Using namedtuple is quite slow in CPython, but faster than dicts in PyPy.
 # (Attribute accessing namedtuple.a is faster than dict['a']; not sure about instantiation.)
 #import math
@@ -601,7 +605,7 @@ class ReactionMgr(ComponentMgr):
         ## TODO: Re-enable cache
         if reaction_spec_pair in self.cache['intracomplex_activity']:
             return self.cache['intracomplex_activity'][reaction_spec_pair]
-        activity = super().intracomplex_activity(elem1, elem2, reaction_type)
+        activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
         # print("Intracomplex activity %0.04f for %s+ reaction between %s and %s" % (
         #     activity, reaction_type, elem1, elem2))
         # reaction will always be forming and intra:
@@ -2203,7 +2207,7 @@ class ReactionMgr(ComponentMgr):
                 }
                 edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
                 self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
-                self.save_reaction_graph()
+                # self.save_reaction_graph()  # Disabled for now...
                 # Update self.endstates_by_reaction[source_state]
                 assert edge_key not in self.endstates_by_reaction[source_state]
                 self.endstates_by_reaction[source_state][edge_key].append(target_state)
@@ -2276,7 +2280,7 @@ class ReactionMgr(ComponentMgr):
                 }
                 edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
                 self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
-                self.save_reaction_graph()
+                # self.save_reaction_graph()  # Disabled, performance.
                 # Update self.endstates_by_reaction[source_state]
                 assert edge_key not in self.endstates_by_reaction[source_state]
                 self.endstates_by_reaction[source_state][edge_key].append(target_state)
@@ -2484,8 +2488,11 @@ class ReactionMgr(ComponentMgr):
             #pos = layout_graph(cmplx, save_pos_as_attr=True)
             # cmplx.graph['pos'] = pos  # Nope, pos is an attr for each node.
             # nx.set_node_attributes(cmplx, 'pos', pos)
+
+            ## Draw complex graph. Disabled for now; instead, process the dot files *after* simulation.
             #draw_graph_and_save(cmplx, path, pos=pos)
-            draw_with_graphviz(cmplx, path)
+            # draw_with_graphviz(cmplx, path)
+
             ## I stopped using per-complex ends5p3p graphs quite some time ago, it was only used for vizualization.
             # path = os.path.join(self.reaction_graph_complexes_directory,
             #                     "%s_ends5p3p.%s" % (state_fingerprint, "png"))

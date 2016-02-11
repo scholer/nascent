@@ -17,6 +17,7 @@
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 
+from __future__ import absolute_import, print_function
 import networkx as nx
 
 # Before importing pyplot, you probably want to make sure you have a proper matplotlib backend set up

@@ -23,6 +23,7 @@ Module with various NetworkX utility functions.
 
 """
 
+from __future__ import absolute_import, print_function, division
 import networkx as nx
 
 matplotlib_initialized = False

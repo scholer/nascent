@@ -30,7 +30,10 @@ e.g. hybridize or dehybridize.
 #from collections import deque, OrderedDict
 #from itertools import zip_longest, chain#, accumulate
 from collections import deque, OrderedDict
-from itertools import zip_longest, chain#, accumulate
+try:
+    from itertools import zip_longest, chain
+except ImportError:
+    from itertools import izip_longest as zip_longest, chain
 
 
 from .dom_anneal_models import Complex

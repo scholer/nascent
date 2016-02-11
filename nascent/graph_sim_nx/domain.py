@@ -26,6 +26,7 @@ TODO: Change all mentions of "strand" to "oligo" to conform with cadnano's nomen
 """
 
 
+from __future__ import absolute_import, print_function, division
 #import random
 import math
 import pdb
@@ -56,7 +57,7 @@ dont_follow_stacking_interactions = lambda eattrs: eattrs.get('type') != STACKIN
 
 
 
-class Domain():
+class Domain(object):
     """
     A domain represents the molecular instance of a strand segment.
     For instance, the molecular instance of a strand "sA" species could
@@ -302,7 +303,7 @@ class Domain():
 
 
 
-class DomainEnd():
+class DomainEnd(object):
     """
     Attributes:
     :domain: parent domain
@@ -355,7 +356,7 @@ class DomainEnd():
 
 class Domain5pEnd(DomainEnd):
     def __init__(self, domain):
-        #super().__init__(self, domain, end="5p")
+        #super().__init__(domain, end="5p")
         DomainEnd.__init__(self, domain, end="5p")
 
     def stacked_upstream(self, ):
@@ -375,7 +376,7 @@ class Domain5pEnd(DomainEnd):
 
 class Domain3pEnd(DomainEnd):
     def __init__(self, domain):
-        #super().__init__(self, domain, end="3p")
+        #super().__init__(domain, end="3p")
         DomainEnd.__init__(self, domain, end="3p")
 
     def stacked_upstream(self, ):

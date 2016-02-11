@@ -55,6 +55,7 @@ Can we use regular graphs?
 
 """
 
+from __future__ import absolute_import, print_function, division
 from itertools import chain
 import logging
 logger = logging.getLogger(__name__)

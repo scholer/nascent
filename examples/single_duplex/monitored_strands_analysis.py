@@ -25,6 +25,7 @@ Run a single analysis of a single duplex.
 
 """
 
+from __future__ import absolute_import, print_function
 import os
 import sys
 import webbrowser

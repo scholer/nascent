@@ -162,5 +162,5 @@ class CashableDsHelix(DoubleHelix):
     """
 
     def __init__(self, start_domain):
-        super().__init__(self, start_domain)
+        super(CashableDsHelix, self).__init__(self, start_domain)
         self.helices_domains = [[domain.domain_strand_specie for domain in helix] for helix in self.helices_domains]

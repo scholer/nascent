@@ -40,6 +40,7 @@ interactions.
 
 """
 
+from __future__ import absolute_import, print_function, division
 import sys
 from collections import defaultdict, Counter, deque
 import networkx as nx
@@ -122,7 +123,7 @@ class Complex(nx.MultiDiGraph):
     def __init__(self, data=None, strands=None, origin="o", reaction_deque_size=5): #, reaction_spec_pair=None):
         self.cuid = next(make_sequential_id)
         self.uuid = next(sequential_uuid_gen)   # Universally unique id; mostly used for debugging.
-        super().__init__(data=data, cuid=self.cuid)
+        super(Complex, self).__init__(data=data, cuid=self.cuid)
         if strands is None:
             strands = []
         for strand in strands:

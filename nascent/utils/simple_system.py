@@ -24,6 +24,7 @@ Module with simplified systems for testing various simulation aspects.
 
 """
 
+from __future__ import absolute_import, print_function
 from math import log, exp
 ln = log
 import random

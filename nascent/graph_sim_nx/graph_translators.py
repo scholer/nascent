@@ -29,6 +29,7 @@ Contains two types of functions:
 """
 
 
+from __future__ import absolute_import, print_function, division
 import networkx as nx
 
 from .domain import Domain

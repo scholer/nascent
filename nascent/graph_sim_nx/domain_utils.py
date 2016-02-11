@@ -26,10 +26,14 @@ TODO: Change all mentions of "strand" to "oligo" to conform with cadnano's nomen
 """
 
 
+from __future__ import absolute_import, print_function, division
 import random
 import math
 from collections import deque, OrderedDict
-from itertools import zip_longest, chain#, accumulate
+try:
+    from itertools import zip_longest, chain
+except ImportError:
+    from itertools import izip_longest as zip_longest, chain
 
 
 N_AVOGADRO = 6.022e23

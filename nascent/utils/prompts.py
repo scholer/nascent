@@ -17,6 +17,8 @@
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 
+from __future__ import absolute_import, print_function
+
 def prompt_yes_no(prompt, default=None):
     """ Prompt user for a yes/no answer, defaulting to :default:.
     If default is None, this function will continue to ask until a clear yes or no has been given."""

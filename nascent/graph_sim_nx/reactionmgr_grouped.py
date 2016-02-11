@@ -47,6 +47,7 @@ Reactions: (this could be a separate object, but for now system state and reacti
 
 """
 
+from __future__ import absolute_import, print_function, division
 import os
 #import random
 from collections import defaultdict
@@ -131,7 +132,7 @@ class ReactionMgrGrouped(ReactionMgr):
         # Thus, a reaction_spec is no longer: ({domain1, domain2}, is_hyb, is_intra)
         # but rather ({domspec1, domspec2}, is_hyb, is_intra)
 
-        super().__init__(volume, strands, params, domain_pairs=None)
+        super(ReactionMgrGrouped, self).__init__(volume, strands, params, domain_pairs=None)
 
         ## Domain state species related attributes: ##
 

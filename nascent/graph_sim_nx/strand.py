@@ -24,7 +24,13 @@ Module for
 
 """
 
+from __future__ import absolute_import, print_function, division
 import itertools
+try:
+    from itertools import zip_longest, chain
+except ImportError:
+    from itertools import izip_longest as zip_longest, chain
+    itertools.zip_longest = itertools.izip_longest
 import networkx as nx
 # import numpy as np
 import math
@@ -59,10 +65,8 @@ class Strand(nx.MultiGraph):
         self.uuid = next(sequential_uuid_gen)   # sequential number unique across all objects
         self.suid = next(make_sequential_id)    # sequential number unique across strands
         self.complex = start_complex
-        super().__init__(name=name,
-                         #complex=start_complex,
-                         suid=self.suid,
-                        )
+        super(Strand, self).__init__(name=name, suid=self.suid) #complex=start_complex,
+
         #self.name = name  # Is a native Graph property, linked to self.graph
         self.instance_name = "%s#%s" % (self.name, self.suid)
         self.ends5p3p_graph = nx.MultiGraph()
@@ -103,7 +107,6 @@ class Strand(nx.MultiGraph):
                      }
         #edges = zip(iter(domains), iter(domains[1:]), [edge_attrs]))
         #self.add_edges_from(edges)
-        from itertools import zip_longest
         for idx, (domain, domain2) in enumerate(zip_longest(self.domains, self.domains[1:])):
             ## Add domain nodes:
             frac = (idx+1)/(n_domains+1)

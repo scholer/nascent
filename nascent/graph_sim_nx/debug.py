@@ -18,13 +18,17 @@
 
 #pylint: disable=C0103,C0111,W0613
 
+
+from __future__ import absolute_import, print_function, division
 from pprint import pprint
 
 do_print = False
 
 
-def print_debug(*args, origin=None, **kwargs):
+def print_debug(*args, **kwargs):
     """ Change module-level do_print variable to toggle behaviour. """
+    if 'origin' in kwargs:
+        del kwargs['origin']
     if do_print:
         print(*args, **kwargs)
 

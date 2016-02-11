@@ -24,6 +24,7 @@ Module for
 
 """
 
+from __future__ import absolute_import, print_function, division
 import sys
 import random
 #from collections import defaultdict

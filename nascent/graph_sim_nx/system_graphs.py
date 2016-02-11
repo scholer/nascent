@@ -30,6 +30,7 @@ Module for representing system-level graphs (where each complex form it's own su
 
 """
 
+from __future__ import absolute_import, print_function, division
 from collections import defaultdict
 import networkx as nx
 
@@ -121,7 +122,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         assert delegator not in delegatee.delegated_edges
         # assert len(set(delegator.delegated_edges.keys()) & set(delegatee.delegated_edges.keys())) == 0
         # Equivalently, use dict_keys.isdisjoint method:
-        assert delegatee.delegated_edges.keys().isdisjoint(delegator.delegated_edges)
+        # assert delegatee.delegated_edges.keys().isdisjoint(delegator.delegated_edges)
 
         ## 1. Update delegatee.delegated_edges with entries from delegator.
         # Keep delegator.delegated_edges intact.
@@ -279,7 +280,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         Add edges as "native" edges between nodes.
         """
         ebunch = list(ebunch) # In case it is a generator...
-        super().add_edges_from(ebunch, attr_dict, edge_count=1, **attr)
+        super(InterfaceGraph, self).add_edges_from(ebunch, attr_dict, edge_count=1, **attr)
         #print("Updating IF nodes delegated edges for ebunch %s..." % (ebunch,))
         for e in ebunch:
             u, v = e[:2]
@@ -294,7 +295,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         Add edges as "native" edges between nodes.
         """
         print("Updating delegated edges for IF nodes  %s and %s..." % (u, v))
-        super().add_edge(u, v, attr_dict, edge_count=1, **attr)
+        super(InterfaceGraph, self).add_edge(u, v, attr_dict, edge_count=1, **attr)
         ## Q: How much do we want the "representation" eattrs to be tied to eattrs in delegated_edges?
         u.delegated_edges[u][v] = self.adj[u][v]
         v.delegated_edges[v][u] = self.adj[v][u]
@@ -378,7 +379,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
 
 
 
-class InterfaceNode():
+class InterfaceNode(object):
     """
     Node for use by InterfaceGraph.
     Each node represents one or more DomainEnds, which, when stacked or hybridized, is collapsed into a single

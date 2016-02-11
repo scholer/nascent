@@ -17,6 +17,7 @@
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 
+from __future__ import absolute_import, print_function, division
 import os
 import networkx as nx
 from networkx.algorithms.shortest_paths import shortest_path
@@ -140,7 +141,7 @@ def determine_end_end_distance(source, target, edge_attrs, interaction):
 
 
 
-class GraphManager():
+class GraphManager(object):
 
     def __init__(self, strands=None, ends5p3p_graph=None, domain_graph=None, strand_graph=None):
         ### System graphs ###

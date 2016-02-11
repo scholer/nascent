@@ -55,6 +55,7 @@ Reactions: (this could be a separate object, but for now system state and reacti
 
 """
 
+from __future__ import absolute_import, print_function, division
 import os
 #import random
 from collections import defaultdict
@@ -94,7 +95,8 @@ class ComponentMgr(GraphManager):
     """
 
     def __init__(self, strands, params, domain_pairs=None):
-        super().__init__(strands=strands)
+        # super(ComponentMgr, self).__init__(strands=strands)
+        GraphManager.__init__(self, strands=strands)
         self.params = params
         self.stacking_joins_complexes = params.get('stacking_joins_complexes', True)
         self.enable_helix_bending = params.get('enable_helix_bending', False)
