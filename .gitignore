@@ -61,6 +61,8 @@ target/
 
 # Other:
 # notebooks/*
+.DS_Store
+simdata/
 litt/*
 nascent/nascent_sim/testfiles
 .ipynb_checkpoints/

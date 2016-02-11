@@ -745,6 +745,7 @@ class Complex(nx.MultiDiGraph):
 
     def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False,
                                 reset_domains=True):
+        ## TODO: Make sure reset_stacking is properly set when required!
         # self.history.append("reset_state_fingerprint: Unsetting fingerprints: %r" % (locals(),))
         self._state_fingerprint = None
         if reset_strands:

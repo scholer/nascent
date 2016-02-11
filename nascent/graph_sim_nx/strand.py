@@ -78,7 +78,7 @@ class Strand(nx.MultiGraph):
     ## Edit: Hue depends on strand *specie*.
 
     def set_domains(self, domains):
-        """ Set this strands domains. Should only be invoked once. """
+        """ Set this strands domains. Should only be invoked once. domains should be ordered in 5p to 3p order. """
         self.domains = domains
         # for attr in "n_nt ss_dist_ee_sq ds_dist_ee_sq ss_len_contour ds_len_contour".split():
         #     setattr(self, attr, sum(getattr(domain, attr) for domain in domains))
@@ -164,8 +164,9 @@ class Strand(nx.MultiGraph):
                                              attr_dict=short_edge_attrs)
                 # Update domain 5p3p ends:
                 # (Yes, this duplicates the info in strand.ends5p3p_graph and system 5p3p graph, which is bad.)
+                # domain2 should be downstream of domain1; domains should be ordered from 5p to 3p.
                 domain.end3p.pb_downstream = domain2.end5p
-                domain2.end5p.pb_downstream = domain.end3p
+                domain2.end5p.pb_upstream = domain.end3p
 
 
         # ends_domain_edges = [(d.end5p, d.end3p, PHOSPHATEBACKBONE_INTERACTION,

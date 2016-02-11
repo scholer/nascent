@@ -88,11 +88,19 @@ from .reaction_graph import reaction_attr_to_str, reaction_to_str
 
 
 ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
+RA_HYB_INTRA = ReactionAttrs(HYBRIDIZATION_INTERACTION, True, True)
+RA_HYB_INTER = ReactionAttrs(HYBRIDIZATION_INTERACTION, True, False)
+RA_DEHYB_INTRA = ReactionAttrs(HYBRIDIZATION_INTERACTION, False, True)
+RA_STACK_INTRA = ReactionAttrs(STACKING_INTERACTION, True, True)
+RA_STACK_INTER = ReactionAttrs(STACKING_INTERACTION, True, False)
+RA_STACK_INTRA = ReactionAttrs(STACKING_INTERACTION, False, True)
+
 reaction_graph_sequantial_number_generator = sequential_number_generator()
 
 
 debug_test_throttles = False
-test_throttles = {True: 0}
+test_throttles = False
+# test_throttles = {True: 0}     # Use a boolean True dict to effectiely freeze throttles at 1.0
 test_throttles0 = {
     'h+*': {'a': 1.0, 'b': 1.0},
     'h+ ': {'a': 1.0, 'b': 1.0},
@@ -102,7 +110,8 @@ test_throttles0 = {
 test_throttles1 = {
     'h+*': {'a': 0.6895, 'b': 0.076233},
     'h+ ': {'a': 0.00349, 'b': 0.02856},
-    's+ ': {'a': 0.6, 'b': 0.06, 'A': 0.6, 'B': 0.06},
+    # 's+ ': {'a': 0.6, 'b': 0.06, 'A': 0.6, 'B': 0.06},  # Original
+    's+ ': {'a': 0.01, 'b': 0.01, 'A': 0.01, 'B': 0.01},
 }
 # Approximated valus:
 test_throttles2 = {
@@ -677,7 +686,7 @@ class ReactionMgr(ComponentMgr):
             else:
                 raise ValueError("Unknown reaction type %s" % reaction_attr.reaction_type, reaction_attr)
         if c_j_cache_key in self.cache['stochastic_rate_constant']:
-            assert reaction_spec_pair is not None
+            assert reaction_spec_pair is not None # or reaction_attr.is_forming is False
             # TOOD: Make sure that this includes stacking state!
             # TODO: We actually have two kinds of species fingerprints: One that allows symmetry and one that don't
             # TODO: We need to differentiate between intra-complex and inter-complex reactions in the cache,
@@ -713,6 +722,7 @@ class ReactionMgr(ComponentMgr):
 
         ## Apply throttle: ##
         if self.reaction_throttle:
+            assert reaction_spec_pair is not None
             #print("THROTTLING!")
             #if self.reaction_throttle_use_cache:
             # Per-reaction throttle is adjusted in post_reaction_processing with each reaction invocation.
@@ -758,6 +768,31 @@ class ReactionMgr(ComponentMgr):
         # else:
         #     # print("NOT throttling reaction:", elem1, elem2, reaction_attr)
         #     pass
+        ## TODO: DEBUGGING code, remove this!
+        # if abs(c_j - 48.1) < 0.2:
+        #     assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
+        #     assert reaction_attr.is_forming is False
+        #     assert reaction_attr.is_intra is True
+        #     assert elem1.name.lower() == 'b'
+        #     cmplx = elem1.strand.complex
+        #     assert cmplx == elem2.strand.complex
+        #     d1fp = elem1.state_fingerprint()
+        #     d2fp = elem2.state_fingerprint()
+        #     cmplx.reset_state_fingerprint()
+        #     assert d1fp == elem1.state_fingerprint()
+        #     assert d2fp == elem2.state_fingerprint()
+        #     # s1	a,t1,b	AAGGCACGAC,TT,AGGTTTCCAA
+        #     # s2	B,t2,A	TTGGAAACCT,TT,GTCGTGCCTT
+        #     b = elem1 if elem1.name == 'b' else elem2
+        #     assert b.name == 'b'
+        #     assert b.partner.name == 'B'
+        #     #      b5p ----- t3p ------- t5p ------- a3p
+        #     a = b.end5p.pb_upstream.pb_upstream.pb_upstream.domain
+        #     assert a.name == 'a'
+        #     # Correct one is where domain a is still hybridized:
+        #     assert a.partner is not None
+        #     assert a.partner.name == 'A'
+
         return c_j
 
 
@@ -1064,6 +1099,9 @@ class ReactionMgr(ComponentMgr):
             changed_domains = self.domains
             if recalculate_hybridized is None:
                 recalculate_hybridized = True
+        if self.reaction_throttle:
+            # If reactions are throttled, we cannot assume that all dehyb/unstack reactions have state-independent c_j.
+            recalculate_hybridized = True
         # if reacted_spec_pair is None:
         #     reacted_spec_pair = frozenset((d.state_fingerprint() for d in reacted_pair))
         ## TODO: Consolidate this and init_possible_reactions into a single method.
@@ -1081,11 +1119,11 @@ class ReactionMgr(ComponentMgr):
 
         ## PROCESS THE REACTED PAIR:
         if reacted_pair:
-            is_forming = reaction_attr.is_forming
+            is_forming = reaction_attr.is_forming  # (was forming - For the reaction that was just processed.)
 
             ## Check if stacking reaction or hybridization reaction.
             if reaction_attr.reaction_type is STACKING_INTERACTION:
-                #(h1end3p, h1end5p), (h2end3p, h2end5p) = tuple(reacted_pair)
+                #(h1end3p, h1end5p), (h2end3p, h2end5p) = tuple(reacted_pair)    # Alternative DomainEnd pairing
                 (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(reacted_pair)
                 if is_forming:
                     # We have just formed a new stacking interaction; stacked domains cannot dehybridize:
@@ -1177,6 +1215,7 @@ class ReactionMgr(ComponentMgr):
                     # cj = self.calculate_hybridization_c_j(d1, d2, is_forming=False, is_intra=True)
                     c_j = self.calculate_c_j(d1, d2, reaction_attr=ra, reaction_spec_pair=domain_spec_pair)
                     if c_j > 0:
+                        # if abs(c_j - 48.1) < 0.2: pdb.set_trace()  ## TODO: Debug code, remove this!
                         self.possible_hybridization_reactions[domain_pair] = c_j
                         self.reaction_attrs[domain_pair] = ra
                         self.reaction_spec_pairs[domain_pair] = domain_spec_pair
@@ -1223,7 +1262,7 @@ class ReactionMgr(ComponentMgr):
                 #            for d in self.unhybridized_domains_by_name[cname]]:
                 #pdb.set_trace()
                 if domain.name in self.domain_pairs:
-                    is_forming = True
+                    # is_forming = True
                     for cname in self.domain_pairs[domain.name]:
                         for domain2 in self.unhybridized_domains_by_name[cname]:
                             # Remove old reaction propensity:
@@ -1240,7 +1279,7 @@ class ReactionMgr(ComponentMgr):
                                             or (domain.strand == domain2.strand)
                                 ra = ReactionAttrs(
                                     reaction_type=HYBRIDIZATION_INTERACTION, is_forming=True, is_intra=is_intra)
-                                #self.calculate_hybridization_c_j(domain, domain2, is_forming=True, is_intra=is_intra)
+                                assert ra == (RA_HYB_INTRA if is_intra else RA_HYB_INTER)
                                 c_j = self.calculate_c_j(domain, domain2, reaction_attr=ra,
                                                          reaction_spec_pair=domain_spec_pair)
                                 if c_j > 0:
@@ -1256,28 +1295,35 @@ class ReactionMgr(ComponentMgr):
                 # Currently, we don't re-calculate hybridized domains that are already hybridized (other than d1, d2)
                 # - unless explicitly told to via recalculate_hybridized argument.
                 # If we have a particular pair of domains that we would like to re-calculate (e.g. because of recent
-                # stacking reaction), then these can be specified with recalculate_these
+                # stacking reaction), then these can be specified with recalculate_these.
+                # EDIT: If throttling is enabled, then we MUST re-calculate
                 # d2_domspec = d2.state_fingerprint()
                 domain2 = domain.partner
-                is_forming, is_intra = False, True
                 domain_pair = frozenset((domain, domain2))
                 if domain.end5p.stack_partner is not None or domain.end3p.stack_partner is not None:
+                    # Domains cannot de-hybridize if they are stacked:
                     assert domain_pair not in self.possible_hybridization_reactions
+                    continue
                 else:
                     domain_spec_pair = frozenset((domain.state_fingerprint(), domain2.state_fingerprint()))
+                    # Only calculate domain_spec_pair if needed, in calculate_c_j.
+                    # Edit: We always need it to get throttle_factor.
                     if domain_pair in updated_reactions:
                         continue
                     ra = ReactionAttrs(
-                        reaction_type=HYBRIDIZATION_INTERACTION, is_forming=is_forming, is_intra=is_intra)
+                        reaction_type=HYBRIDIZATION_INTERACTION, is_forming=False, is_intra=True)
+                    assert ra == RA_DEHYB_INTRA
                     c_j = self.calculate_c_j(domain, domain2, reaction_attr=ra, reaction_spec_pair=domain_spec_pair)
-                    if c_j > 0:
-                        self.possible_hybridization_reactions[domain_pair] = c_j
-                        self.reaction_attrs[domain_pair] = ra
-                        self.reaction_spec_pairs[domain_pair] = domain_spec_pair
-                        self.reaction_pairs_by_domain[domain].add(domain_pair)
-                        self.reaction_pairs_by_domain[domain2].add(domain_pair)
+                    assert c_j > 0
+                    self.possible_hybridization_reactions[domain_pair] = c_j
+                    self.reaction_attrs[domain_pair] = ra
+                    self.reaction_spec_pairs[domain_pair] = None # Calculate as-needed.
+                    self.reaction_pairs_by_domain[domain].add(domain_pair)
+                    self.reaction_pairs_by_domain[domain2].add(domain_pair)
+
                     updated_reactions.add(domain_pair)
 
+        # end for domain in changed_domains
 
 
     def update_possible_stacking_reactions(self, changed_domains=None, reacted_pair=None, reaction_attr=None,
@@ -1890,11 +1936,12 @@ class ReactionMgr(ComponentMgr):
         edge_key = (reacted_spec_pair, reaction_attr)
         self.reaction_invocation_count[edge_key] += 1
         throttle_factor = self.reaction_throttle_cache[edge_key][0] if edge_key in self.reaction_throttle_cache else 1.0
-        edge_label_fmt = ("{reaction_attr_str}  {activity:0.01g}  {c_j:0.01e}\n"
-                          "{traversals}  {throttle_factor:0.03g}  {c_j_throttled:0.01e}")
+        edge_label_fmt = ("{reaction_attr_str}  {activity:0.02g}  {c_j:0.03g}\n"
+                          "{traversals}  {throttle_factor:0.03g}  {c_j_throttled:0.03g}")
         reaction_attr_str = (reaction_attr.reaction_type + ("+" if reaction_attr.is_forming else "-")
                              + (" " if reaction_attr.is_intra else "*"))
 
+        # We have not yet updated possible reactions, so we can get the old c_j value as:
         if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
             c_j = self.possible_hybridization_reactions[reacted_pair]
         elif reaction_attr.reaction_type is STACKING_INTERACTION:

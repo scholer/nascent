@@ -314,7 +314,7 @@ def main():
             else:
                 # pdb.set_trace()
                 simulator.stats_writer.monitored_strands = [input_oligos[0]]
-                #simulator.simulate(T=330, n_steps_max=100000, systime_max=2000)
+                simulator.simulate(T=330, n_steps_max=100000, systime_max=2000)
                 # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
                 # simulator.simulate(T=330, n_steps_max=4000, systime_max=200)
@@ -322,10 +322,11 @@ def main():
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 
-                #simulator.simulate(T=330, n_steps_max=200000, simulation_time=200)
 
-                #reactionmgr.test_throttles = reactionmgr.test_throttles0  # UN-throttled (all 1.0)
-                reactionmgr.test_throttles = reactionmgr.test_throttles1  # Actual throttle values after a run
+                # reactionmgr.test_throttles = reactionmgr.test_throttles0  # UN-throttled (all 1.0)
+                # simulator.simulate(T=330, n_steps_max=200000, simulation_time=20)
+                # reactionmgr.test_throttles = reactionmgr.test_throttles1  # Actual throttle values after a run
+
                 # reactionmgr.test_throttles = reactionmgr.test_throttles5  # Only throttle stacking: Does not shift equilibrium
                 # reactionmgr.test_throttles = reactionmgr.test_throttles3  # Only intRA-complex hyb and stacking. Does shift.
                 # reactionmgr.test_throttles = reactionmgr.test_throttles6  # Only intER-complex hyb, h+*, and stacking, s+. Does not shift, only de-stabilizes a little.
@@ -333,9 +334,11 @@ def main():
                 # reactionmgr.test_throttles = reactionmgr.test_throttles8  # Only intRA-complex hyb, h+*. DOES shift equilibrium.
                 # Preliminary conclusion: Only throttling of intRA-complex reactions shift equilibrium.
                 # Perhaps the throttle does not apply properly to intER-complex/strand h+* or h-* reactions?
-                simulator.simulate(T=330, n_steps_max=10000, simulation_time=20)
-                reactionmgr.debug_test_throttles = True
-                simulator.simulate(T=330, n_steps_max=100000, simulation_time=200)
+
+                # simulator.simulate(T=330, n_steps_max=10000, simulation_time=20)
+                # reactionmgr.debug_test_throttles = True
+                # simulator.simulate(T=330, n_steps_max=100000, simulation_time=200)
+
                 # simulator.simulate(T=330, n_steps_max=200000, simulation_time=600)
                 #
                 # # reactionmgr.test_throttles = reactionmgr.test_throttles2

@@ -147,7 +147,7 @@ def main():
         statsfolder, "strand_state_vs_time" + "_".join(str(i) for i in runidxs) + ".png")
     print("Extra copy of plot:", plotfilename_with_runidxs)
     shutil.copy2(plotfilename, plotfilename_with_runidxs)
-    webbrowser.open(plotfilename_with_runidxs)
+    webbrowser.open('file://' + plotfilename_with_runidxs)
 
 
 

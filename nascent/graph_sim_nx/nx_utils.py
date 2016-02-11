@@ -135,16 +135,19 @@ def draw_with_graphviz(G, filename, output_formats=('dot', 'png'), interface='py
         ## Use the pydot interface to graphviz:
         # pydot.Dot.write(filename, prog, format) simply invokes `prog -T{format} tmp_file` and output to PIPE.
         # (or, for format='raw', just write Dot representation to file.)
-        P = nx.to_pydot(G)
+        P = nx.nx_pydot.to_pydot(G)  # Requires pydotplus import
         for fmt in output_formats:
             path = ".".join((filename, fmt))
             if fmt == 'dot': # not to be confused with prog='dot'
                 fmt = 'raw'
             P.write(path, prog=prog, format=fmt)
+    elif interface == 'graphviz-xflr6':
+        # This doesn't work directly with Networkx, afaik.
+        pass
     else:
         # Note: Gohlke's pygraphviz for Windows doesn't seem to support strict=False.
         ## Use the pygraphviz Agraph interface to graphviz:
-        A = nx.to_agraph(G)
+        A = nx.nx_agraph.to_agraph(G)
         A.write(filename + ".dot")
         try:
             A.draw(path=filename + ".png", format='png', prog=prog)
