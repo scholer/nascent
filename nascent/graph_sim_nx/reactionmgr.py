@@ -2207,7 +2207,7 @@ class ReactionMgr(ComponentMgr):
                 }
                 edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
                 self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
-                # self.save_reaction_graph()  # Disabled for now...
+                self.save_reaction_graph()  # Disabled for now (performance) [post_reaction_processing]
                 # Update self.endstates_by_reaction[source_state]
                 assert edge_key not in self.endstates_by_reaction[source_state]
                 self.endstates_by_reaction[source_state][edge_key].append(target_state)
@@ -2280,7 +2280,7 @@ class ReactionMgr(ComponentMgr):
                 }
                 edge_attrs['label'] = edge_label_fmt.format(**edge_attrs)
                 self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
-                # self.save_reaction_graph()  # Disabled, performance.
+                self.save_reaction_graph()  # Disabled, performance. [post_reaction_processing, free strands]
                 # Update self.endstates_by_reaction[source_state]
                 assert edge_key not in self.endstates_by_reaction[source_state]
                 self.endstates_by_reaction[source_state][edge_key].append(target_state)
@@ -2491,7 +2491,7 @@ class ReactionMgr(ComponentMgr):
 
             ## Draw complex graph. Disabled for now; instead, process the dot files *after* simulation.
             #draw_graph_and_save(cmplx, path, pos=pos)
-            # draw_with_graphviz(cmplx, path)
+            draw_with_graphviz(cmplx, path)
 
             ## I stopped using per-complex ends5p3p graphs quite some time ago, it was only used for vizualization.
             # path = os.path.join(self.reaction_graph_complexes_directory,

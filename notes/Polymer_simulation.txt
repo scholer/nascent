@@ -1,0 +1,13 @@
+
+
+
+
+Quarternions refs:
+* http://www.3dgep.com/understanding-quaternions/
+* http://www.chrobotics.com/library/understanding-quaternions
+
+
+Self-avoiding random walks:
+* http://polymer.bu.edu/java/
+* http://polymer.bu.edu/java/java/saw/saw.html
+*

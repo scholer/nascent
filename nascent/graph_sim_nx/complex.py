@@ -215,6 +215,10 @@ class Complex(nx.MultiDiGraph):
         # Probably best to have helix objects which can remain unique between complex merges.
         # But: Making a new object for every hybridization reaction might be expensive (and un-cacheable).
         # Better, then, to use helix_sequential_id_generator to generate unique numbers to identify helices with.
+        # What are double-helices? DomainEnds? Or IfNodes? Or an object instance with both?
+        # - If we know a node is part of a helix, getting the full helix is pretty easy, since all
+        #   DomainEnds are linked. Just use DomainEnd.stacked_upstream() and DomainEnd.stacked_downstream().
+        #
         self.helices = set()
         # For a pair of helices hi, hj: A list of paths connecting bp pos (or DomainEnd nodes) between hi hj:
         # (hi, hj): [(hi_bpidx, hj_bpidx, [path]), ...]   or maybe   {(DomainEnd1, DomainEnd2): [path], ...} dict?
@@ -237,7 +241,8 @@ class Complex(nx.MultiDiGraph):
         # This is always the case when a helix-duplex is broken (unstacked, unhybridized),
         # so the data structures should be small/light and easy to break down and re-build.
         # It is probably nice to know given a DomainEnd node, whether it is part of a helix-duplex and which one:
-        self.helix_by_domainend = {}
+        self.helix_by_domainend = {}  # (duplexed, fully-stacked double-helices)
+        self.helix_by_ifnode = {}
         # if domain_end in self.helix_by_domainend: helix = self.helix_by_domainend[domain_end]; ...
         self.helix_bundles = []
         self.helix_bundle_by_helix_idx = {}  # helix_idx:
@@ -257,10 +262,17 @@ class Complex(nx.MultiDiGraph):
 
 
         ### Keeping track of loops: ###
-        # Dict with loops. Keyed by ... ?
-        self.loops = {}
-        # For each loop, we have a dict with entries:
+        # Dict with loops. Keyed by LoopID ? Maybe a set instead?
+        # No, loop is a dict (mutable). We don't have frozendict in Python, but there is the MappingProxyType obj class.
+        # Having loops as dicts indexed by an ID is nearly identical to having loops being objects in Python.
+        # In Python, objects can be a little slow because they are not just data containers but also have methods etc.
+        # In e.g. Julia, having a separate "Loop" type would be faster than Dict. (Julia is ALL about types).
+        self.loops = {}  # LoopID => loop dict
+        # For each loop, we have a dict with entries (suggested):
         #     path_list: The original path with the nodes forming the loop in the ends.
+        #     ifnodes: list of InterfaceNodes. Should this always be the top delegate?
+        #           What if we have a duplex in a loop and the duplex dehybridises but the loop is not broken.
+        #           Would we update the ifnodes list?
         #     nodes: frozenset of all nodes.
         #     edges:    frozenset of all edges.
         #     edges_specs: frozenset of all edges as Domain-species (rather than objects) - for caching.
@@ -277,7 +289,9 @@ class Complex(nx.MultiDiGraph):
         #   hash(tuple(edge_spec+edges_properties[edge_spec] for edge_spec in edges_specs))
 
         # We also want a way to quickly determine whether a DomainEnd node is part of a loop.
-        self.loops_by_interface = defaultdict(set)  # InterfaceNode => {loop1, loop3, ...}
+        # self.loops_by_interface = defaultdict(set)  # InterfaceNode => {loop1, loop3, ...}
+        # Since loops are mutable we cannot have a set of loops, so use a LoopID and
+        self.loopids_by_interface = defaultdict(set)  # InterfaceNode => {loop1, loop3, ...}
         # Should we use a set or list? We probably have random deletion of loops, so set is arguably better.
 
 

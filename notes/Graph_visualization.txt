@@ -7,3 +7,29 @@ Plotting network graphs with Plotly:
 
 Graphviz:
 * http://www.graphviz.org/doc/info/attrs.html
+
+
+Graphviz libraries:
+* "graphviz" (github.com/xflr6/graphviz)
+    - Very primitive, Dot/Graph.node/edge() methods basically just appends DOT-formatted text to a fixed body.
+    - draws by producing graphviz .dot files and calls graphviz command line executable.
+    - Don't think this will work directly with NetworkX
+    - The conda version seems to install a non-functional version of dot/neato binary in anaconda/envs/<env>/bin.
+* pydot/pydot_ng:
+    - Similar to  xflr6's graphviz in function,
+      but has actual object-classes for nodes and edges which can be updated and removed.
+    - draws by producing graphviz .dot files and calls graphviz command line executable.
+    - Default conda channel only for python 3.4, not 3.5.
+* pydotplus:
+    - New version of pydot; However, I'm not convinced it's actually in more active development than pydot(ng).
+    - New versions of NetworkX no longer supports all three pydot versions, only pydotplus (PR #1898).
+    - NetworkX interface with networkx.nx_pydot module.
+* pygraphviz:
+    - Actually wraps the Graphviz C-code using SWIG, providing an "AGraph" class to work with as well as Node/Edge.
+    - More complex because most calls goes to the underlying C-library.
+    - NetworkX interface with networkx.nx_agraph module.
+* graphviz-python:
+    - Official Graphviz python bindings.
+
+Notes:
+* Matplotlib drawing is available from networkx via the networkx.drawing.nx_pylab module.

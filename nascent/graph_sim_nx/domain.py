@@ -65,7 +65,15 @@ class Domain(object):
                da       db       dc
         5' -------- --------- -------- 3'
     """
-    def __init__(self, name, strand, seq=None, partner=None):
+    def __init__(self, name, strand=None, seq=None, partner=None):
+        """
+        Arguments:
+            :name: Domain name
+            :strand: (optional, the strand that this domain is a part of)
+        Note that strand is optional. The typical instantiation scheme is:
+            First instantiate the domains,
+            Then instantiate the strands, giving the domain-list as init argument.
+        """
         # Domain unique id (duid). Can be the same as a strand's id. But two domains will never have the same id.
         self.duid = next(make_sequential_id)    # sequential number unique across domains
         self.uuid = next(sequential_uuid_gen)   # Universally unique id. Unique across all objects.
@@ -342,10 +350,120 @@ class DomainEnd(object):
 
     @property
     def strand(self):
+        """ return self.domain.strand """
         return self.domain.strand
 
     def state_fingerprint(self):
+        """ return (self.domain.state_fingerprint(), self.end, self.stack_partner is not None) """
         return (self.domain.state_fingerprint(), self.end, self.stack_partner is not None)
+
+    def upstream_stacking_partners(self, start_list=None):
+        """
+        This could also be a function and/or return a generator...
+        Two recursive approaches:
+            (1) Pass a start_list the the next upstream and let it append.
+            (2) Start by going all the way to the top, then build+return the list as you fall back down the recursion.
+        This can also be done by:
+            (3) A for-loop.
+            (4) A generator.
+        Q: Add self to the list?
+        """
+        ## Method (1): Receive start_list, add self, pass list to next.
+        if start_list is None:
+            start_list = []
+        start_list.append(self)
+        upstream = self.stacked_upstream()
+        if upstream is None:
+            return start_list
+        else:
+            return upstream.upstream_stacking_partners(start_list)
+
+    def upstream_stacking_partners_reversed(self, ):
+        """ Recursive method (2): Go all the way to the top, then build list as you fall back down. """
+        upstream = self.stacked_upstream()
+        if upstream is None:
+            return []
+        upstream_list = upstream.upstream_stacking_partners2()
+        upstream_list.append(self)
+        return upstream_list
+
+    def upstream_stacking_partners_list(self, start_list=None):
+        """ For loop (1):  """
+        upstream_list = [] if start_list is None else start_list
+        end = self.stacked_upstream()
+        while end is not None:
+            upstream_list.append(upstream)
+            end = end.stacked_upstream()
+        return upstream_list
+
+    def upstream_stacking_partners_generator(self):
+        """ Generator (1): """
+        end = self.stacked_upstream()
+        while end is not None:
+            yield end
+            end = end.stacked_upstream()
+
+    def downstream_stacking_partners_generator(self):
+        """ Generator (1): """
+        end = self.stacked_upstream()
+        while end is not None:
+            yield end
+            end = end.stacked_downstream()
+
+
+    ## IF-nodes: ##
+    def upstream_stacked_top_ifnodes_generator(self):
+        """ Generator (1): """
+        top_ifnode = self.ifnode.top_delegate()
+        end = self.stacked_upstream()
+        while end is not None:
+            if end.ifnode not in top_ifnode.delegated_edges: # (keys)
+                top_ifnode = end.ifnode.top_delegate()
+                yield top_ifnode
+            end = end.stacked_upstream()
+
+    def upstream_stacked_top_ifnodes_list(self, start_list=None):
+        """ For loop (1):  """
+        nodes_list = [] if start_list is None else start_list
+        top_ifnode = self.ifnode.top_delegate()
+        end = self.stacked_upstream()
+        while end is not None:
+            if end.ifnode not in top_ifnode.delegated_edges: # (keys)
+                top_ifnode = end.ifnode.top_delegate()
+                nodes_list.append(top_ifnode)
+            end = end.stacked_upstream()
+        return nodes_list
+
+    def downstream_stacked_top_ifnodes_generator(self):
+        """ Generator (1): """
+        top_ifnode = self.ifnode.top_delegate()
+        end = self.stacked_downstream()
+        while end is not None:
+            if end.ifnode not in top_ifnode.delegated_edges: # (keys)
+                top_ifnode = end.ifnode.top_delegate()
+                yield top_ifnode
+            end = end.stacked_downstream()
+
+    def downstream_stacked_top_ifnodes_list(self, start_list=None):
+        """ For loop (1):  """
+        nodes_list = [] if start_list is None else start_list
+        top_ifnode = self.ifnode.top_delegate()
+        end = self.stacked_upstream()
+        while end is not None:
+            if end.ifnode not in top_ifnode.delegated_edges: # (keys)
+                top_ifnode = end.ifnode.top_delegate()
+                nodes_list.append(top_ifnode)
+            end = end.stacked_upstream()
+        return nodes_list
+
+
+    def stacked_upstream(self):
+        """ Override in sub-class. """
+        raise NotImplementedError()
+
+    def stacked_downstream(self):
+        """ Override in sub-class. """
+        raise NotImplementedError()
 
     def __str__(self):
         return str(self.domain)+"_"+self.end
@@ -355,6 +473,7 @@ class DomainEnd(object):
 
 
 class Domain5pEnd(DomainEnd):
+    """ Class representing the 5' end of a domain. """
     def __init__(self, domain):
         #super().__init__(domain, end="5p")
         DomainEnd.__init__(self, domain, end="5p")
@@ -375,6 +494,7 @@ class Domain5pEnd(DomainEnd):
 
 
 class Domain3pEnd(DomainEnd):
+    """ Class representing the 3' end of a domain. """
     def __init__(self, domain):
         #super().__init__(domain, end="3p")
         DomainEnd.__init__(self, domain, end="3p")
