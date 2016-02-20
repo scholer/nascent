@@ -147,8 +147,10 @@ class Strand(nx.MultiGraph):
             self.ends5p3p_graph.add_node(domain.end3p, attr_dict=node_attrs)
 
             # The "long" edge from 5p of d to 3p of domain:
-            long_edge_attrs = dict(edge_attrs, len=domain.ds_dist_ee_nm,
-                                   dist_ee_nm=domain.ss_dist_ee_nm,  # Initially, it is ss backbone
+            long_edge_attrs = dict(edge_attrs,
+                                   len=domain.ds_dist_ee_nm,          # What is this "length" exactly??
+                                   len_contour=domain.ss_len_contour, # Contour length
+                                   dist_ee_nm=domain.ss_dist_ee_nm,   # Initially, it is ss backbone
                                    dist_ee_sq=domain.ss_dist_ee_sq,
                                    stiffness=0, # ss backbone has zero stiffness
                                    _color=rgb_tup, style='bold')
@@ -159,6 +161,7 @@ class Strand(nx.MultiGraph):
                 short_edge_attrs = dict(edge_attrs,
                                         #weight=10,  # Typically used as spring constant. Higher -> shorter edge.
                                         #len=HELIX_WIDTH,       # With of ds helix ~ 2 nm ~ 5 bp
+                                        len_contour=HELIX_XOVER_DIST,
                                         dist_ee_nm=HELIX_XOVER_DIST,
                                         dist_ee_sq=HELIX_XOVER_DIST**2,
                                         stiffness=0, # ss backbone has zero stiffness

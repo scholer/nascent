@@ -291,7 +291,7 @@ class Complex(nx.MultiDiGraph):
         # We also want a way to quickly determine whether a DomainEnd node is part of a loop.
         # self.loops_by_interface = defaultdict(set)  # InterfaceNode => {loop1, loop3, ...}
         # Since loops are mutable we cannot have a set of loops, so use a LoopID and
-        self.loopids_by_interface = defaultdict(set)  # InterfaceNode => {loop1, loop3, ...}
+        self.loopids_by_interface = defaultdict(set)  # InterfaceNode => {loop1_id, loop3_id, ...}
         # Should we use a set or list? We probably have random deletion of loops, so set is arguably better.
 
 

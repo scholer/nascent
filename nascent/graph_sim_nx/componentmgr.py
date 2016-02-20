@@ -237,6 +237,7 @@ class ComponentMgr(GraphManager):
                        #"len": 6, # With of ds helix ~ 2 nm ~ 6 bp
                        #"weight": 2,
                        #"key": HYBRIDIZATION_INTERACTION
+                       # Do we need to add contour length attr? len_contour..
                        'dist_ee_sq': HELIX_WIDTH**2,
                        'dist_ee_nm': HELIX_WIDTH,
                        'stiffness': 1,
@@ -255,6 +256,8 @@ class ComponentMgr(GraphManager):
         # You could just use interface_graph[end1_delegate][end2_delegate] instead of looping...
         # Remember, interface_graph.adj reflects the current *representation*. After merging/delegating ifnodes,
         # the edges from delegator is no longer available. Either update edge before merge or only update delegatee.
+        # Edit: Isn't this updated when we update the ends5p3p_graph since the eattr dicts are the same instance?
+        self.interface_graph[end1_delegatee][end2_delegatee]['len_contour'] = domain1.ds_len_contour
         self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_nm'] = domain1.ds_dist_ee_nm
         self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_sq'] = domain1.ds_dist_ee_sq
         self.interface_graph[end1_delegatee][end2_delegatee]['stiffness'] = 1
@@ -262,10 +265,12 @@ class ComponentMgr(GraphManager):
         # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
         for d in (domain1, domain2):
             if self.ends5p3p_graph.is_multigraph():
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['len_contour'] = d.ds_len_contour
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_nm'] = d.ds_dist_ee_nm
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_sq'] = d.ds_dist_ee_sq
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['stiffness'] = 1
             else:
+                self.ends5p3p_graph[d.end5p][d.end3p]['len_contour'] = d.ds_len_contour  # domain ds end-to-end dist
                 self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_nm'] = d.ds_dist_ee_nm  # domain ds end-to-end dist
                 self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ds_dist_ee_sq  # cached squared result, nm2
                 self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 1  # ds helix has stiffness 1
@@ -354,14 +359,18 @@ class ComponentMgr(GraphManager):
         # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
         for d in (domain1, domain2):
             if self.ends5p3p_graph.is_multigraph():
+                self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['len_contour'] = d.ss_len_contour
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_nm'] = d.ss_dist_ee_nm
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['dist_ee_sq'] = d.ss_dist_ee_sq
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['stiffness'] = 0
                 # ss backbone has zero stiffness
             else:
+                self.ends5p3p_graph[d.end5p][d.end3p]['len_contour'] = d.ss_len_contour
                 self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_nm'] = d.ss_dist_ee_nm
                 self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ss_dist_ee_sq
                 self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 0  # ss backbone has zero stiffness
+            ## TODO: Check whether we really need to update interface_graph edges -- we do that for hybridize.
+            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['len_contour'] = d.ss_len_contour
             self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_nm'] = d.ss_dist_ee_nm
             self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_sq'] = d.ss_dist_ee_sq
             self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['stiffness'] = 0
