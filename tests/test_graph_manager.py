@@ -301,7 +301,8 @@ def test_intracomplex_activity_1():
     loopid = 1
     loop_info = {'id': loopid,
                  'path': loop0_path,
-                 'activity': loop0_activity_before
+                 'activity': loop0_activity_before,
+                 'ifnodes': set(loop0_path)
                 }
     cmplx.loops[loopid] = loop_info
     for ifnode in loop0_path:

@@ -19,10 +19,12 @@
     Ω℮†‡…‰′″‹›‼‾⁃⁄⁞
     ×÷ ∝
 
-    Sub and super script:
+## Sub and super script: ##
+(Lines starts with upper-case letter A to visualize vertical position.)
+Sub-scripts:
     A ₀ ₁ ₂ ₃ ₄ ₅ ₆ ₇ ₈ ₉ ₊ ₋ ₌ ₍ ₎ ᵢ ᵣ ᵤ ᵥ
 
-    Super-scripts:
+Super-scripts:
     A ⁰ ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ⁺ ⁻ ⁼ ⁽ ⁾
     A ᵃ ᵇ ᶜ ᵈ ᵉ ᶠ ᵍ ʰ ⁱ ʲ ᵏ ˡ ᵐ ⁿ ᵒ ᵖ ʳ ˢ ᵗ ᵘ ᵛ ʷ ˣ ʸ ᶻ
     A ᴬ ᴮ ᴰ ᴱ ᴳ ᴴ ᴵ ᴶ ᴷ ᴸ ᴹ ᴺ ᴼ ᴾ ᴿ ᵀ ᵁ ⱽ ᵂ
@@ -34,6 +36,7 @@
     A ᵝ ᵞ ᵟ ᵠ ᵡ ᵦ ᵧ ᵨ ᵩ ᵪ ᵸ ᵎ ᵔ ᵕ ᵙ ᵜ.
     A ᶛ ᶜ ᶝ ᶞ ᶟ ᶠ ᶡ ᶢ ᶣ ᶤ ᶥ ᶦ ᶧ ᶨ ᶩ ᶪ ᶫ ᶬ ᶭ ᶮ ᶯ ᶰ ᶱ ᶲ ᶳ ᶴ ᶵ ᶶ ᶷ ᶸ ᶹ ᶺ ᶻ ᶼ ᶽ ᶾ ᶿ
     A ⁻¹
+More sub- and super-scripts:
  ˑ
     ¯´·`_ʻ¸ˎʼʽʾʿˀˁˆˇˈˉˊˋˌˍˎˏːˑ˒˓˔˕˖˗˘˙˚˛˜˝˞˟ˠˡˢˣˤ ˥ ˦ ˧ ˨ ˩ ˪ ˫ ˬ˭ˮ˯˰˱˲˳˴˵˶˷˸˹˺˻˼ ˽ ˾ ˿ ̀  ́ ̂ ̃ ̄
     ~ ˘ ˆ ˇ  ˈ ˉ ˊˋ ̃ ̄  ̅  ̆  ̇
@@ -41,21 +44,21 @@
     ‒ – — ―  ‖ ‗
     ⁄ ⁞∟‾ ⌠∟∩∫≈≠≡≤≥⌂⌐⌠⌡─│┌ ┐ └ ┘├ ┤┬ ┴ ┼ ═ ║ ╒ ╓ ╔ ╕ ╖ ╗ ╘ ╙ ╚ ╛ ╜ ╝ ╞ ╢ ╣ ╤ ╥ ╦ ╧ ╨ ╩ ╪ ╫ ╬  ▀ ▬ ﴾﴿
 
-    Arrows:
+Arrows:
         → ← ↓ ↑ ↕ ↨ ꜛ ꜜ
 
-    Math operators:
+Math operators:
          ∂ ∆ ∏ ∑  − ∕ ∙ √ ∞ ∟ ∩ ∫ ⌐ ─  (∕ is different from backslash /)
-    Math comparisons:
+Math comparisons:
         ∝ ≈ ≠ ≡  ≤ ≥
-    Math multi-line operators:
+Math multi-line operators:
         ⌠
         ⌡
 
-    Walls:
+Walls:
     ─⌂│┌┐└┘├┤┬┴┼═║╒╓╔╕╕╖╗╘╙╚╛╜╝╞╟╠╡╢╣╤╥╦╧╨╩╪╫╬ꜛꜜ﴾﴿ᴥᵜ
 
-    Diacritics  (See https://en.wikipedia.org/wiki/Diacritic)
+Diacritics  (See https://en.wikipedia.org/wiki/Diacritic)
         ¸ˎ
         Overline: ‾  (character)  ~
         Overline: ̅.  (combining)  ̅-  ̃ ̄  ̃  ̄   ̃
