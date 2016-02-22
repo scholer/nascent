@@ -846,17 +846,36 @@ class GraphManager(object):
                                           groupby(path, lambda ifnode: ifnode in loop0_nodes)]
                     # grouped_path consists of the first part of e3, then e1, then the last part of e3.
                     # Do we ever encounter e2? Well, not when we are grouping shortest path (e3+e1 by definition)..
-                    assert len(e1_or_e3_sub_paths) == 3
-                    # Edit: If e3 == 0 (e3_nodes = Ø), then we'll only have a single group!
+                    # Except if e3a or e3b have zero length (full or half pinching).
+                    # If e3 == 0 (e3_nodes = Ø), then we'll only have a single group!
                     # This can happen both for stacking and hybridization.
                     # There are also cases where len(e1_or_e3_sub_paths) == 2!
-                    assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (False, True, False)
-                    # Note: grouped_path is grouped by whether node is on Λ₀ or not, not stiffness:
-                    e1, e3a, e3b = e1_or_e3_sub_paths[1][1], e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[-1][1]
-                    # The "intersection" nodes are usually considered part of both e1, e2 and e3:
-                    intersect_nodes = (e1[0], e1[-1])
-                    e3a.append(intersect_nodes[0])
-                    e3b.insert(0, intersect_nodes[1])
+                    assert len(e1_or_e3_sub_paths) <= 3
+                    if len(e1_or_e3_sub_paths) == 1:
+                        assert e1_or_e3_sub_paths[0][0] is True  # verify that e₁ is on Λ₀
+                        e1 = e1_or_e3_sub_paths[0][1]
+                        e3a, e3b = [e1[0]], [e1[-1]]
+                    elif len(e1_or_e3_sub_paths) == 2:
+                        if e1_or_e3_sub_paths[0][0] is True:
+                            # We have e3b > 0; e3a starts at e1 (has zero length)
+                            e1 = e1_or_e3_sub_paths[0][1]
+                            e3a, e3b = [e1[0]], [e1[-1]]
+                            e3b.extend(e1_or_e3_sub_paths[1][1])
+                        else:
+                            # We have e3a > 0; e3b starts and ends on e1 (has zero length)
+                            e3a, e1 = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1]
+                            e3a, e3b = [e1[0]], [e1[-1]]
+                            e3a.append(e1[0])
+                    else:
+                        assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (False, True, False)
+                        # Note: grouped_path is grouped by whether node is on Λ₀ or not, not stiffness:
+                        # The "intersection" nodes are usually considered part of both e1, e2 and e3:
+                        # intersect_nodes = (e1[0], e1[-1])
+                        e3a, e1 = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1]
+                        e3a.append(e1[0])
+                        # e3b starts with the last node in e1 and then extends the rest of the sub-path:
+                        e3b = [e1[-1]]
+                        e3b.extend(e1_or_e3_sub_paths[2][1])
                     ## TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
                     e1_groups = [(is_shared, list(group_iter)) for is_shared, group_iter
                                  in self.group_interfaces_path_by_stiffness(e1)]
@@ -870,9 +889,13 @@ class GraphManager(object):
 
                     if e3a_groups and e3b_groups:
                         e3_groups = self.join_two_edge_groups(e3a_groups, e3b_groups, simulate_reaction=reaction_type)
+                    # elif e3a_groups:
+                    #     # start of e3a stacks directly with end of e1
+                    #     e3_groups = self.join_two_edge_groups(e3a_groups, e1, simulate_reaction=reaction_type)
                     else:
+                        # This is new (but not unexpected; will happen for empty e3a/e3b) - seems to work.
+                        # TODO: CHECK THIS MORE.
                         e3_groups = [group for segment in (e3a_groups, e3b_groups) if segment for group in segment]
-                        pdb.set_trace()
                     # Uh, it would, perhaps be nice to be able to join/react un-grouped paths,
                     # and then group afterwards...
                     # edge groups is a list of (stiffness, [(length, len_sq, stiffness, source, target), ...]) tuples.
