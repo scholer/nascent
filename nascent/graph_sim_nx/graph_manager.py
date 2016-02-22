@@ -52,7 +52,8 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
                         STACKING_INTERACTION,
                         N_AVOGADRO, AVOGADRO_VOLUME_NM3,
-                        HELIX_XOVER_DIST, HELIX_WIDTH, HELIX_STACKING_DIST)
+                        HELIX_XOVER_DIST, HELIX_WIDTH, HELIX_STACKING_DIST,
+                        chain_model_gamma_exponent as gamma)
 from .debug import printd, pprintd
 from .domain import Domain, DomainEnd
 
@@ -531,18 +532,16 @@ class GraphManager(object):
         # If LRE is significant, then we cannot use the simple end-end-distance < rc approximation. Instead, we must
         # consider the end-to-end PDF of the SRE part at radius r=LRE_len and within critical volume v_c.
         # Can this be approximated by a simple LRE factor?
-        # LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq)) if LRE_len_sq > 0 else 1
+        # LRE_factor = math.exp(-3*LRE_len_sq / (2*SRE_len_sq)) if LRE_len_sq > 0 else 1  - Uh, yes.
+        # But only relevant for LRE_len_sq > SRE_len_sq/4:
 
-        gamma = 3/2
-        gamma_corr = 1
-        if LRE_len_sq > SRE_len_sq:
+        if LRE_len_sq > 0 and LRE_len_sq*4 > SRE_len_sq:
             # Domains can reach, but requires the SRE to extend beyond the mean squared end-to-end distance.
-            # Should probably be approximated with some continuous function.
-            # In fact, we should have an actual PDF for the end-to-end distance of the SRE segments
-            # (you would do this instead of "correcting" gamma and then summing LRE_len_sq + SRE_len_sq)
-            # gamma = (3/2)*gamma_corr;
-            gamma_corr += 0.5
-            # gamma = 5/3  # edit: applying correction to activity *after* initial calculation.
+            # Use end-to-end distance PDF for the of the SRE segments using LRE as radius
+            activity = (3/(2*math.pi*SRE_len_sq))**gamma * math.exp(-3*LRE_len_sq/(2*SRE_len_sq)) * AVOGADRO_VOLUME_NM3
+        else:
+            mean_sq_ee_dist = LRE_len_sq + SRE_len_sq       # unit of nm
+            activity = (3/(2*math.pi*mean_sq_ee_dist))**gamma * AVOGADRO_VOLUME_NM3
 
         ## Calculate mean end-to-end squared distance between the two domains, aka E_r_sq:
         # We already have the squared length, Nᵢbᵢ², so we just need to sum LRE and SRE:
@@ -552,15 +551,16 @@ class GraphManager(object):
         ## but that isn't valid for fully-stacked continuous segments of ds-helices.
         ## Done: Re-calculate SRE_len_sq based on the summarized segment lengths, not the path edges.
 
-
-        mean_sq_ee_dist = LRE_len_sq + SRE_len_sq       # unit of nm
         # There shouldn't be any need to test for if mean_sq_ee_dist <= HELIX_XOVER_DIST**2 in the InterfaceGraph
 
+        ## TODO: (Optimization) Factor out and pre-calculate (3/(2*math.pi))**gamma * AVOGADRO_VOLUME_NM3
+        ##       such that activity = PREFACTOR * mean_sq_ee_dist^(-gamma)
+
         ## Note: "effective_volume" is just an informal term for P_loop(rc) / P_v0(rc) x AVOGADRO_VOLUME_NM3
-        effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**gamma
-        activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3
-        if gamma_corr > 1:
-            activity = activity**gamma_corr
+        # effective_volume_nm3 = (2/3*math.pi*mean_sq_ee_dist)**gamma
+        # activity = AVOGADRO_VOLUME_NM3/effective_volume_nm3
+        # if gamma_corr > 1:
+        #     activity = activity**gamma_corr
 
         return activity
 
@@ -725,10 +725,9 @@ class GraphManager(object):
         ## In fact, IN MOST CASES, path[0] and path[-1] will NOT BOTH be part of an existing loop, even though
         ## they are effectively splitting a loop in two. See notes on Wang-Uhlenbeck entropy.
         loop_split_factors = []
-        if (path[0] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[0]]) > 0
+        if False and (path[0] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[0]]) > 0
             and path[-1] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[-1]]) > 0):
-            ## TODO: Need to test this
-            pdb.set_trace()
+            ## TODO: Need to test this - e.g. case 1(a) or 1(b)
             ## TODO: I feel like we should still cosider *all* shared loops and not just break out by this one case ^^
             ## TODO: THIS CASE NEEDS TO BE COMPLETELY RE-WORKED!
             ## Perfect "pinching" of existing loop (rare)
@@ -754,8 +753,9 @@ class GraphManager(object):
             loop0_path_idxs = (loop0_path.index(path[0]), loop0_path.index(path[-1]))
             if loop0_path_idxs[0] > loop0_path_idxs[1]:
                 loop0_path_idxs = loop0_path_idxs[::-1]
-            path1 = loop0_path[loop0_path_idxs[0]:loop0_path_idxs[1]]
-            path2 = loop0_path[loop0_path_idxs[1:]] + loop0_path[loop0_path_idxs[:0]]
+            path1 = e1 = loop0_path[loop0_path_idxs[0]:loop0_path_idxs[1]+1]
+            path2 = e2 = loop0_path[loop0_path_idxs[1]:] + loop0_path[:loop0_path_idxs[0]+1]
+            # path is the shortest path and should equal either e1 or e2:
             assert all(node in path1 for node in path) or all(node in path2 for node in path)
             # a1 = self.calculate_loop_activity(path1, simulate_reaction=reaction_type)
             a2 = self.calculate_loop_activity(path2, simulate_reaction=reaction_type)
@@ -763,7 +763,9 @@ class GraphManager(object):
             ## THIS SHOULD JUST BE APPENDED TO loop_split_factors:
             loop_split_factors.append(a2/a0)
             processed_secondary_loopids.add(loop0id)
+            pdb.set_trace()
             # If hybridization, special case where we account for the length of the newly-formed duplex.
+            # TODO: This should not preclude processing of other shared loops, but rather be just an optimization.
         else:
             ## Check for non-pinching loop-splitting cases: (partial loop sharing)
             ##           Λ₀              .------.
@@ -951,7 +953,7 @@ class GraphManager(object):
         ## E.g. if stacking of two helices would require excessive stretching.
         ## Evaluate secondary effects of the reaction for existing loops:
         side_effects_factor = 1
-        side_effect_activities = []
+        side_effects_activities = []
         side_effects_factors = []
         if reaction_type is STACKING_INTERACTION:
             # It should be enough to consider existing loops; if there are connections not part of
@@ -1006,8 +1008,8 @@ class GraphManager(object):
             ## or re-calculate the shortest path for the loop, expecting it to go through the junction.
             for loopid in affected_loops:
                 if loopid in processed_secondary_loopids:
-                    pass
-                    #continue
+                    # pass
+                    continue
                 loop = cmplx.loops[loopid]
                 # What is stored in a loop? Let's just start by letting loop be a dict with whatever info we need:
                 old_path = loop["path"]   # List of ifnodes
@@ -1052,6 +1054,9 @@ class GraphManager(object):
                         e1, t1, e2, t2 = [path_group for is_in_dh, path_group in grouped_path]
                     else:
                         t1, e2, t2, e1 = [path_group for is_in_dh, path_group in grouped_path]
+
+                    a0 = loop['activity']
+                    a1a2 = []
                     for dh_before, t_group, dh_after in ((e1, t1, e2), (e2, t2, e1)):
                         # These are signed, + for dh1 and - for dh2:
                         # e1_start, e1_end, e2_start, e2_end = (
@@ -1081,10 +1086,10 @@ class GraphManager(object):
                         # However, here I am not including a₀ in my side-effect factor,
                         # but only including it at the end. Not sure that is right.
                         a2 = self.calculate_loop_activity(new_path, simulate_reaction=reaction_type)
-                        a0 = loop['activity']
-                        side_effect_activities.append(a2)
+                        # side_effects_new_loop_activities.append(a2)
                         side_effects_factors.append(a2/a0)
-
+                        a1a2.append(a2)
+                    side_effects_activities.append(a1a2[0]*a1a2[1]/a0)
 
                 # pdb.set_trace()
                 # if len(new_paths) == 1: # Optimization for this special case (excessive optimization)
@@ -1117,16 +1122,23 @@ class GraphManager(object):
         #     return 0
         if loop_split_factors:
             loop_split_factor = prod(loop_split_factors)
-            print("Shortest-loop activity: ", activity)
+            print("Shortest-loop activity: %0.05g" % activity)
             print("Loop split factors:",
-                  " * ".join("%0.01g" % v for v in loop_split_factors),
+                  " * ".join("%0.02g" % v for v in loop_split_factors),
                   " = %0.03g" % loop_split_factor)
-            if side_effects_factors:
-                side_effects_factors.append(1.0)
-                print("Stacking side-effect factors:",
-                      " * ".join("%0.01g" % v for v in side_effects_factors),
-                      " = %0.03g" % side_effects_factor)
-                pdb.set_trace()
+            print("Activity incl. loop split factors: %0.02g * %0.02g = %0.03g" %
+                  (activity, loop_split_factor, activity*loop_split_factor))
+        if side_effects_factors:
+            # Stacking side-effect factors include a0 for all loops; a = a1/a0 * a2/a0
+            print("Stacking side-effects activities: ",
+                  " * ".join("%0.02g" % v for v in side_effects_activities),
+                  " = %0.03g" % prod(side_effects_activities))
+            print("Stacking side-effects factors:    ",
+                  " * ".join("%0.02g" % v for v in side_effects_factors),
+                  " = %0.03g" % side_effects_factor)
+            print("Note: Stacking side-effect factors include a0 for all loops; a = a1/a0 * a2/a0. "
+                  "I.e. they divide by a0 once too many.")
+            #pdb.set_trace()
 
         # The activity here is just for possible reactions.
         # How to get the actual path and side-effects when performing the reaction?

@@ -257,10 +257,10 @@ def test_calculate_loop_activity_3():
     assert alt_stack_loop2_activity > 0
 
 
-def test_intracomplex_activity_1():
+def test_intracomplex_activity_1():   # case2a
 
     ### Case 2(a):   ###
-    ### Using long enough T-loop to connect the outer arm nodes that
+    ### Using long enough T-loop to connect the outer arm nodes that the stack can form
     e1 = Domain("e1", seq="GCTA"*4)   # 16 bp
     E1 = Domain("E1", seq="TAGC"*4)   # 16 bp
     e2 = Domain("e2", seq="CGTA"*4)   # 16 bp
@@ -316,11 +316,139 @@ def test_intracomplex_activity_1():
     print("stack1_activity:", stack1_activity)
 
 
+
+def test_intracomplex_activity_2():   # case2a-2
+
+    ### Case 2(a)-2:   ###
+    ### Here, the T-loop connecting the outer arm nodes is too short for the stack can form
+    e1 = Domain("e1", seq="GCTA"*4)   # 16 bp
+    E1 = Domain("E1", seq="TAGC"*4)   # 16 bp
+    e2 = Domain("e2", seq="CGTA"*4)   # 16 bp
+    E2 = Domain("E2", seq="TACG"*4)   # 16 bp
+    e3 = Domain("e3", seq="TA"*3)     #  6 bp
+    E3 = Domain("E3", seq="TA"*3)     #  6 bp
+    e4 = Domain("e4", seq="G"*5)      #  5 bp
+    E4 = Domain("E4", seq="C"*5)      #  5 bp
+    t1 = Domain("t1", seq="T"*10)
+    t2 = Domain("t2", seq="T"*22)     # > 22 nt to reach (remember the two pb links on each side of the domain)
+    # 25 ss nt or more should be enough to reach (incl two pb links on each side).
+    # Stacked double-helix is 16+6+5+16 bp = 43 bp, 0.34nm/bp*43bp = 14.6 nm.
+    # t2 contour length is 25*0.6 = 15 nm; t2 dist_ee_sq is 10*0.6*1.8 = 10.8 nm², dist_ee_nm = 3.3 nm.
+    # It can reach, but only by stretching.
+    # dist_ee_sq = n_nt * ss_rise_per_nt * ss_kuhn_length
+    s1 = Strand("s1", [E4, E1, t2, E2, E3])
+    s2 = Strand("s2", [e3, t1, e4]) # Make sure domains are ordered 5'->3' !
+    s3 = Strand("s3", [e1])
+    s4 = Strand("s4", [e2])
+    # We use ComponentMgr because that has what we need to prepare the complex assembly:
+    mgr = ComponentMgr([s1, s2, s3, s4], params={})
+    mgr.hybridize(E1, e1)
+    mgr.hybridize(E2, e2)
+    mgr.hybridize(E3, e3)
+    mgr.hybridize(E4, e4)
+    # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
+    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
+    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    cmplx = res['changed_complexes'][0]
+
+    ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
+    # t2 - E2 - t1 - E1
+    loop0 = (t2.end5p, t2.end3p, E2.end5p, E2.end3p, t1.end5p, t1.end3p, E1.end5p, E1.end3p)
+    loop0_path = [end.ifnode.top_delegate() for end in loop0]
+    loop0_activity_before = mgr.calculate_loop_activity(loop0_path)
+    # print("loop0_activity_before:", loop0_activity_before)
+
+    ## WIP: Manually adding the loop to the complex until that is automated:
+    loopid = 1
+    loop_info = {'id': loopid,
+                 'path': loop0_path,
+                 'activity': loop0_activity_before,
+                 'ifnodes': set(loop0_path)
+                }
+    cmplx.loops[loopid] = loop_info
+    for ifnode in loop0_path:
+        cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
+
+
+
+    ## Intracomplex activity for forming the left stack:
+    dh1, dh2 = (e4.end3p, e3.end5p), (E3.end3p, E4.end5p)
+    stack1_activity = mgr.intracomplex_activity(dh1, dh2, reaction_type=STACKING_INTERACTION)
+    print("stack1_activity:", stack1_activity)
+    assert stack1_activity == 0
+
+
+
+def test_intracomplex_activity_3():   # case2a-2
+
+    ### Case 1(a):   ###
+    ### stacking duplexes are directly connected by pb link; *No* t1 loop between e3 and e4.
+    ### Using long enough T-loop to connect the outer arm nodes that the stack can form
+    e1 = Domain("e1", seq="GCTA"*4)   # 16 bp
+    E1 = Domain("E1", seq="TAGC"*4)   # 16 bp
+    e2 = Domain("e2", seq="CGTA"*4)   # 16 bp
+    E2 = Domain("E2", seq="TACG"*4)   # 16 bp
+    e3 = Domain("e3", seq="TA"*3)     #  6 bp
+    E3 = Domain("E3", seq="TA"*3)     #  6 bp
+    e4 = Domain("e4", seq="G"*5)      #  5 bp
+    E4 = Domain("E4", seq="C"*5)      #  5 bp
+    t1 = Domain("t1", seq="T"*10)
+    t2 = Domain("t2", seq="T"*50)     # > 22 nt to reach (remember the two pb links on each side of the domain)
+    # 25 ss nt or more should be enough to reach (incl two pb links on each side).
+    # Stacked double-helix is 16+6+5+16 bp = 43 bp, 0.34nm/bp*43bp = 14.6 nm.
+    # t2 contour length is 25*0.6 = 15 nm; t2 dist_ee_sq is 10*0.6*1.8 = 10.8 nm², dist_ee_nm = 3.3 nm.
+    # It can reach, but only by stretching.
+    # dist_ee_sq = n_nt * ss_rise_per_nt * ss_kuhn_length
+    s1 = Strand("s1", [E4, E1, t2, E2, E3])
+    s2 = Strand("s2", [e4, e3]) # Make sure domains are ordered 5'->3' !
+    s3 = Strand("s3", [e1])
+    s4 = Strand("s4", [e2])
+    # We use ComponentMgr because that has what we need to prepare the complex assembly:
+    mgr = ComponentMgr([s1, s2, s3, s4], params={})
+    mgr.hybridize(E1, e1)
+    mgr.hybridize(E2, e2)
+    mgr.hybridize(E3, e3)
+    mgr.hybridize(E4, e4)
+    # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
+    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
+    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    cmplx = res['changed_complexes'][0]
+
+    ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
+    # t2 - E2 - t1 - E1
+    # loop0 = (t2.end5p, t2.end3p, E2.end5p, E2.end3p, t1.end5p, t1.end3p, E1.end5p, E1.end3p)  # case 2(a)
+    loop0 = (t2.end5p, t2.end3p, E2.end5p, E2.end3p, e3.end3p, e3.end5p, E4.end5p, E4.end3p, E1.end3p)
+    loop0_path = [end.ifnode.top_delegate() for end in loop0]
+    loop0_activity_before = mgr.calculate_loop_activity(loop0_path)
+    print("loop0_activity_before:", loop0_activity_before)
+
+    ## WIP: Manually adding the loop to the complex until that is automated:
+    loopid = 1
+    loop_info = {'id': loopid,
+                 'path': loop0_path,
+                 'activity': loop0_activity_before,
+                 'ifnodes': set(loop0_path)
+                }
+    cmplx.loops[loopid] = loop_info
+    for ifnode in loop0_path:
+        cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
+
+    ## Intracomplex activity for forming the left stack:
+    dh1, dh2 = (e4.end3p, e3.end5p), (E3.end3p, E4.end5p)
+    stack1_activity = mgr.intracomplex_activity(dh1, dh2, reaction_type=STACKING_INTERACTION)
+    print("stack1_activity:", stack1_activity)
+    # assert stack1_activity == 0
+
+
+
+
 if __name__ == "__main__":
     ## Test 2:
-    test_calculate_loop_activity_2()
+    # test_calculate_loop_activity_2()
     ## Test 3:
-    test_calculate_loop_activity_3()
+    # test_calculate_loop_activity_3()
 
 
-    test_intracomplex_activity_1()
+    # test_intracomplex_activity_1()
+    # test_intracomplex_activity_2()
+    test_intracomplex_activity_3()

@@ -90,6 +90,8 @@ HELIX_WIDTH = 2      # nm.
 # "Cgamma prefactor":
 loop_Cgamma0 = 3/(2*pi)*(LITER_TO_M3/N_AVOGADRO)**(2/3)
 
+chain_model_gamma_exponent = 3/2
+
 
 
 def loop_prefactor_corr(gamma):
