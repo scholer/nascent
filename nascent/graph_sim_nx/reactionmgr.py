@@ -325,6 +325,9 @@ class ReactionMgr(ComponentMgr):
         # Note: F₁, F₂ is domain-state-fingerprints. It is supposed to be invariant for domain instances
         # of the same domain specie in the same complex state. E.g. two free "domain A" should be in the same state.
         # Alternative name: dom_specie_spec
+        self.cache['reaction_loop_effects'] = {}
+        self.reaction_loop_effects = self.cache['reaction_loop_effects']
+        # Loop delegations are stored in Complex.
 
         #self.relative_activity_cache = defaultdict(dict)
 
@@ -485,7 +488,7 @@ class ReactionMgr(ComponentMgr):
 
         K = exp(dS - dH/T)
         k_on = self.hybridization_rate_constant(d1, d2)  # 1e5  # Is only valid for if K > 1
-        k_off = k_on/K
+        k_off = k_on/K   # = k_on * exp(dH/T-dS)
         # printd("Hybridization energy for domain %s with sequence %s" % (d1, d1.sequence))
         # printd("  dS=%0.03g, dH=%.03g, T=%s, dS-dH/T=%.03g K=%0.02g, k_off=%0.02g" % (dS, dH, T, dS - dH/T, K, k_off))
         return k_off
@@ -589,29 +592,57 @@ class ReactionMgr(ComponentMgr):
                 assert isinstance(elem1, Domain)
                 d1, d2 = elem1, elem2
                 reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
-            assert d1.strand.complex == d2.strand.complex != None
         else:
             # Assert that the finger-print is correct. (TODO: Remove assertion when done debugging.)
             if reaction_type is STACKING_INTERACTION:
                 d1, d2 = elem1[0].domain, elem2[0].domain
+                assert (end.partner is None for duplex_end_tup in (elem1, elem2) for end in duplex_end_tup)
                 assert reaction_spec_pair == frozenset(((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
                                                         (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
             else: # TODO: Remove assertion when done debugging.
                 assert reaction_spec_pair == frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
                 assert reaction_type == HYBRIDIZATION_INTERACTION
                 d1, d2 = elem1, elem2
-            assert d1.strand.complex == d2.strand.complex != None
+        ## TODO: FINGERPRINT DEBUGGING. REMOVE THIS.
+        # cmplx = d1.strand.complex
+        # assert cmplx == d2.strand.complex != None
+        # if reaction_type is HYBRIDIZATION_INTERACTION:
+        #     # Make sure both domains are not hybridized:
+        #     assert all(d.partner is None for d in (d1, d2))
+        #     assert all(is_hybridized is False for sdnametup, is_hybridized, cstate, icid
+        #                in [d.state_fingerprint() for d in (d1, d2)])
+        #     assert all(is_hybridized is False for sdnametup, is_hybridized, cstate, icid
+        #                in reaction_spec_pair)
+        #     # Check that the two reactants have same cstate:
+        #     assert len({cstate for sdnametup, is_hybridized, cstate, icid in reaction_spec_pair}) == 1
+        # else:
+        #     # Make sure both domains are hybridized (otherwise they cannot stack):
+        #     assert reaction_type is STACKING_INTERACTION
+        #     assert all(d.partner is not None for d in (d1, d2))
+        #     assert all(is_hybridized for sdnametup, is_hybridized, cstate, icid
+        #                in [d.state_fingerprint() for d in (d1, d2)])
+        #     assert all(is_hybridized for duplexends in reaction_spec_pair
+        #                for (sdnametup, is_hybridized, cstate, icid), end, is_stacked in duplexends)
+        #     assert all(is_stacked is False for duplexends in reaction_spec_pair
+        #                for (sdnametup, is_hybridized, cstate, icid), end, is_stacked in duplexends)
+        #     assert len({cstate for duplexends in reaction_spec_pair
+        #                for (sdnametup, is_hybridized, cstate, icid), end, is_stacked in duplexends}) == 1
+        # print({d: d.partner for d in (d1, d2)})
+        # print({d: (d.in_complex_identifier(), d.state_fingerprint(), d.partner) for d in (d1, d2)})
 
-        ## TODO: Re-enable cache
+        ## Check cache and return activity from cache if found: ##
         if reaction_spec_pair in self.cache['intracomplex_activity']:
             return self.cache['intracomplex_activity'][reaction_spec_pair]
-        activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
+        # activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
+        activity, loop_info = self.loop_formation_effects(elem1, elem2, reaction_type)
         # print("Intracomplex activity %0.04f for %s+ reaction between %s and %s" % (
         #     activity, reaction_type, elem1, elem2))
         # reaction will always be forming and intra:
         reaction_attr = ReactionAttrs(reaction_type=reaction_type, is_forming=True, is_intra=True)
         print("activity %0.03f for reaction %s" % (activity, reaction_to_str(reaction_spec_pair, reaction_attr)))
         self.cache['intracomplex_activity'][reaction_spec_pair] = activity
+        if activity > 0:
+            self.reaction_loop_effects[reaction_spec_pair] = loop_info
         return activity
 
 
@@ -800,37 +831,6 @@ class ReactionMgr(ComponentMgr):
         return c_j
 
 
-    # def calculate_throttle_factor(self, elem1, elem2, reaction_attr, reaction_spec_pair):
-    #     """
-    #     :reaction_spec_pair: Must be a state-species pair; not instances. Symmetric degeneracy is acceptable.
-    #     """
-    #     assert reaction_spec_pair is not None and reaction_attr.reaction_type is not None
-    #     if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-    #         N_dom_copies = sum(len(self.domains_by_name[d.name]) for d in (elem1, elem2))
-    #     elif reaction_attr.reaction_type is STACKING_INTERACTION:
-    #         N_dom_copies = sum(len(self.domains_by_name[end.domain.name])
-    #                            for endpair in (elem1, elem2) for end in endpair)
-    #     if self.reaction_throttle_per_complex:
-    #         if reaction_attr.is_intra:
-    #             if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-    #                 cmplx = elem1.strand.complex
-    #             elif reaction_attr.reaction_type is STACKING_INTERACTION:
-    #                 cmplx = elem1[0].domain.strand.complex
-    #             Nric = cmplx.reaction_invocation_count[reaction_spec_pair]
-    #             if Nric == 0:
-    #                 return 1
-    #         else:
-    #             return 1
-    #     else:
-    #         Nric = self.reaction_invocation_count[reaction_spec_pair]/N_dom_copies
-    #     if Nric < self.reaction_throttle_offset:
-    #         return 1
-    #     # if self.reaction_throttle_rolling_fraction:
-    #     #     frac = self.reaction_invocation_deque.count(reaction_spec_pair)/len(self.reaction_invocation_deque)
-    #     #     if frac < self.reaction_throttle_rolling_fraction:
-    #     #         return 1
-    #     return self.reaction_throttle_fun(Nric-self.reaction_throttle_offset)
-    #
 
     def calculate_hybridization_c_j(self, d1, d2, is_forming, is_intra, reaction_type=HYBRIDIZATION_INTERACTION,
                                     reaction_spec_pair=None):
@@ -908,23 +908,23 @@ class ReactionMgr(ComponentMgr):
                 assert d1.strand.complex == d2.strand.complex
                 assert d1.strand.complex is not None or d1.strand == d2.strand
                 # Intra-complex reaction:
-                try:
-                    stochastic_activity = self.intracomplex_activity(d1, d2, reaction_type=reaction_type,
-                                                                     reaction_spec_pair=reaction_spec_pair)
-                except nx.NetworkXNoPath as e:
-                    c = d1.strand.complex
-                    print(("ERROR: No path between d1 %s and d2 %s "
-                           "which are both in complex %s. ") % (d1, d2, c))
-                    print("complex.nodes():")
-                    pprint(c.nodes())
-                    print("complex.edges():")
-                    pprint(c.edges())
-                    workdir = self.params.get("working_directory", os.path.expanduser("~"))
-                    draw_graph_and_save(c, outputfn=os.path.join(workdir, "complex_graph.png"))
-                    draw_graph_and_save(self.strand_graph, outputfn=os.path.join(workdir, "strand_graph.png"))
-                    draw_graph_and_save(self.domain_graph, outputfn=os.path.join(workdir, "domain_graph.png"))
-                    draw_graph_and_save(self.ends5p3p_graph, outputfn=os.path.join(workdir, "ends5p3p_graph.png"))
-                    raise e
+                # try:
+                stochastic_activity = self.intracomplex_activity(d1, d2, reaction_type=reaction_type,
+                                                                 reaction_spec_pair=reaction_spec_pair)
+                # except nx.NetworkXNoPath as e:
+                #     c = d1.strand.complex
+                #     print(("ERROR: No path between d1 %s and d2 %s "
+                #            "which are both in complex %s. ") % (d1, d2, c))
+                #     print("complex.nodes():")
+                #     pprint(c.nodes())
+                #     print("complex.edges():")
+                #     pprint(c.edges())
+                #     workdir = self.params.get("working_directory", os.path.expanduser("~"))
+                #     draw_graph_and_save(c, outputfn=os.path.join(workdir, "complex_graph.png"))
+                #     draw_graph_and_save(self.strand_graph, outputfn=os.path.join(workdir, "strand_graph.png"))
+                #     draw_graph_and_save(self.domain_graph, outputfn=os.path.join(workdir, "domain_graph.png"))
+                #     draw_graph_and_save(self.ends5p3p_graph, outputfn=os.path.join(workdir, "ends5p3p_graph.png"))
+                #     raise e
                 if stochastic_activity == 0:
                     return 0
             else:
@@ -1244,7 +1244,7 @@ class ReactionMgr(ComponentMgr):
             # For d1, d2, old_domspec yields the new domspec instead!
             # printd("Re-setting and re-calculating state_fingerprint for %s - old is: %s"
             #       % (domain, domain._specie_state_fingerprint))
-            domain.state_change_reset() # TODO: Reduce complex state reset and checking.
+            # domain.state_change_reset() # TODO: Reduce complex state reset and checking.
             # new_domspec = domain.state_fingerprint()
             ## TODO: Re-enable domspec change check
             # if new_domspec == old_domspec and reacted_pair is not None:
@@ -1599,26 +1599,6 @@ class ReactionMgr(ComponentMgr):
             assert reaction_spec_pair == frozenset((d1.state_fingerprint(), d2.state_fingerprint()))
 
 
-        ## Adjust reaction throttling variables
-        # Edit: Is done in post_reaction_processing
-        # self.reaction_invocation_count[(reaction_spec_pair, reaction_attr)] += 1
-        # if self.reaction_throttle_use_cache:
-        #     if self.reaction_throttle_per_complex:
-        #         if reaction_attr.is_intra:
-        #             throttle_cache = d1.strand.complex.reaction_throttle_cache
-        #             if reaction_spec_pair not in throttle_cache:
-        #                 throttle_cache[reaction_spec_pair] = 0.9995
-        #             else:
-        #                 throttle_cache[reaction_spec_pair] *= 0.9995
-        #             print("Reaction throttle for %s reduced to %s" %
-        #                   (reaction_spec_pair, throttle_cache[reaction_spec_pair]))
-        #     else:
-        #         if (reaction_spec_pair, reaction_attr) not in self.reaction_throttle_cache:
-        #             self.reaction_throttle_cache[(reaction_spec_pair, reaction_attr)] = 0.9995
-        #         else:
-        #             self.reaction_throttle_cache[(reaction_spec_pair, reaction_attr)] *= 0.9995
-
-
         assert reaction_attr.reaction_type == HYBRIDIZATION_INTERACTION
         if reaction_attr.is_intra:
             assert d1.strand.complex == d2.strand.complex
@@ -1719,6 +1699,20 @@ class ReactionMgr(ComponentMgr):
                                       reacted_pair=domain_pair, reaction_result=result)
 
 
+        # DEBUGGING: Resetting complex fingerprint. Should be done in post_reaction_processing...
+        # TODO: Move this hybridization/dehybridization methods and apply conditionally.
+        # Also, doing this here would be too late: We've already updated possible reactions, so they would be all wrong.
+        # Also, remember to reset domain state fingerprint explicitly if there is no complex!!
+        if d1.strand.complex is None:
+            d1.state_change_reset()
+        else:
+            d1.strand.complex.reset_state_fingerprint()
+        if d2.strand.complex is None:
+            d2.state_change_reset()
+        elif d2.strand.complex is not d1.strand.complex:
+            d2.strand.complex.reset_state_fingerprint()
+
+
         ## Update reactions for changed domains:
         self.update_possible_hybridization_reactions(changed_domains,
                                                      reacted_pair=domain_pair,
@@ -1744,13 +1738,6 @@ class ReactionMgr(ComponentMgr):
                                                 reaction_attr=reaction_attr,
                                                 reacted_spec_pair=reaction_spec_pair)
         # Note: We still use 'unstacking_results' for forwarding these side-effect unstacking reactions to dispatcher.
-
-        # DEBUGGING: Resetting complex fingerprint.
-        # TODO: Move this hybridization/dehybridization methods and apply conditionally.
-        if d1.strand.complex is not None:
-            d1.strand.complex.reset_state_fingerprint()
-        if d2.strand.complex is not None and d2.strand.complex is not d1.strand.complex:
-            d2.strand.complex.reset_state_fingerprint()
 
         # printd("changed_domains _specie_state_fingerprint:")
         # pprintd([(d, d._specie_state_fingerprint) for d in changed_domains])
@@ -1884,12 +1871,14 @@ class ReactionMgr(ComponentMgr):
         # Update stacking reactions:
         self.update_possible_stacking_reactions(changed_domains, reacted_pair=stacking_pair,
                                                 reaction_attr=reaction_attr)
-        # DEBUGGING: Resetting complex fingerprint.
+        # DEBUGGING: Resetting complex fingerprint. THIS MAY NOT BE CALLED FOR STACKING REACTIONS,
+        # BECAUSE ComponentMgr.join/break_complex_at IS NOT CALLED WHEN INTER-COMPLEX STACKING IS DISABLED.
+        # However, we are resetting complex and free strand's domain state fingerprints in post_reaction_processing.
         # TODO: Move this to hybridization/dehybridization methods and apply conditionally.
-        if h1end3p.domain.strand.complex:
-            h1end3p.domain.strand.complex.reset_state_fingerprint()
-        if h2end3p.domain.strand.complex:
-            h2end3p.domain.strand.complex.reset_state_fingerprint()
+        # if h1end3p.domain.strand.complex:
+        #     h1end3p.domain.strand.complex.reset_state_fingerprint()
+        # if h2end3p.domain.strand.complex:
+        #     h2end3p.domain.strand.complex.reset_state_fingerprint()
 
         return stacking_pair, result
 
@@ -2003,12 +1992,19 @@ class ReactionMgr(ComponentMgr):
                 expected_state_fingerprints = self.endstates_by_reaction[source_state][edge_key]
                 if len(expected_state_fingerprints) == 1:
                     expected_state_fingerprint = expected_state_fingerprints[0]
-            ## Assert complex state change (will update complex state fingerprint):
+            ## Assert complex state change
+            ## (will update complex state fingerprint - but not reset it first unless you pass reset=True):
             target_state, _ = cmplx.assert_state_change(
                 reacted_spec_pair, reaction_attr, expected_state_fingerprint=expected_state_fingerprint)
             if expected_state_fingerprints is not None:
                 assert target_state in expected_state_fingerprints
 
+        ### 1b: Reset domain state fingerprint and icid for all free strand's domains:
+        ### (This is also done in componentmgr.join/break_complex_at, but better safe than sorry)
+        if reaction_result['free_strands']:
+            for strand in reaction_result['free_strands']:
+                for domain in strand.domains:
+                    domain.state_change_reset()
 
         ### 2. Calculate state energy change used to update complex energies and reaction graph: ###
         dH, dS = 0, 0  # Total reaction enthalpy and entropy

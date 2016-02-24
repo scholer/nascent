@@ -164,6 +164,22 @@ def determine_end_end_distance(source, target, edge_attrs, interaction):
     return length, length_sq, stiffness
 
 
+def calculate_loop_hash(cmplx, loop, loopid=None):
+    """
+    Calculate a state-dependent hash for the given loop.
+    Complex state fingerprint and domain icid labelling must be up-to-date.
+    """
+    if loop is None:
+        assert loopid is not None
+        loop = cmplx.loop_by_loopid[loopid]
+    edgelist = list(zip(loop[:-1], loop[1:]))
+    edgelist.append((loop[-1], loop[0]))
+    # Converting each tuple to frozenset because order doesn't matter.
+    edges = frozenset(frozenset((src.state_fingerprint(), tgt.state_fingerprint()))
+                      for src, tgt in edgelist)
+    return hash(edges)
+
+
 
 
 class GraphManager(object):
@@ -577,6 +593,24 @@ class GraphManager(object):
             activity = 1 / (N_A * effective_volume) = N_A⁻¹ * Ω⁻¹    [unit: M = mol/L]
         where NA is Avogadro's constant, 6.022e23/mol.
 
+        """
+        activity, loop_info = self.loop_formation_effects(elem1, elem2, reaction_type)
+        return activity
+
+
+    def loop_formation_effects(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION):
+        r"""
+        Returns tuple with:
+            activity, loop_info
+        Where
+          * Activity is a numeric value describing the probability that the two elements are
+            in close enough proximity to react, relative to the probability when the two elements
+            are free in solution at a concentration of 1 M, and
+          * loop_info is a dict describing the loop(s) that will be created (and, perhaps, split)
+            by connecting elem1 and elem2.
+        Arguments:
+            :elem1:, :elem2:, :reaction_type: are the same as for intercomplex_activity().
+
         Making a new connection has two effects:
             1: Creating/splitting loops:
                 1a: Creating a new loop.
@@ -602,7 +636,9 @@ class GraphManager(object):
             (2) Perform calculations on unhybridized/unstacked state, but make adjustments as-needed
                 to give results that are equivalent to the formed state.
                 I'm currently doing this (2).
+
         """
+
         if reaction_type is HYBRIDIZATION_INTERACTION:
             domain1, domain2 = elem1, elem2
             cmplx = domain1.strand.complex
@@ -674,14 +710,26 @@ class GraphManager(object):
         # activity for shortest_path aka "a1":
         activity = self.calculate_loop_activity(path, simulate_reaction=reaction_type)
         if activity == 0:
-            return 0
+            return 0, None
 
         processed_secondary_loopids = set()
+        all_affected_loops = set()
         new_loops = {}   # old_id => [new_loop1_path, new_loop2_path, ...]
-        secondary_loop_effects = {'new_loops': new_loops,
-                                  'loop_split_factors': None,
-                                  'stacking_side_effects': None,
-                                 }
+        loop_split_factors = []
+        side_effects_factor = 1
+        side_effects_activities = []
+        side_effects_factors = []
+        loop_effects = {
+            'activity': 0,
+            'shortest_path': path,
+            'shortest_path_activity': activity,
+            'new_loops': new_loops,
+            'loops_considered': processed_secondary_loopids,
+            'loops_affected': all_affected_loops,
+            'loop_split_factors': loop_split_factors,
+            'stacking_side_effects_activities': side_effects_activities,
+            'stacking_side_effects_factors': side_effects_factors,
+        }
 
         ## Useful NetworkX functions:
         ## networkx.algorithms.cycles.cycle_basis
@@ -724,7 +772,6 @@ class GraphManager(object):
         ## TODO: There are cases when we are splitting an existing loop, but not by direct "pinching":
         ## In fact, IN MOST CASES, path[0] and path[-1] will NOT BOTH be part of an existing loop, even though
         ## they are effectively splitting a loop in two. See notes on Wang-Uhlenbeck entropy.
-        loop_split_factors = []
         if False and (path[0] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[0]]) > 0
             and path[-1] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[-1]]) > 0):
             ## TODO: Need to test this - e.g. case 1(a) or 1(b)
@@ -766,7 +813,7 @@ class GraphManager(object):
             pdb.set_trace()
             # If hybridization, special case where we account for the length of the newly-formed duplex.
             # TODO: This should not preclude processing of other shared loops, but rather be just an optimization.
-        else:
+        elif cmplx.loopids_by_interface:
             ## Check for non-pinching loop-splitting cases: (partial loop sharing)
             ##           Λ₀              .------.
             ##            .----------,--´------. \
@@ -818,7 +865,10 @@ class GraphManager(object):
             ## First see if there is any overlap between the shortest path and existing loops:
             path1_nodes = set(path)
             shared_nodes = path1_nodes.intersection(cmplx.loopids_by_interface.keys())
-            shared_loopids = set.union(*[cmplx.loopids_by_interface[ifnode] for ifnode in shared_nodes])
+            if shared_nodes:
+                shared_loopids = set.union(*[cmplx.loopids_by_interface[ifnode] for ifnode in shared_nodes])
+            else:
+                shared_loopids = {}
             ## We have a few special cases:
             ## If the new edge e₃ is completely rigid, then e₂ has no influence on Λ₁, nor does e₁ influence on Λ₂.
             ## - The "e₃ == 0" aka "loop pinching" above can be seen as a special case of this.
@@ -832,7 +882,7 @@ class GraphManager(object):
             ##      a = a₁ if e₁ < e₂ else a₂
             ## Symbols: Λ₀ Λ₁ Λ₂ e₁ e₂ e₃
             if shared_loopids:
-                shared_loops = [cmplx.loops[loopid] for loopid in shared_loopids]
+                shared_loops = [cmplx.loops[loop0id] for loop0id in shared_loopids]
                 ## TODO: Check that this does not overlap with the "side-effects" factors calculation..
                 ## It actually seems like this could supplant the side-effects calculation.
                 # Find nodes that are not part of any loops:
@@ -841,6 +891,8 @@ class GraphManager(object):
                     # path is shortest-path loop Λ₁, shared loop is Λ₀ aka "loop0".
                     # Makes lookup faster for long loop0 but with constant overhead.
                     loop0_nodes = loop0['ifnodes']
+                    loop0_path = loop0['path']
+                    assert loop0_nodes == set(loop0_path)  ## TODO: Remove assertion
                     # Casting group_iter to list: (TODO: Check if that is really needed...)
                     e1_or_e3_sub_paths = [(is_shared, list(group_iter)) for is_shared, group_iter in
                                           groupby(path, lambda ifnode: ifnode in loop0_nodes)]
@@ -956,10 +1008,11 @@ class GraphManager(object):
                         a2 = self.calculate_loop_activity(loop2_path, simulate_reaction=reaction_type)
                         loop_split_factor = a2/a0
                         if loop_split_factor == 0:
-                            return 0
+                            return 0, None
                         loop_split_factors.append(loop_split_factor)
                 # end for loop0 in shared_loops:
                 ## TODO: THIS IS NOT DONE YET!
+                # Union-assignment operator should modify in-place and be equilvalent to myset.update(other_set)
                 processed_secondary_loopids |= shared_loopids
             else:
                 ## NO SHARED LOOPS: PATH IS NEITHER PARTIALLY OR FULLY PART OF ANY CURRENT LOOPS:
@@ -975,9 +1028,6 @@ class GraphManager(object):
         ## influence the activity for forming this new loop.
         ## E.g. if stacking of two helices would require excessive stretching.
         ## Evaluate secondary effects of the reaction for existing loops:
-        side_effects_factor = 1
-        side_effects_activities = []
-        side_effects_factors = []
         if reaction_type is STACKING_INTERACTION:
             # It should be enough to consider existing loops; if there are connections not part of
             # an existing loop, that connection should be part of the new loop created by this reaction.
@@ -1018,7 +1068,8 @@ class GraphManager(object):
             ## NOTE: We should not consider loops that are only on one of the dh arms and not the other,
             ## hence the two set comprehensions which are then followed by the intersection.
             ## Affected loops are loops which goes through both double-helix 1 and 2:
-            affected_loops = list(dh1_loopids & dh2_loopids)
+            affected_loops = dh1_loopids & dh2_loopids
+            all_affected_loops |= affected_loops  # equivalent to in-place update(other_set)
             ## By definition, the shortest path for loops with nodes on both dh1 and dh2 should now
             ## go through the created stacked junction.
             ## In general, a stacking interaction will cause affected loops to split into two loops.
@@ -1029,43 +1080,49 @@ class GraphManager(object):
             ## We then take the product: side_effects_factor = ∏(a_new/a_old for loop in affected loops)
             ## However, we must either modify the path to ensure it goes through the stacked junction,
             ## or re-calculate the shortest path for the loop, expecting it to go through the junction.
-            for loopid in affected_loops:
-                if loopid in processed_secondary_loopids:
+            for loop0id in affected_loops:
+                if loop0id in processed_secondary_loopids:
                     # pass
                     continue
-                loop = cmplx.loops[loopid]
+                loop0 = cmplx.loops[loop0id]
                 # What is stored in a loop? Let's just start by letting loop be a dict with whatever info we need:
-                old_path = loop["path"]   # List of ifnodes
+                loop0_path = loop0["path"]   # List of ifnodes
                 new_paths = []
-                if dh1_delegate in loop["path"] and dh2_delegate in loop["path"]: #and \
+                a0 = loop0['activity']
+                a1a2 = []
+                if dh1_delegate in loop0["path"] and dh2_delegate in loop0["path"]: #and \
                     ## TODO: MAKE SURE WE ARE NOT DOUBLE-COUNTING; C.F. CALCULATION USING SECONDARY LOOP SEARCH BELOW.
-                    # abs(loop["path"].index(dh1_delegate) - loop["path"].index(dh2_delegate)) == 1:
+                    # abs(loop0["path"].index(dh1_delegate) - loop0["path"].index(dh2_delegate)) == 1:
                     # We can just modify the path, joining it together at the new junction:
-                    idx1, idx2 = loop["path"].index(dh1_delegate), loop["path"].index(dh2_delegate)
+                    idx1, idx2 = loop0["path"].index(dh1_delegate), loop0["path"].index(dh2_delegate)
                     if idx1 > idx2:
                         idx1, idx2 = idx2, idx1
-                    new_path1 = loop["path"][idx2:] + loop["path"][:idx1+1]  # +1 to include the node.
-                    new_paths.append(new_path1)
+                    new_path1 = loop0["path"][idx2:] + loop0["path"][:idx1+1]  # +1 to include the node.
+                    new_paths.append(new_path1)  # new_paths = [new_path1, new_path2] aka [e1, e2]
+                    a1 = self.calculate_loop_activity(new_path1, simulate_reaction=reaction_type)
+                    a1a2.append(a1)
                     if idx2-idx1 == 1:
-                        # Case 1a: Special case: The two joined interface nodes are adjacent; just re-calculate current loop.
+                        # Case 1a: Special case: The two joined interface nodes are adjacent; just re-calculate current loop0.
                         # No extra paths
                         pass
                     else:
                         # Case 1b: Split the existing path into two new loops:
                         # We have already split out one of the loops, just need the other:
-                        new_path2 = loop["path"][idx1:] + loop["path"][:idx2+1]
+                        new_path2 = loop0["path"][idx1:] + loop0["path"][:idx2+1]
                         new_paths.append(new_path2)
+                        a2 = self.calculate_loop_activity(new_path2, simulate_reaction=reaction_type)
+                        a1a2.append(a2)
                 else:
-                    # Case 2: Stacking forms a genuine new loop paths:
+                    # Case 2: Stacking forms a genuine new loop paths: loop0 -> loop1, loop2
                     # (I think this will also take care of case 1b and even 1a)
                     # We have to generate two new loops, partially composed of the old path
                     # and partially of the newly-stacked double-helix:
-                    # First, split the existing loop in two on the nodes that touch the newly-stacked double-helix:
+                    # First, split the existing loop0 in two on the nodes that touch the newly-stacked double-helix:
                     grouped_path = [(is_in_dh, list(group_iter)) for is_in_dh, group_iter in
-                                    itertools.groupby(old_path, lambda ifnode: ifnode in dh_ifnodes)]
+                                    itertools.groupby(loop0_path, lambda ifnode: ifnode in dh_ifnodes)]
                     # if len(grouped_path) in (2, 3): print("Case 1a")
                     # should be either 4 or 5 elements.
-                    # 4 if the loop path happens to start/end right between the double-helix and the other parts.
+                    # 4 if the loop0 path happens to start/end right between the double-helix and the other parts.
                     assert 4 <= len(grouped_path) <= 5
                     if len(grouped_path) == 5:
                         # Remove the first element and append it to the last:
@@ -1078,8 +1135,8 @@ class GraphManager(object):
                     else:
                         t1, e2, t2, e1 = [path_group for is_in_dh, path_group in grouped_path]
 
-                    a0 = loop['activity']
-                    a1a2 = []
+                    # Note: The variable nomenclature here is different from the "loops on shortest path" search above;
+                    # e1, e2 are parts of the newly-formed arm, i.e. e3a and e3b above.
                     for dh_before, t_group, dh_after in ((e1, t1, e2), (e2, t2, e1)):
                         # These are signed, + for dh1 and - for dh2:
                         # e1_start, e1_end, e2_start, e2_end = (
@@ -1117,19 +1174,20 @@ class GraphManager(object):
                 # pdb.set_trace()
                 # if len(new_paths) == 1: # Optimization for this special case (excessive optimization)
                 #     path_activities = [self.calculate_loop_activity(new_paths[0], simulate_reaction=reaction_type)]
-                #     loop_pinching_activity = path_activities[0]/loop["activity"]
+                #     loop_pinching_activity = path_activities[0]/loop0["activity"]
                 # else:
                 # path_activities = [self.calculate_loop_activity(new_path, simulate_reaction=reaction_type)
                 #                    for new_path in new_paths]
-                #loop_pinching_activity = prod(path_activities)/loop["activity"]
+                #loop_pinching_activity = prod(path_activities)/loop0["activity"]
                 #side_effects_factors.append(loop_pinching_activity)
                 # For the moment, just: old_loopid => dict with new loop paths
-                new_loops[loopid] = {
-                    'paths': new_paths,
-                    #'path_activities': path_activities,   # Primary loop closing activity for each new path
+                new_loops[loop0id] = {
+                    'new_paths': new_paths,
+                    'a1a2': a1a2,   # Primary loop closing activity for each new path
+                    'a0': a0,       # Store this, for good measure...
                     #'loop_pinching_activity': loop_pinching_activity  # Combined effect of splitting old loop in two
                 }
-
+                processed_secondary_loopids.add(loop0id)
             # end for loop in affected_loops
 
             # side_effects_factors = [(self.calculate_loop_activity(loop["path"], simulate_reaction=reaction_type)/
@@ -1163,10 +1221,39 @@ class GraphManager(object):
                   "I.e. they divide by a0 once too many.")
             #pdb.set_trace()
 
+
+        # loop_effects = {
+        #     'activity': 0,
+        #     'shortest_path': path,
+        #     'shortest_path_activity': activity,
+        #     'new_loops': new_loops,  # old_id => [new_loop1_path, new_loop2_path, ...]
+        #     'loops_considered': processed_secondary_loopids,
+        #     'loops_affected': all_affected_loops,
+        #     'loop_split_factors': loop_split_factors,
+        #     'stacking_side_effects_activities': side_effects_activities,
+        #     'stacking_side_effects_factors': side_effects_factors,
+        # }
+        ## Make paths using ifnode state fingerprints:
+        loop_effects['shortest_path_spec'] = [ifnode.state_fingerprint() for ifnode in loop_effects['shortest_path']]
+        ## TODO: loopids should be based on either the path edges or some cyclic hash of the nodes (not tuple nor set).
+        ##       such that loopids are invariant between instances and the same for the same state.
+        ##       ...but then, it would not be easy to have a constant loopid... it would constantly change.
+        ##       OK then, have a loop_spec fingerprint, and map it to loopids as-needed.
+        new_loops_specs = {
+            calculate_loop_hash(cmplx, None, loopid=old_id): [
+                [ifnode.state_fingerprint() for ifnode in new_path] for new_path in new_loops_paths
+            ] for old_id, new_loops_paths in new_loops.items()
+        }
+        loop_effects['new_loops_specs'] = new_loops_specs  # loop_hash => [list of new loop_path_specs]
+
         # The activity here is just for possible reactions.
         # How to get the actual path and side-effects when performing the reaction?
         # Return activity *and* loop info with path and side_effects (dict?) - for caching?
-        return activity*loop_split_factor
+        if loop_split_factors:
+            activity *= loop_split_factor
+        loop_effects['activity'] = activity
+        return activity, loop_effects
+
 
 
 

@@ -26,7 +26,10 @@ This includes:
 * Disabling of random seeding for hashing.
     This requires setting the environment variable export PYTHONHASHSEED=0
     On Windows, do this by invoking ```set PYTHONHASHSEED=0``` on your command line before starting python.
-    On Unix/OSX, invoke ```export PYTHONHASHSEED=0``` or directly while starting python with:
+    On Unix/OSX, you can:
+        invoke ```export PYTHONHASHSEED=0``` before you start any script,
+        preferably adding it to your ~/.bashrc_profile,
+        You can also set it directly when starting python with:
         ```PYTHONHASHSEED=0 python myscript.py```
 
 

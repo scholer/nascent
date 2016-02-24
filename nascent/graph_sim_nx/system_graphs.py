@@ -458,6 +458,12 @@ class InterfaceNode(object):
         else:
             return self.delegatee.top_delegate()
 
+
+    def state_fingerprint(self):
+        """ Return state-specific fingerprint hash for this node. Currently NOT cached. """
+        return hash(frozenset(ifnode.domain_end.state_fingerprint() for ifnode in self.delegated_edges.keys()))
+
+
     def __str__(self, ):
         return "I" + self.domain_end.name
 

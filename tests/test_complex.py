@@ -110,7 +110,11 @@ def test_asymmetric_complex_01():
 
 def test_symmetric_complex_01():
     """
-    Simple case, no duplicate strands or domains, complex is obviously asymmetric.
+    Simple symmetric case:
+         A ----- B ----- a
+         |       |       |
+         a ----- B ----- A
+    B is self-complementary and palindromic.
     """
 
     ### Case sym_duplex_01:   ###
@@ -214,6 +218,134 @@ def test_symmetric_complex_01():
     assert cmplx in result["obsolete_complexes"]
 
 
+
+def test_symmetric_complex_02():
+    """
+    Complex is asymmetric but only after C has hybridized to one of the c domains.
+
+         A ----- B ----- a ---- c = C
+         |       |       |
+    c----a ----- B ----- A
+
+    """
+
+    ### Case asym_duplex_01a:   ###
+    A1 = Domain("A", seq="GCTA"*4)   # 16 bp
+    a1 = Domain("a", seq="TAGC"*4)   # 16 bp
+    B1 = Domain("B", seq="ATGCAT"*4)  # 24 bp - palindromic
+    A2 = Domain("A", seq="GCTA"*4)   # 16 bp
+    a2 = Domain("a", seq="TAGC"*4)   # 16 bp
+    B2 = Domain("B", seq="ATGCAT"*4)  # 24 bp - palindromic
+    C1 = Domain("C", seq="TAGT"*4)   # 16 bp
+    c1 = Domain("c", seq="ACTA"*4)   # 16 bp
+    c2 = Domain("c", seq="ACTA"*4)   # 16 bp
+
+    s0 = Strand("s", [A1, B1, a1, c1])
+    s1 = Strand("s", [A2, B2, a2, c2]) # Make sure domains are ordered 5'->3' !
+    sC = Strand("s", [C1])
+
+    # We use ComponentMgr because that has what we need to prepare the complex assembly:
+    mgr = ComponentMgr([s0, s1, sC], params={})
+    print("\n\nmgr.hybridize(B1, B2)")
+    result = mgr.hybridize(B1, B2)
+    cmplx = s1.complex
+    assert cmplx in result["new_complexes"]
+    cstates, dspecs, dspec_counts = [], [], []   # 1 entry for each expected state
+
+    def update_and_assert(match_idx=None):
+        cmplx.reset_state_fingerprint()
+        cstate = cmplx.state_fingerprint()
+        domain_states = {d: d.state_fingerprint() for d in cmplx.domains()}
+        domain_state_count = Counter(domain_states.values())
+        if match_idx is None:
+            cstates.append(cstate)
+            dspecs.append(frozenset(domain_states.items()))
+            dspec_counts.append(domain_state_count)
+        else:
+            assert cstate == cstates[i]
+            assert frozenset(domain_states.items()) == dspecs[i]
+            assert domain_state_count == dspec_counts[i]
+        assert dspec_counts[-1].most_common(1)[0][1] == 1  # Count (value) of most common dspec hash is 1
+
+    update_and_assert()
+    print("\n\nmgr.hybridize(A1, a2)")
+    result = mgr.hybridize(A1, a2)
+    assert cmplx in result["changed_complexes"]
+    update_and_assert()
+
+    print("\n\nmgr.hybridize(a1, A2)")
+    result = mgr.hybridize(a1, A2)
+    assert cmplx in result["changed_complexes"]
+    update_and_assert()
+
+    print("\n\nmgr.stack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)")
+    result = mgr.stack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)
+    assert cmplx in result["changed_complexes"]
+    update_and_assert()
+
+    print("\n\nmgr.stack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)")
+    result = mgr.stack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)
+    assert cmplx in result["changed_complexes"]
+    update_and_assert()
+
+    print("\n\nmgr.hybridize(c1, C1)")
+    result = mgr.hybridize(c1, C1)
+    assert cmplx in result["changed_complexes"]
+    update_and_assert()
+
+    print("\nComplex test-case test_symmetric_complex_01 completed.")
+    assert Counter(cstates).most_common(1)[0][1] == 1
+
+    print("Complex:")
+    pprint(cmplx)
+    print("Complex state fingerprints (collected during assembly):")
+    pprint(cstates)
+    print("Complex domain state fingerprints (collected during assembly):")
+    pprint(dspecs)
+    print("Complex domain state fingerprint counts (collected during assembly):")
+    pprint(dspec_counts)
+    # pdb.set_trace()
+
+    print("\n\nDe-constructing, same order as constructing...")
+    i = -1  # Current fingerprints should match
+
+    print("\n\nmgr.dehybridize(c1, C1)")
+    result = mgr.dehybridize(c1, C1)
+    assert cmplx in result["changed_complexes"]
+    i -= 1
+    update_and_assert(i)
+
+    print("\n\nmgr.unstack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)")
+    result = mgr.unstack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)
+    assert cmplx in result["changed_complexes"]
+    i -= 1
+    update_and_assert(i)
+
+    print("\n\nmgr.unstack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)")
+    result = mgr.unstack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)
+    assert cmplx in result["changed_complexes"]
+    i -= 1
+    update_and_assert(i)
+
+    print("\n\nmgr.dehybridize(a1, A2)")
+    result = mgr.dehybridize(a1, A2)
+    assert cmplx in result["changed_complexes"]
+    i -= 1
+    update_and_assert(i)
+
+    print("\n\nmgr.dehybridize(A1, a2)")
+    result = mgr.dehybridize(A1, a2)
+    assert cmplx in result["changed_complexes"]
+    i -= 1
+    update_and_assert(i)
+
+    print("\n\nmgr.dehybridize(B1, B2)")
+    result = mgr.dehybridize(B1, B2)
+    # State should now be obsolete
+    assert cmplx in result["obsolete_complexes"]
+
+
+
 if __name__ == "__main__":
     print("NEW TEST STARTED\n"*30)
 
@@ -222,3 +354,5 @@ if __name__ == "__main__":
 
     ## Symmetric complexes:
     test_symmetric_complex_01()
+
+    test_symmetric_complex_02()
