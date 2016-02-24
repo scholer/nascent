@@ -1,0 +1,342 @@
+WARNING: TypeError a float is required when calculating effective_activity based on distance.
+- self = H1BC2[..29], other_domain = h1bc2[..90]
+- self.Partner: None, other_domain.Partner: None
+- self.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x00000000036CE7B8>, other_domain.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x00000000036CE7B8>
+self.distance(other_domain): None
+self.distance(other_domain): None
+self.Complex strands:
+--- dup1_s1[..48]: [[dup1_s1[..48]:H1BC1[..56] at 0x353e1d0, dup1_s1[..48]:H1BC2[..29] at 0x353e208]]
+--- dup1_s1[..61]: [[dup1_s1[..61]:H1BC1[..34] at 0x3542a20, dup1_s1[..61]:H1BC2[..39] at 0x3542a58]]
+--- dup1_s2[..91]: [[dup1_s2[..91]:h1bc1[..83] at 0x355b2e8, dup1_s2[..91]:h1bc2[..90] at 0x355b320]]
+other_domain.Complex strands:
+--- dup1_s1[..48]: [[dup1_s1[..48]:H1BC1[..56] at 0x353e1d0, dup1_s1[..48]:H1BC2[..29] at 0x353e208]]
+--- dup1_s1[..61]: [[dup1_s1[..61]:H1BC1[..34] at 0x3542a20, dup1_s1[..61]:H1BC2[..39] at 0x3542a58]]
+--- dup1_s2[..91]: [[dup1_s2[..91]:h1bc1[..83] at 0x355b2e8, dup1_s2[..91]:h1bc2[..90] at 0x355b320]]
+self.connected_domains:
+--- domains: []
+--- parents: {dup1_s1[..48]:H1BC1[..56] at 0x353e1d0: dup1_s1[..48]:H1BC2[..29] at 0x353e208}
+--- distances: {dup1_s1[..48]:H1BC2[..29] at 0x353e208: 0, 
+				dup1_s1[..48]:H1BC1[..56] at 0x353e1d0: 1}
+other_domain.connected_domains:
+--- domains: []
+--- parents: {dup1_s1[..61]:H1BC1[..34] at 0x3542a20: dup1_s2[..91]:h1bc1[..83] at 0x355b2e8, dup1_s1[..61]:H1BC2[..39] at 0x3542a58: dup1_s1[..61]:H1BC1[..34] at 0x3542a20, dup1_s2[..91]:h1bc1[..83] at 0x355b2e8: dup1_s2[..91]:h1bc2[..90] at 0x355b320}
+--- distances: {dup1_s2[..91]:h1bc2[..90] at 0x355b320: 0, 
+				dup1_s2[..91]:h1bc1[..83] at 0x355b2e8: 1, 
+				dup1_s1[..61]:H1BC1[..34] at 0x3542a20: 2, 
+				dup1_s1[..61]:H1BC2[..39] at 0x3542a58: 3}
+Traceback (most recent call last):
+
+
+
+
+What is wrong?
+* The two domains (and their strands) are in the same complex, but they are not connected.
+* dup1_s2[..15]:h1bc1[..31] is by it self, it is not in any multi-strand complex.
+
+The problem may be caused when accidentally merging a complex with it self... Although I can't see why that would cause the given issue.
+ - Nope, that wasn't the problem. It could happen, and I wasn't expecting it, but it wouldn't make much difference.
+
+The problem was probably that in detach_domain(domain, from_domain), if we had a complex disintegrating into two individual strands, i.e. case (c),
+then I was invoking self.remove_strand(domain.Strand) - which errorneously would set strand.Complex = self (the complex).
+That should have been strand.Complex = None.
+
+
+
+
+WARNING: KeyError frozenset({dup1_s1[..24]:H1BC1[..97] at 0x356d630, dup1_s2[..15]:h1bc1[..31] at 0x35c1358}) for domain, from_domain = H1BC1[..97], h1bc1[..31]
+
+
+
+WARNING: TypeError a float is required when calculating effective_activity based on distance.
+- self = h1bc1[..31], other_domain = H1BC1[..62]
+- self.Partner: None, other_domain.Partner: None
+- self.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x000000000362A400>, other_domain.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x000000000362A400>
+self.distance(other_domain): None
+self.distance(other_domain): None
+self.Complex strands:
+--- dup1_s1[..13]: [[dup1_s1[..13]:H1BC1[..62] at 0x3578400, dup1_s1[..13]:H1BC2[..20] at 0x3578438]]
+--- dup1_s2[..15]: [[dup1_s2[..15]:h1bc1[..31] at 0x35c1358, dup1_s2[..15]:h1bc2[..95] at 0x35c1390]]
+--- dup1_s2[..1]: [[dup1_s2[..1]:h1bc1[..70] at 0x357f550, dup1_s2[..1]:h1bc2[..93] at 0x357f588]]
+other_domain.Complex strands:
+--- dup1_s1[..13]: [[dup1_s1[..13]:H1BC1[..62] at 0x3578400, dup1_s1[..13]:H1BC2[..20] at 0x3578438]]
+--- dup1_s2[..15]: [[dup1_s2[..15]:h1bc1[..31] at 0x35c1358, dup1_s2[..15]:h1bc2[..95] at 0x35c1390]]
+--- dup1_s2[..1]: [[dup1_s2[..1]:h1bc1[..70] at 0x357f550, dup1_s2[..1]:h1bc2[..93] at 0x357f588]]
+self.connected_domains:
+--- domains: [dup1_s2[..15]:h1bc1[..31] at 0x35c1358, dup1_s2[..15]:h1bc2[..95] at 0x35c1390]
+--- parents: {dup1_s2[..15]:h1bc2[..95] at 0x35c1390: dup1_s2[..15]:h1bc1[..31] at 0x35c1358}
+--- distances: {
+				dup1_s2[..15]:h1bc1[..31] at 0x35c1358: 0,
+				dup1_s2[..15]:h1bc2[..95] at 0x35c1390: 1, 
+				}
+other_domain.connected_domains:
+--- domains: [dup1_s1[..13]:H1BC1[..62] at 0x3578400, dup1_s1[..13]:H1BC2[..20] at 0x3578438, dup1_s2[..1]:h1bc2[..93] at 0x357f588, dup1_s2[..1]:h1bc1[..70] at 0x357f550]
+--- parents: {dup1_s2[..1]:h1bc2[..93] at 0x357f588: dup1_s1[..13]:H1BC2[..20] at 0x3578438, dup1_s1[..13]:H1BC2[..20] at 0x3578438: dup1_s1[..13]:H1BC1[..62] at 0x3578400, dup1_s2[..1]:h1bc1[..70] at 0x357f550: dup1_s2[..1]:h1bc2[..93] at 0x357f588}
+--- distances: {dup1_s1[..13]:H1BC1[..62] at 0x3578400: 0, 
+				dup1_s1[..13]:H1BC2[..20] at 0x3578438: 1, 
+				dup1_s2[..1]:h1bc2[..93] at 0x357f588: 2, 
+				dup1_s2[..1]:h1bc1[..70] at 0x357f550: 3}
+Traceback (most recent call last):
+  File "dom_anneal_test.py", line 108, in <module>
+    simulator.anneal(T_start=273+start+offset, T_finish=273+stop+offset, delta_T=step, n_steps_per_T=n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 609, in anneal
+    self.simulate(T, n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 575, in simulate
+    self.step(T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 491, in step
+    domain1, domain2, is_hybridized = self.select_event_domains(oversampling=oversampling)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in select_event_domains
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in <listcomp>
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 424, in effective_activity
+    raise e
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 400, in effective_activity
+    return math.sqrt(dist)
+TypeError: a float is required
+
+
+
+WARNING: TypeError a float is required when calculating effective_activity based on distance.
+- self = H1BC1[..48], other_domain = h1bc1[..67]
+- self.Partner: None, other_domain.Partner: None
+- self.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x00000000035FF240>, other_domain.Strand.Complex: <nascent.nascent_sim.dom_annea
+l_models.Complex object at 0x00000000035FF240>
+self.distance(other_domain): None
+self.distance(other_domain): None
+self.Complex strands:
+--- dup1_s2[..10]: [dup1_s2[..10]:h1bc2[..54] at 0x3564a20, dup1_s2[..10]:h1bc1[..67] at 0x3564a58]
+--- dup1_s1[..68]: [dup1_s1[..68]:H1BC1[..74] at 0x34dd2b0, dup1_s1[..68]:H1BC2[..16] at 0x34dd2e8]
+--- dup1_s1[..63]: [dup1_s1[..63]:H1BC1[..48] at 0x34ea668, dup1_s1[..63]:H1BC2[..40] at 0x34ea6a0]
+other_domain.Complex strands:
+--- dup1_s2[..10]: [dup1_s2[..10]:h1bc2[..54] at 0x3564a20, dup1_s2[..10]:h1bc1[..67] at 0x3564a58]
+--- dup1_s1[..68]: [dup1_s1[..68]:H1BC1[..74] at 0x34dd2b0, dup1_s1[..68]:H1BC2[..16] at 0x34dd2e8]
+--- dup1_s1[..63]: [dup1_s1[..63]:H1BC1[..48] at 0x34ea668, dup1_s1[..63]:H1BC2[..40] at 0x34ea6a0]
+self.connected_domains:
+--- domains: [dup1_s1[..63]:H1BC1[..48] at 0x34ea668, dup1_s1[..63]:H1BC2[..40] at 0x34ea6a0, dup1_s2[..55]:h1bc2[..1] at 0x34ed8d0, dup1_s2[..55]:h1bc1[..28] a
+t 0x34ed908]
+--- parents: {dup1_s2[..55]:h1bc1[..28] at 0x34ed908: dup1_s2[..55]:h1bc2[..1] at 0x34ed8d0, dup1_s1[..63]:H1BC2[..40] at 0x34ea6a0: dup1_s1[..63]:H1BC1[..48] a
+t 0x34ea668, dup1_s2[..55]:h1bc2[..1] at 0x34ed8d0: dup1_s1[..63]:H1BC2[..40] at 0x34ea6a0}
+--- distances: {dup1_s2[..55]:h1bc1[..28] at 0x34ed908: 3, dup1_s1[..63]:H1BC2[..40] at 0x34ea6a0: 1, dup1_s2[..55]:h1bc2[..1] at 0x34ed8d0: 2, dup1_s1[..63]:H1
+BC1[..48] at 0x34ea668: 0}
+other_domain.connected_domains:
+--- domains: [dup1_s2[..10]:h1bc1[..67] at 0x3564a58, dup1_s2[..10]:h1bc2[..54] at 0x3564a20, dup1_s1[..68]:H1BC2[..16] at 0x34dd2e8, dup1_s1[..68]:H1BC1[..74]
+at 0x34dd2b0]
+--- parents: {dup1_s2[..10]:h1bc2[..54] at 0x3564a20: dup1_s2[..10]:h1bc1[..67] at 0x3564a58, dup1_s1[..68]:H1BC1[..74] at 0x34dd2b0: dup1_s1[..68]:H1BC2[..16]
+at 0x34dd2e8, dup1_s1[..68]:H1BC2[..16] at 0x34dd2e8: dup1_s2[..10]:h1bc2[..54] at 0x3564a20}
+--- distances: {dup1_s2[..10]:h1bc2[..54] at 0x3564a20: 1, dup1_s1[..68]:H1BC1[..74] at 0x34dd2b0: 3, dup1_s2[..10]:h1bc1[..67] at 0x3564a58: 0, dup1_s1[..68]:H
+1BC2[..16] at 0x34dd2e8: 2}
+Traceback (most recent call last):
+  File "dom_anneal_test.py", line 108, in <module>
+    simulator.anneal(T_start=273+start+offset, T_finish=273+stop+offset, delta_T=step, n_steps_per_T=n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 609, in anneal
+    self.simulate(T, n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 575, in simulate
+    self.step(T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 491, in step
+    domain1, domain2, is_hybridized = self.select_event_domains(oversampling=oversampling)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in select_event_domains
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in <listcomp>
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 424, in effective_activity
+    raise e
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 400, in effective_activity
+    return math.sqrt(dist)
+TypeError: a float is required
+
+
+
+
+Simulated 30000 of 100000 steps at T=340 K (43337 state changes in 1330000 total steps)
+WARNING: TypeError a float is required when calculating effective_activity based on distance.
+- self = h1bc1[..86], other_domain = H1BC1[..27]
+- self.Partner: None, other_domain.Partner: None
+- self.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x0000000003669400>, other_domain.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x0000000003669400>
+self.distance(other_domain): None
+self.distance(other_domain): None
+self.Complex strands:
+--- dup1_s1[..46]: [dup1_s1[..46]:H1BC1[..87] at 0x356d048, dup1_s1[..46]:H1BC2[..96] at 0x356d080]
+--- dup1_s1[..2]: [dup1_s1[..2]:H1BC1[..27] at 0x35680b8, dup1_s1[..2]:H1BC2[..67] at 0x35680f0]		# Strand dup1_s1[..2] is by it self.
+--- dup1_s2[..20]: [dup1_s2[..20]:h1bc2[..40] at 0x356d6d8, dup1_s2[..20]:h1bc1[..22] at 0x356d710]		# Uh... this isn't connected to anything either?
+--- dup1_s2[..6]: [dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, dup1_s2[..6]:h1bc1[..86] at 0x35e5518]
+other_domain.Complex strands:
+--- dup1_s1[..46]: [dup1_s1[..46]:H1BC1[..87] at 0x356d048, dup1_s1[..46]:H1BC2[..96] at 0x356d080]
+--- dup1_s1[..2]: [dup1_s1[..2]:H1BC1[..27] at 0x35680b8, dup1_s1[..2]:H1BC2[..67] at 0x35680f0]
+--- dup1_s2[..20]: [dup1_s2[..20]:h1bc2[..40] at 0x356d6d8, dup1_s2[..20]:h1bc1[..22] at 0x356d710]
+--- dup1_s2[..6]: [dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, dup1_s2[..6]:h1bc1[..86] at 0x35e5518]
+self.connected_domains:
+--- domains: [dup1_s2[..6]:h1bc1[..86] at 0x35e5518, dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, dup1_s1[..46]:H1BC2[..96] at 0x356d080, dup1_s1[..46]:H1BC1[..87] at 0x356d048]
+--- parents: {	dup1_s1[..46]:H1BC2[..96] at 0x356d080: dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, 
+				dup1_s1[..46]:H1BC1[..87] at 0x356d048: dup1_s1[..46]:H1BC2[..96] at 0x356d080, 
+				dup1_s2[..6]:h1bc2[..44] at 0x35e54e0: dup1_s2[..6]:h1bc1[..86] at 0x35e5518}
+--- distances: {
+				dup1_s2[..6]:h1bc1[..86] at 0x35e5518: 0, 
+				dup1_s2[..6]:h1bc2[..44] at 0x35e54e0: 1
+				dup1_s1[..46]:H1BC2[..96] at 0x356d080: 2, 
+				dup1_s1[..46]:H1BC1[..87] at 0x356d048: 3, 
+				}
+other_domain.connected_domains:
+--- domains: [dup1_s1[..2]:H1BC1[..27] at 0x35680b8, dup1_s1[..2]:H1BC2[..67] at 0x35680f0]
+--- parents: {dup1_s1[..2]:H1BC2[..67] at 0x35680f0: dup1_s1[..2]:H1BC1[..27] at 0x35680b8}
+--- distances: {dup1_s1[..2]:H1BC1[..27] at 0x35680b8: 0, dup1_s1[..2]:H1BC2[..67] at 0x35680f0: 1}		# Strand dup1_s1[..2] is by it self.
+Traceback (most recent call last):
+  File "dom_anneal_test.py", line 108, in <module>
+    simulator.anneal(T_start=273+start+offset, T_finish=273+stop+offset, delta_T=step, n_steps_per_T=n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 609, in anneal
+    self.simulate(T, n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 575, in simulate
+    self.step(T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 491, in step
+    domain1, domain2, is_hybridized = self.select_event_domains(oversampling=oversampling)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in select_event_domains
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in <listcomp>
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 445, in effective_activity
+    print("--- distances:", distances)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 421, in effective_activity
+    """
+TypeError: a float is required
+
+
+
+Simulated 30000 of 100000 steps at T=340 K (43337 state changes in 1330000 total steps)
+WARNING: TypeError a float is required when calculating effective_activity based on distance.
+- self = h1bc1[..86], other_domain = H1BC1[..27]
+- self.Partner: None, other_domain.Partner: None
+- self.Strand.Complex: <nascent.nascent_sim.dom_anneal_models.Complex object at 0x0000000003669400>, other_domain.Strand.Complex: <nascent.nascent_sim.dom_annea
+l_models.Complex object at 0x0000000003669400>
+self.distance(other_domain): None
+self.distance(other_domain): None
+self.Complex strands:
+--- dup1_s1[..46]: [dup1_s1[..46]:H1BC1[..87] at 0x356d048, dup1_s1[..46]:H1BC2[..96] at 0x356d080]
+--- dup1_s1[..2]: [dup1_s1[..2]:H1BC1[..27] at 0x35680b8, dup1_s1[..2]:H1BC2[..67] at 0x35680f0]
+--- dup1_s2[..20]: [dup1_s2[..20]:h1bc2[..40] at 0x356d6d8, dup1_s2[..20]:h1bc1[..22] at 0x356d710]
+--- dup1_s2[..6]: [dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, dup1_s2[..6]:h1bc1[..86] at 0x35e5518]
+other_domain.Complex strands:
+--- dup1_s1[..46]: [dup1_s1[..46]:H1BC1[..87] at 0x356d048, dup1_s1[..46]:H1BC2[..96] at 0x356d080]
+--- dup1_s1[..2]: [dup1_s1[..2]:H1BC1[..27] at 0x35680b8, dup1_s1[..2]:H1BC2[..67] at 0x35680f0]
+--- dup1_s2[..20]: [dup1_s2[..20]:h1bc2[..40] at 0x356d6d8, dup1_s2[..20]:h1bc1[..22] at 0x356d710]
+--- dup1_s2[..6]: [dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, dup1_s2[..6]:h1bc1[..86] at 0x35e5518]
+self.connected_domains:
+--- domains: [dup1_s2[..6]:h1bc1[..86] at 0x35e5518, dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, dup1_s1[..46]:H1BC2[..96] at 0x356d080, dup1_s1[..46]:H1BC1[..87] at
+ 0x356d048]
+--- parents: {dup1_s1[..46]:H1BC2[..96] at 0x356d080: dup1_s2[..6]:h1bc2[..44] at 0x35e54e0, dup1_s1[..46]:H1BC1[..87] at 0x356d048: dup1_s1[..46]:H1BC2[..96] a
+t 0x356d080, dup1_s2[..6]:h1bc2[..44] at 0x35e54e0: dup1_s2[..6]:h1bc1[..86] at 0x35e5518}
+--- distances: {dup1_s1[..46]:H1BC2[..96] at 0x356d080: 2, dup1_s2[..6]:h1bc1[..86] at 0x35e5518: 0, dup1_s1[..46]:H1BC1[..87] at 0x356d048: 3, dup1_s2[..6]:h1b
+c2[..44] at 0x35e54e0: 1}
+other_domain.connected_domains:
+--- domains: [dup1_s1[..2]:H1BC1[..27] at 0x35680b8, dup1_s1[..2]:H1BC2[..67] at 0x35680f0]
+--- parents: {dup1_s1[..2]:H1BC2[..67] at 0x35680f0: dup1_s1[..2]:H1BC1[..27] at 0x35680b8}
+--- distances: {dup1_s1[..2]:H1BC1[..27] at 0x35680b8: 0, dup1_s1[..2]:H1BC2[..67] at 0x35680f0: 1}
+Traceback (most recent call last):
+  File "dom_anneal_test.py", line 108, in <module>
+    simulator.anneal(T_start=273+start+offset, T_finish=273+stop+offset, delta_T=step, n_steps_per_T=n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 609, in anneal
+    self.simulate(T, n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 575, in simulate
+    self.step(T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 491, in step
+    domain1, domain2, is_hybridized = self.select_event_domains(oversampling=oversampling)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in select_event_domains
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 274, in <listcomp>
+    for d in candidates]
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 445, in effective_activity
+    print("--- distances:", distances)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_models.py", line 421, in effective_activity
+    """
+TypeError: a float is required
+
+
+
+
+domain1.Complex: C[85] domain2.Complex: C[85]
+domain1.Strand: dup1_s2[..45] domain2.Strand: dup1_s1[..52]
+domain1.Strand.connected_oligos(): [C[85]:dup1_s1[..52] at 0x354f438]
+domain2.Strand.connected_oligos(): [C[85]:dup1_s2[..45] at 0x35d1e48]
+domain1.Complex.Strands: {C[85]:dup1_s1[..52] at 0x354f438, C[6]:dup1_s2[..18] at 0x35d1240, C[85]:dup1_s2[..45] at 0x35d1e48}   # dup1_s1[..52], dup1_s2[..45], dup1_s2[..37]
+# Problem: Complex.Strands says there are strands 
+# -- dup1_s2[..18] seems to have been moved out...
+domain1.Complex.Strands_history: 
+[
+('New complex from hybridizing two individual strands', '{C[85]:dup1_s2[..18] at 0x35d1240}', 1), 						# dup1_s2[..18]
+('+d.hyb att (c)', 'C[85]:dup1_s1[..50] at 0x354b390', 2), 																# dup1_s2[..18], dup1_s1[..50]
+('merge', "[('New complex from hybridizing two individual strands', '{C[84]:dup1_s1[..52] at 0x354f438}', 1), 					# dup1_s1[..52]
+			('+d.hyb att (c)', 'C[84]:dup1_s2[..45] at 0x35d1e48', 2), 															# dup1_s1[..52], dup1_s2[..45]
+			('+d.hyb att (b)', 'C[84]:dup1_s1[..68] at 0x35433c8', 3), 															# dup1_s1[..52], dup1_s2[..45], dup1_s1[..68]
+			('-detach case (a/b)', 'None:dup1_s1[..68] at 0x35433c8', 2),														# dup1_s1[..52], dup1_s2[..45]
+			('+d.hyb att (a)', 'C[84]:dup1_s2[..37] at 0x35ea710', 3), 															# dup1_s1[..52], dup1_s2[..45], dup1_s2[..37]
+			('-detach case (a/b)', 'None:dup1_s2[..37] at 0x35ea710', 2)]", 													# dup1_s1[..52], dup1_s2[..45]
+			4), 																										# dup1_s2[..18], dup1_s1[..50], dup1_s1[..52], dup1_s2[..45]
+('-detach case (a/b)', 'None:dup1_s1[..50] at 0x354b390', 3)															# dup1_s2[..18],              , dup1_s1[..52], dup1_s2[..45]
+]
+AssertionError:
+self.n_hybridized_domains(), self.N_domains_hybridized = 214, 214
+Traceback (most recent call last):
+  File "dom_anneal_test.py", line 109, in <module>
+    simulator.anneal(T_start=273+start+offset, T_finish=273+stop+offset, delta_T=step, n_steps_per_T=n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 735, in anneal
+    self.simulate(T, n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 706, in simulate
+    raise(e)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 701, in simulate
+    self.step(T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 647, in step
+    raise e
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 638, in step
+    == domain1.Complex.Strands
+AssertionError
+
+
+
+Simulating at 333 K for 100000 steps (ramp is 333 K to 313 K in -1 K increments)
+domain1.Complex: C[86] domain2.Complex: C[86]
+domain1.Strand: C[86]:dup1_s1[694] domain2.Strand: C[86]:dup1_s2[855]
+domain1.Strand.connected_oligos(): [C[86]:dup1_s2[855] at 0x3529470]
+domain2.Strand.connected_oligos(): [C[86]:dup1_s1[694] at 0x35172b0]
+
+# dup1_s2[855] and dup1_s1[694] are the only connected, but Complex.Strands also have dup1_s1[387] (which is now on C[32]).
+# When dup1_s2[617] is removed, something happens... "-detach case (a/b)" always seems to be the last entry before crash.
+
+domain1.Complex.Strands: {
+	C[32]:dup1_s1[387] at 0x35159b0, 
+	C[86]:dup1_s1[694] at 0x35172b0, C[86]:dup1_s2[855] at 0x3529470}
+domain1.Complex.Strands_history: 
+[
+"['C[86]:dup1_s1[387]']", 
+"['C[86]:dup1_s1[387]', 'C[86]:dup1_s2[617]']", 
+"['C[86]:dup1_s1[387]', 'C[86]:dup1_s1[694]', 'C[86]:dup1_s2[617]', 'C[86]:dup1_s2[855]']", 
+"['C[86]:dup1_s1[387]', 'C[86]:dup1_s1[694]', 'C[86]:dup1_s2[855]']"
+]
+domain1.Complex.Strands_changes: 
+[
+(0, 'New complex from hybridizing two individual strands', '{C[86]:dup1_s1[387] at 0x35159b0}', 1), 
+(0, '+d.hyb att (c)', 'C[86]:dup1_s2[617] at 0x351e748', 2), 
+('merge', "[
+	(0, 'New complex from hybridizing two individual strands', '{C[36]:dup1_s1[694] at 0x35172b0}', 1), 
+	(0, '+d.hyb att (c)', 'C[36]:dup1_s2[855] at 0x3529470', 2)
+	]", 4), 
+(0, '-detach case (a/b)', 'None:dup1_s2[617] at 0x351e748', 3)		
+]
+AssertionError:
+self.n_hybridized_domains(), self.N_domains_hybridized = 140, 140
+Traceback (most recent call last):
+  File "dom_anneal_test.py", line 109, in <module>
+    simulator.anneal(T_start=273+start+offset, T_finish=273+stop+offset, delta_T=step, n_steps_per_T=n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 736, in anneal
+    self.simulate(T, n_steps_per_T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 707, in simulate
+    raise(e)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 702, in simulate
+    self.step(T)
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 648, in step
+    raise e
+  File "C:\Users\scholer\Dev\src-repos\na_strand_model\nascent\nascent_sim\dom_anneal_sim.py", line 638, in step
+    == domain1.Complex.Strands
+AssertionError
+
+
+
+
+

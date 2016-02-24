@@ -1,0 +1,121 @@
+Debugging issue:
+* Duplex equilibrium is shifted when splitting up the duplex into sub-domains.
+
+
+
+Thoughts:
+* Is it a throttling issue?
+-- Disabled throttling
+* Is it a caching issue?
+-- calculate_c_j?
+-- intercomplex_activity?
+* Is it an issue just a side-effect of bad state fingerprinting?
+-- Fingerprints seem OK.
+* Is it just too low intracomplex activity? (too high loop energy?)
+-- Activity is indeed very low, 0.0186 when it should've been 1.0
+
+
+
+Looking at post_simulation_stats.yaml, it looks like the ReactionAttrs for stacking reactions has an unusual value for is_intra: [s, 'True', complex] - that is, is_intra='complex'. 
+Not sure if this is what is causing the problem, though.
+
+
+Temporary debugging code changes:
+
+* reactionmgr.calculate_c_j: De-activated cache
+# self.cache['stochastic_rate_constant'][c_j_cache_key] = (c_j, reaction_attr)  # TODO: Re-enable cache
+
+* reactionmgr.intracomplex_activity: De-activated cache:
+# self.cache['intracomplex_activity'][reaction_spec_pair] = activity  ## TODO: Re-enable cache
+
+* Setting activity = 1 if the calculated activity was > 0.
+	activity = 1   ## TODO: Fix intracomplex activity
+
+* Reducing stacking rate (so I don't need to rely on throttling).
+	self.stacking_rate_constant = params.get('stacking_rate_constant', 1e3)
+
+
+=== Below was moved from post_reaction_processing docstring: ===
+
+How to throttle without shifting equilibrium:
+* Both reaction edges (both directions) must be throttled equally.
+* This can be tricky for cyclic areas of the graph e.g.:           k11      k12
+    if hybridization happens at constant rate left-to-right       ,----- B -----.
+    but at dehybridize at different rates in the reaction graph  0               AB
+    to the right: k₊₁₁ == k₊₂₁ and  k₊₁₂ == k₊₂₂                  `----- A -----´
+                    k₋₂₂ + k₋₂₁ == k₋₁₂ + k₋₁₁                      k21      k22
+    The last because self-consistency dictates clock-wise cycle == counter-clockwise cycle, so:
+        k₊₁₁ + k₊₁₂ + k₋₂₂ + k₋₂₁ == k₊₂₁ + k₊₂₂ + k₋₁₂ + k₋₁₁
+    <=>      +      + k₋₂₂ + k₋₂₁ ==      +      + k₋₁₂ + k₋₁₁
+* Perhaps the problem is that *any* random fluctuation produced by different throttle_factors
+    in the two directions will produce a shift in apparent equilibrium?
+
+How to ensure symmetric throttling (the same throttle_factor in both directions)?
+    a. Have a single, mutable throttle_factor, either as a list or custom object.
+    b. Have a "shared edge attrs" dict associated with each directed edge.
+    c. When calculating new throttle factor in post_reaction_processing, update
+        self.reaction_throttle_cache[] for edge_key in both directions, where
+            edge_key = (reaction_spec_pair, reaction_attr)
+    d. When applying throttle_factor in calculate_c_j, check throttle in both directions
+        and use either the smallest, the largest, or the average of the two.
+Pros and cons:
+    - Options (b) and (d) both require knowing reaction_spec_pair in both directions,
+        which is not provided by default to calculate_c_j.
+    + Alternatively, the shared edge attr dict in (b) could be used as a simple mutable objecct, similar to (a).
+    + Option (b) could be used for other shared attrs as well, although this is seems limited.
+    + Option (a) is closest to the current implementation, just use "throttle_factor[0]" instead of
+        "throttle_factor". It still requires checking to ensure that we only create one list
+        for both edges, but that should be easy using self.endstates_by_reaction[source_state],
+        and only needs to be done once.
+    o Option (d) might be nice for the extra stats, although this is redundant with traversals count.
+    - Option (c) and (d) requires the most additional logic.
+Selection option (a) for now...
+
+Still doesn't work, throttling still shifts the equilibrium...
+
+New idea: Do we properly update the hybridized reaction? Maybe we need to calculate new c_j?
+We could also keep constant c_j (without applying throttle) and just apply throttle_factors
+in the simulator when we calculate a_j and a_sum ?
+But, throttle_factor should increase state life-times by decreasing reaction propensities.
+So if a reaction is not updated after decreasing throttle_factor..
+For hybridization reactions:
+    decrease-throttle, then update_hybridization_reaction.
+For de-hybridization reactions:
+    decrease-throttle, then update reactions
+
+Other idea: Is it a cumulative effect?
+E.g. if every time a reaction is performed and the throttle altered, then the system is thrown slightly off
+* I.e. some sort of "burned bridges" effect.
+
+Question: If I "freeze" the throttles, will the system equilibrium correct it self?
+* Freezing the throttle also seems to freeze the equilibrium. It does not revert it.
+
+What if I turn throttling completely off?
+(Probably won't work if looking at cummulative stats, needs rolling window)
+
+What if you load the throttle factors from one run and use it in the next?
+* Does the shift in equilibrium still occur?
+* Implement saving and loading of throttle factors
+* (complex state fingerprints must be the same betwen runs)
+
+What happens if you only have intra-complex reactions?
+Can simulate that by covalently "linking" two strands.
+
+What about single-domain duplexes? Does throttling affect these?
+
+Is the shift only observed when we have a cycle in the reaction graph?
+
+What is the nature of throttling? Does it change energies or only act catalytically?
+* It really should be the latter, but check to make sure.
+* Throttle factor could be perceived as having the same effect as loop activity,
+    which could be interpreted as shape energy. But the throttle is applied
+    in both directions, unlike loop activity.
+* "Narrowing the connecting tubes does not change the volume of the containers."
+
+Are you doing any calculations or stats data processing that induces the shift,
+* Is it an actual shift in the system or only perceived, or just a dumb bug?
+* Are you accessing self.cache['stochastic_rate_constant'] outside of calculate_c_j?
+
+Hey, when we find c_j below, we use:
+    c_j = self.possible_hybridization_reactions[reacted_pair]
+However, this does not change during run. Set that up so it does.

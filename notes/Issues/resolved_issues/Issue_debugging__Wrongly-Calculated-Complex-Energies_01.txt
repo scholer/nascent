@@ -1,0 +1,13 @@
+
+
+Issue: Wrongly calculated complex energies
+
+* Found bug in ReactionMgr.post_reaction_processing, the result cases for breaking (dehybridization/unstacking) was inverted: 
+* Yay, that was simply it. Now all my state nodes in the reaction graph have a unique energy.
+
+
+Temporary debugging code changes:
+* ReactionMgr.update_possible_hybridization_reactions:1160
+	## TODO: Re-enable domspec change check
+		if False and new_domspec == old_domspec and reacted_pair is not None:
+

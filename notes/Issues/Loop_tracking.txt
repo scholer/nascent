@@ -1,0 +1,81 @@
+
+Reactions are typically done through the chain:
+ReactionMgr.hybridize/stack_and_process(reactant_pair, reaction_attr, reaction_spec_pair)
+ -> ComponentMgr.hybridize/dehybridize/stack/unstack(elem1, elem2)
+ 	 (Updates self.ends5p3p_graph and self.interface_graph incl merge/split ifnodes by delegation)
+ 	 -> ComponentMgr.join/break_complex_at(reactant_pair)
+		 return result (dict with changed_complexes, etc.)
+ 	 return result
+ -> ReactionMgr.post_reaction_processing(changed_domains, reacted_pair, reacted_attr, reacted_spec_pair)
+	 (asserts state changes and updates energies for new/changed complexes and updates reaction graph)
+ -> ReactionMgr.update_possible_hybridization+stacking_reactions(changed_domains, reacted_pair, reacted_attr, reacted_spec_pair)
+	 (updates possible_hybridization/stacking_reactions dicts)
+	 -> ReactionMgr.calculate_c_j
+		 -> ReactionMgr.calculate_hybridization/stacking_c_j  ## This could be inlined within calculate_c_j..
+			 -> ReactionMgr.intracomplex_activity(elem1, elem2, reaction_type, reaction_spec_pair)
+				 -> GraphMgr.intracomplex_activity(elem1, elem2, reaction_type, reaction_spec_pair)
+					 (detects loops to split from the complex.loops dict)
+					 return activity
+					 (could also return a dict describing loops the new loop being formed and existing loops being split)
+				 store activity in cache and return activity
+			 calculate c_j = k_on * activity and return c_j
+		 (saves c_j in cache; then applies throttle_factor)
+		 return c_j
+return reacted_pair, result
+
+Currently working on: Loop tracking
+* Loops are tracked on a per-complex basis;
+* What loops do we need to track?
+* Can loops be "obsoleted"?
+	- What happens when a loop (Λ₀ consisting of e1+e2) is "split" (by e3, forming Λ₁ and Λ₂ loops)?
+	- What if e3 is broken? What if e1 or e2 are broken?
+	- Maybe have a dict
+* What happens when ifnodes in interface_graph are merged or split (un-merged)?
+	- Merge follows hybridization or stacking, split follows dehybridization or unstacking.
+* How to know whether a reaction will split existing loops?
+* Where/when would it be good to add loop tracking logic?
+	- It would be nice to save the "loop_info" dict in ReactionMgr.intracomplex_activity when we are also storing intracomplex_activity.
+	- However, then we wouldn't be able to create loops using ComponentMgr.hybridize/dehybridize/stack/unstack.
+		Well, we wouldn't be able to do that anyway, since we don't have access to any loop information here.
+		Then we would essentially have to re-analyze the reaction to see what loops are formed by a particular reaction.
+	- Note that the loop_info dict has instance-specific content such as sets and lists of ifnodes;
+		these may not be readily cachable, nor transferable from one complex to another.
+		Either:
+			(a) find a way to make path of ifnodes cacheable, or
+			(b) store the "loop_effects" info dict on a per-complex, per-state, per-instance basis.
+	- We could update complex loops in ReactionMgr.post_reaction_processing?
+		However, since we currently don't have any means of making an instance-independent, "state specie"
+		loop_effects dict, and can only cache activity as a value, there is no guarantee that we actually have
+		a loop_effects dict available that applies to the current complex configuration of domain instances.
+		Can we use networkx.algorithms.cycles to find relevant cycles?
+		We could save a small flag noting whether the reaction will cause loops to split up.
+		Although we would still have to re-calculate the shortest-path loop in any case.
+	- Maybe loops should be updated in ReactionMgr.hybridize/stack_and_process(reactant_pair, reaction_attr, reaction_spec_pair)
+		where reaction_spec_pair is still available? Alternatively, pass a check_existing_loops flag to
+		ComponentMgr.hybridize/dehybridize/stack/unstack(elem1, elem2).
+* When forming a loop.
+	- Need to update ComponentMgr.join_complex_at(reactant_pair) to merge the Complex.loops dict.
+	- Update ReactionMgr.post_reaction_processing to update Complex.loops dict using the stored loop_info dicts for the reaction.
+* When breaking a loop.
+	- Need to update ComponentMgr.break_complex_at(reactant_pair) to split the Complex.loops dict.
+	- Update ReactionMgr.post_reaction_processing to update Complex.loops dict, determining the affected loops from the reacted_pair ifnodes.
+
+
+## Making Ifnodes cacheable: ##
+* An arbitrary complex is given a list of ifnode state "hashes".
+* Map each state hash to a current ifnode.
+** How about defining InterfaceNode.state_fingerprint() as:
+	hash(frozenset(ifnode.domain_end.state_fingerprint() for ifnode in self.deletated_edges.keys())) ?
+** Then, have the reverse lookup in Complex:
+	Complex.ifnode_by_ifnode_state_hash = {ifnode.}
+	And also define Complex.ifnode_by_state_hash(state_spec_hash):
+		# "hash", "state_spec_hash", "state fingerprint", "state_spec" and "state specie" are all used interchangeably.
+		# "state specie" specifically refers to a group of instance with a particular state, or "an instance with a particular state".
+		# "hash" and "state_fingerprint" refers to a numeric value used to identify members of a particular state specie.
+		# "state spec" is meant to mean "state specification hash/fingerprint" but also a mnemonic for "state specie".
+		# The plural "state_specs", "reaction_state_specs" or simply "reaction_specs" typically refers to a pair of
+		# state_specie_hash, although "*_pair" can also be used as postfix instad of plural "*s" to make clear that we
+		# have a "pair", which in this context *always* means a frozenset of size 2 where the order does not matter.
+		try:
+			self.ifnode_by_ifnode_state_hash[]
+

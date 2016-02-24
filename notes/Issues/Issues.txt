@@ -1,0 +1,165 @@
+
+## MAJOR: ##
+* Loops are not properly tracked/created/deleted.
+* Make ifnodes cacheable so we don't have to re-calculate loop_effects when forming a new loop.
+* Better visualization of reaction graph.
+* Test coverage.
+* Symmetric graphs - labelling and fingerprinting. -- I think I got this fixed with the new label_complex_nodes method.
+* Activity for existing loop-splitting reaction not properly calculated. (I think I got this almost done, at least approximately.)
+
+
+
+## New features/improvements: ##
+* Create complex on intra-strand hybridization.
+* Add permanent logging support (like printd). Work-In-Process, currently using a mix of logging and debug.do_print.
+* REFACTORING: Rename nx_utils module to nx_drawing
+* REFACTORING: Move thermodynamic_utils module out from /graph_sim_nx/ to /energymodel/.
+* REFACTORING: Move constants module out of /graph_sim_nx/ and into main /nascent/ directory.
+* Color reaction-graph nodes:
+	Generally: Z=Energy (dG, at a certain T)
+	Color-schemes:
+	(a) HSV: Value = simulated partition (black = long time), Hue = dS (how much will energy vary with T), Sat = enthalpy.
+	(b) Equilibrium: Hue denotes difference between simulated partition and thermodynamic partition (at equilibrium).
+	(c) Inconsistency detection: Red = More than one entry in node['dH_dS_count']
+* Do not call graphviz *during* simulation.
+	Save the different complex states (e.g. as dot files), but do not call graphviz until simulation is complete.
+	Complexes vs reaction graph.
+	Consider using a different thread to write graphs to disk (dot/yaml, NOT graph drawings).
+		- Probably not needed, disk writing is cached.
+* Better calculation of activity - continuous functions rather than just three levels, (0) LRE_len > SRE_len, (1) LRE_len_sq > SRE_len_sq, (2) otherwise.
+
+
+
+
+## Issues: ##
+* Complex fingerprints are not properly updated? (At least according to ReactionMgr.print_complexes_stats() ..) - Hopefully this is fixed now?
+* Complex fingerprints seem to change from run to run. They should be invariant for the same complex state. Maybe because python adds a random seed to all hashes to prevent hash-collision attacks. See https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHASHSEED.
+* Provide option to set the seed value for random(). (However, I don't think that would be enough to guarantee same trajectories between runs, since the order of dicts and sets is not guaranteed to be ) order to get constant
+* PHYSICAL CONSISTENCY: Duplex equilibrium is shifted when splitting up the duplex into sub-domains.
+* Connectivity rings state fingerprinting doesn't discriminate for multi-edges. - Fixed with new label_complex_nodes() method!
+* GRAPH SYMMETRY: Domain state fingerprinting ICID labelling is not optimal for symmetric complexes. I need an consistent enumerator function.
+** Even for symmetric complexes, we can have "pairs" that are properly described by a fingerprint.
+** Maybe split the complex up into its asymetric units (e.g. A, B) and distinguish:
+	{A1, A2} == {B1, B2} (intra-unit), {A1, B2} == {B1, A2}  (inter-unit), but {A1, A2} != {A1, B2}.
+** There is probably a lot of theory on symmetry here...
+* Check that we don't have conflicting reaction_attrs for the same reaction_spec_pairs.
+
+
+
+### Issues - Tracebacks: ###
+
+  File ".\nascent\graph_sim_nx\reactionmgr.py", line 2221, in check_system
+    assert h1end3p.stack_partner is h1end5p and h1end5p.stack_partner is h1end3p
+AssertionError
+
+
+
+
+## FIXED ISSUES/BUGS: ##
+* FIXED: Duplex ends can stack even though they are not supposed to.
+** (a) When two neighboring duplex-domains are both hybridized they can stack in both ends!
+** (b) When two neighboring duplex-domains are stacked, their furthest-away/opposing ends can still stack!
+** The spurious stacking activity is the same value in both cases! (9.204e2) - Caching issue as well?
+** FIXED: When calculating intracomplex_activity for stacking interactions, adding the first and last segments
+    if they are both rigid.
+* FIXED: reaction_graph is now a simple DiGraph, not a MultiDiGraph. There was simply no need for that.
+	I now have reaction_spec_pair, reaction_attr as edge_attrs (rather tha the edge key),
+	and checks whenever we traverse an edge that the reaction_spec_pair and reaction_attr is the same
+	as when the edge was originally created.
+* FIXED: Added ReactionMgr.endstate_by_reaction dict-of-dict where:
+		endstate_by_reaction[start_state][(reaction_spec_pair, reaction_attr)] = end_state
+	This makes it easier to find products instead of looking over all edges as:
+		target_by_key = {key: target for target, edges in self.reaction_graph[source_state].items() for key in edges}
+* FIXED: Complex state energies (or at least entropies) not properly calculated.
+* FIXED: Complex state energies should be in consistent units (either cal/mol OR units of R).
+* FIXED: Complex state entropies are all over the place for the same complex.
+* FIXED: Switch to units of R when calculating hybridization and stacking energies.
+* FIXED: Throttle shifts equilibrium. (MAJOR)
+
+
+
+## Implemented features: ##
+
+* Reaction graph (nodes are complex states, edges are reaction_spec_pairs).
+* Detect reaction cycles (for throttling)
+** Reaction cycle detection was implemented in Complex.assert_state_change() and ReactionMgr.post_reaction_processing().
+** However, this was then not really needed because all reactions are now bi-directional.
+** You can still look for "net cyclic transport" in the reaction cycles using the reaction graph (which keeps track of the flow through all edges).
+* Move sim_system_time to systemmgr/reactionmgr
+* StatsWriter: Collect time-point stats for complexes, as you do for strands and domains.
+* reaction_graph.reaction_attr_str and reaction_graph.reaction_edge_label functions
+* Added more reaction attrs to edges:volume activity / loop activity + evt. steric activity factor, dS, dH, c_j, Nric / traversals, label.
+* FIXED: De-hybridization should account for stacking (it now does: the stacked state cannot de-hybridize). But, check that stacking properly stabilizes duplexes.
+
+
+
+
+
+
+## TODO: There might be a major issue for symmetric complexes.
+## Scenario: A domain hybridizes forming a symmetric complex. The domain dehybridizes and
+## hybridizes somewhere else. However, since the domain object id is used for the icid part of the
+## domain-state fingerprint for symmetric complexes, the saved stuff and the reaction graph will
+## assume it has hybridized to the old position. Reactions might be very wrong!
+## I need to find a better way to enumerate nodes in a symmetric graph!
+## One way would be to just start enumerating and keeping track of enumerations depending on the
+## node connections (rings). If a new domain comes along an inserts itself somewhere in a symmetric
+## complex, if that place was previously enumerated, it should be possible to re-enumerate it.
+## Question: Should enumeration be unique to a particular state?
+## It might be very hard to make work if the same node has the same enumeration between states.
+## Of course, if you always start from the node with the lowest label last time, then the labels
+## may very well be similar from state to state.
+## Question: Should we enumerate/label nodes in all states or only symmetric states?
+## We keep track of symmetric complex labels/enumerations globally using a dict
+##      (complex-hash, neighbor-rings-hash) => label
+## And within the complex:
+##      label => domain obj.
+## When making the neighbor-rings-hash, we include labels for nodes that have been labelled.
+## That should be sufficient to break the symmetry. Right?
+## If we go through the complex from node to neighbor node recursively, we ensure that
+## there will always be a labeled node next to the current node to break symmetry.
+## Even if previous/neighboring nodes are symmetric (e.g. a linear path connected to a symmetric circle),
+## the act of labelling nodes in the circle should break the symmetry.
+## Question: How much can we re-use labels? Do we need to re-use labels? We have to calculate the neighbor-hash
+## anyways, so there might not be that much to gain performance wise by re-using/propagating labels between
+## states.
+## Question: If we just start out by labelling all nodes in a new graph/complex state,
+## can that allow us to not calculate neighbor-rings all together?
+## I guess it might be very hard for a new graph/complex state to determine if... it has a labelling..
+## No, wait. We just label the graph and save the labelling under the complex-hash..
+## But we still need to know how to apply the labels to nodes in the graph..
+## So, we have a graph with a hash that is already present under
+##      graph_labels[graph-hash] = {....}
+## How do we apply this to the graph?
+## Hey, can we decompose the graph into a spanning tree and use that recursively for labelling?
+## Note that although the node order of the "neighbor rings" I'm calculating might be the same
+## as a spanning tree, the node rings includes all edges in the original graph when calculating
+## a ring for a node. A spanning tree cannot replace the "calculate node neighbor rings hash".
+##
+## Thought: Can we dynamically determine the required ring radius to produce a node-unique nr-hash?
+## I.e. if the next ring does not have any new nodes, does that mean that all nodes are included?
+## Or we can just keeep count and when the rings include all nodes (has the same number as nodes
+## in the graph), then there is surely nothing new to gain by extending the radius.
+## So that allows us to know the maxiumum radius after which there is nothing more to gain.
+## Can we determine the minimum radius?
+## I'm thinking, we keep track of nodes with a particular neighbor-ring hash (nr-hash)
+##      nr-hash: (radius, [list/set of nodes with that hash])
+## If the list has more than 1 element, then we re-calculate the nr-hash for radius+1.
+## This might lead to a lot of re-calcualtion. Can we save the neighbor-rings data-structure
+## for all domains and just expand to the next ring when needed?
+## Question: Can we save the "per-node minimum nr-hash radius" for later use?
+## - We can certainly save a {domain-name => minimum_radius} dict.
+## - And we can save information about symmetric complexes as a set of
+##      symmetric_complexes = {complex-hash, ...}   for all encountered symmetric complexes.
+## Can we save the nr-hashes? Might be hard, since we use the nr-hashes as the base identifier.
+## Note that it seems we don't really need a lot of unique labels to break symmetry, see
+## e.g. (Albertson & Collings, "Symmetry Breaking in Graphs", 1996).
+## However, I don't have any plans to minimize the number of unique labels; in fact,
+## the plan is to enumerate the nodes with one color/label/integer per node.
+## The hard part is just to figure out how to re-label.
+## Maybe if we just always start with the node that has the minimum (min_radius, domain-name, nr-hash)...
+## That should guarantee that we get the same start point each time.
+## Note that we actually have two nr-hashes: one that just includes nr-rings domain-names,
+## and another that includes nr-rings with enumerated labels. Maybe even a nr-hash during labelling
+## and another "after labelling".
+##

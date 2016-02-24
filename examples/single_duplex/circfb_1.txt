@@ -1,0 +1,19 @@
+Strand	Domains	Sequence
+templ	A, T, B, C, D, E	CGACTGGAAAGCGGGC, TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT, TGACCATGATTACGAA, TGGCGCCCAATACGCA, TGATTTATAAGGGATTTTGCCGATTTCGGAAC, GGCACGACAGGTTTCC
+splint	c, e, a, b	TGCGTATTGGGCGCCA, GGAAACCTGTCGTGCC, GCCCGCTTTCCAGTCG, TTCGTAATCATGGTCA
+
+####          Circfb design (Circular FoldBack):        ####
+#                            E          A          T
+# 5' .---------------------------3'5'---------------------.
+#    |                 .----------------------.            |
+#    |                (                        )           |
+#    |                 `---------5' 3'--------'            |
+#    |_____________________________________________________|
+#            D               C          B
+# Domains:
+# - A, a	CGACTGGAAAGCGGGC, GCCCGCTTTCCAGTCG
+# - T, TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+# - B, b	TGACCATGATTACGAA, TTCGTAATCATGGTCA
+# - C, c	TGGCGCCCAATACGCA, TGCGTATTGGGCGCCA
+# - D	TGATTTATAAGGGATTTTGCCGATTTCGGAAC
+# - E, h2b	GGCACGACAGGTTTCC, GGAAACCTGTCGTGCC
