@@ -37,11 +37,11 @@ import math
 
 # Relative imports
 from .utils import (sequential_number_generator, sequential_uuid_gen)
-from .constants import (PHOSPHATEBACKBONE_INTERACTION,
-                        HYBRIDIZATION_INTERACTION,
-                        STACKING_INTERACTION,
-                        interactions,
-                        HELIX_XOVER_DIST, HELIX_WIDTH, HELIX_STACKING_DIST)
+from .constants import (
+    PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
+    interactions,
+    DIRECTION_SYMMETRIC, DIRECTION_UPSTREAM, DIRECTION_DOWNSTREAM,
+    HELIX_XOVER_DIST, HELIX_WIDTH, HELIX_STACKING_DIST)
 from .strandcolor import StrandColor
 
 
@@ -52,12 +52,32 @@ colormgr = StrandColor()
 
 
 
-class Strand(nx.MultiGraph):
+class Strand(nx.MultiDiGraph):
     """
     Graph representing a DNA strand/oligo.
     Should it be directed?
     - No:  We have actual connection in both directions.
     - Yes: Makes it easier to draw/visualize.
+    - Yes, directed, but have edges in both directions, each edge being marked by
+            'direction' attribute being either DIRECTION_UPSTREAM or DIRECTION_DOWNSTREAM or DIRECTION_SYMMETRIC.
+    system  strand_graph is currently: MultiGraph
+
+    system  domain_graph is currently: MultiGraph
+    complex domain_graph is currently: MultiDiGraph
+    strand  domain_graph is currently: MultiGraph
+
+    system  ends5p3p_graph is currently: MultiGraph
+    complex ends5p3p_graph is currently: MultiDiGraph
+    strand  ends5p3p_graph is currently: MultiGraph (directionality can be inferred by node type 5p vs 3p)
+
+    Note: If you want to know the length of a strand (either double or single-stranded, you can use)
+        ss_dist_ee_sq = sum(d.ss_dist_ee_sq for d in domains)
+        # ds_dist_ee_sq = sum(d.ds_dist_ee_sq for d in domains)  # Not applicable; persistance length > kuhn length
+        ss_len_contour = sum(d.ss_len_contour for d in domains)
+        ds_len_contour = sum(d.ds_len_contour for d in domains)
+        ds_dist_ee_nm = math.sqrt(self.ds_dist_ee_sq)
+        ss_dist_ee_nm = math.sqrt(self.ss_dist_ee_sq)
+
     """
     def __init__(self, name, domains, start_complex=None):
         # all **kwargs given to nx.Graph is used as attributes.
@@ -65,6 +85,8 @@ class Strand(nx.MultiGraph):
         self.uuid = next(sequential_uuid_gen)   # sequential number unique across all objects
         self.suid = next(make_sequential_id)    # sequential number unique across strands
         self.complex = start_complex
+        self.n_nt = None
+        self.domains = []  # List of domains ordered from 5p to 3p direction.
         super(Strand, self).__init__(name=name, suid=self.suid) #complex=start_complex,
 
         #self.name = name  # Is a native Graph property, linked to self.graph
@@ -87,12 +109,6 @@ class Strand(nx.MultiGraph):
         # for attr in "n_nt ss_dist_ee_sq ds_dist_ee_sq ss_len_contour ds_len_contour".split():
         #     setattr(self, attr, sum(getattr(domain, attr) for domain in domains))
         self.n_nt = sum(d.n_nt for d in domains)
-        self.ss_dist_ee_sq = sum(d.ss_dist_ee_sq for d in domains)
-        self.ds_dist_ee_sq = sum(d.ds_dist_ee_sq for d in domains)
-        self.ss_len_contour = sum(d.ss_len_contour for d in domains)
-        self.ds_len_contour = sum(d.ds_len_contour for d in domains)
-        self.ds_dist_ee_nm = math.sqrt(self.ds_dist_ee_sq)
-        self.ss_dist_ee_nm = math.sqrt(self.ss_dist_ee_sq)
 
         # self is a graph of domains:
         # self.add_nodes_from(domains) # Add all domains as nodes
@@ -107,7 +123,9 @@ class Strand(nx.MultiGraph):
                      }
         #edges = zip(iter(domains), iter(domains[1:]), [edge_attrs]))
         #self.add_edges_from(edges)
-        for idx, (domain, domain2) in enumerate(zip_longest(self.domains, self.domains[1:])):
+
+        ### Create Domain nodes and DomainEnd nodes: ###
+        for idx, domain in enumerate(self.domains):
             ## Add domain nodes:
             frac = (idx+1)/(n_domains+1)
             hsv = colormgr.domain_hsv(self, frac)
@@ -125,11 +143,19 @@ class Strand(nx.MultiGraph):
                 #'R': rgb_tup[0], 'G': rgb_tup[1], 'B': rgb_tup[2],
             }
             ## TODO: We don't really need all these node attributes:
-            for attr in "n_nt ss_dist_ee_sq ss_dist_ee_nm ds_dist_ee_nm ds_dist_ee_sq".split():
-                node_attrs[attr] = getattr(domain, attr)
-
+            # for attr in "n_nt ss_dist_ee_sq ss_dist_ee_nm ds_dist_ee_nm ds_dist_ee_sq".split():
+            #     node_attrs[attr] = getattr(domain, attr)
+            ## Add node to this strand's domain_graph:
             self.add_node(domain, attr_dict=node_attrs)
+            ## Add DomainEnd nodes to this strand's ends5p3p_graph:
+            self.ends5p3p_graph.add_node(domain.end5p, attr_dict=node_attrs)
+            self.ends5p3p_graph.add_node(domain.end3p, attr_dict=node_attrs)
 
+
+        ### CREATE EDGES going in 5' to 3' direction (downstream): ###
+        for idx, (domain, domain2) in enumerate(zip_longest(self.domains, self.domains[1:])):
+
+            #### UPDATE THIS STRAND'S DOMAIN_GRAPH: ####
             ## Add edge between domain and domain2:
             if domain2 is not None:
                 #s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)), PHOSPHATEBACKBONE_INTERACTION)
@@ -139,13 +165,12 @@ class Strand(nx.MultiGraph):
                 # That means when you do multigraph.add_edges_from(strand.edges(data=True)), then
                 # the multigraph's edges will have an attribute key=akey,
                 # BUT THEY WILL NOT ACTUALLY HAVE ANY KEYS!
-                self.add_edge(domain, domain2, key=s_edge_key,
+                self.add_edge(domain, domain2, key=s_edge_key, direction=DIRECTION_DOWNSTREAM,
+                              len=avg_length, attr_dict=edge_attrs)
+                self.add_edge(domain2, domain, key=s_edge_key, direction=DIRECTION_UPSTREAM,
                               len=avg_length, attr_dict=edge_attrs)
 
-            #### Update ends5p3p_graph: ####
-            self.ends5p3p_graph.add_node(domain.end5p, attr_dict=node_attrs)
-            self.ends5p3p_graph.add_node(domain.end3p, attr_dict=node_attrs)
-
+            #### UPDATE THIS STRAND'S ENDS5P3P_GRAPH: ####
             # The "long" edge from 5p of d to 3p of domain:
             long_edge_attrs = dict(edge_attrs,
                                    len=domain.ds_dist_ee_nm,          # What is this "length" exactly??
@@ -169,7 +194,8 @@ class Strand(nx.MultiGraph):
                 self.ends5p3p_graph.add_edge(domain.end3p, domain2.end5p, key=PHOSPHATEBACKBONE_INTERACTION,
                                              attr_dict=short_edge_attrs)
                 # Update domain 5p3p ends:
-                # (Yes, this duplicates the info in strand.ends5p3p_graph and system 5p3p graph, which is bad.)
+                # (Yes, this duplicates info already in strand and system 5p3p graph, which may be bad, but it's
+                # convenient for a bunch of algorithms if DomainEnds don't need to have access to the system graph.)
                 # domain2 should be downstream of domain1; domains should be ordered from 5p to 3p.
                 domain.end3p.pb_downstream = domain2.end5p
                 domain2.end5p.pb_upstream = domain.end3p
@@ -192,6 +218,8 @@ class Strand(nx.MultiGraph):
             domain.set_strand(self)
 
         ## Adjacency and distance matrices ##
+        ## TODO: I was going to keep track of distances and use an up-to-date distance matrix for
+        ## shortest-path calculations, but this is on the backlog because it is mostly an optimization.
         # could be {frozenset((d1, d2)): dist} or a matrix.
         # self.strand_domain_distances = {
         #     frozenset((d1, d2)): 1

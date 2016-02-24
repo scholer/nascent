@@ -114,8 +114,15 @@ class Domain(object):
 
         # Cached values:
         self._in_complex_identifier = None
-        self._in_complex_identifier_symmetric = None
+        # self._in_complex_identifier_symmetric = None  # replaced by symmetric_icids
         self._specie_state_fingerprint = None
+        # Attributes for version 2 of in_complex_identifier labelling, for symmetric complexes:
+        self.hash_ring = []
+        self.icid = None   # Should be self.name or more unique after complex.label_complex_nodes().
+        self.symmetric_icids = []  # Can be used to find similar domains from one asymmetric unit to another.
+        self._sym_break_label = None # Should be 0 or more unique after labelling. Used to break symmetry
+        self._asymmetric_unit_label = None # Should be (0,) or more unique after labelling.
+        # _asymmetric_unit_label is used to distinguish pairs from different asymetric parts.
         self.history = deque(maxlen=50)
 
 
@@ -155,6 +162,90 @@ class Domain(object):
         self.universal_name = "%s_%s" % (self.strand.instance_name, self.instance_name)
 
 
+    def in_complex_identifier(self):
+        """ Returns self.icid, asserting that it is not None. """
+        if self.strand.complex is None:
+            assert self.icid is None            # default to self.name after complex node labelling.
+            assert self._sym_break_label is None     # defaults to 0 after complex node labelling.
+            assert self._asymmetric_unit_label is None # defaults to (0,) after complex node labelling.
+        else:
+            assert self.icid is not None            # default to self.name after complex node labelling.
+            assert self._sym_break_label is not None     # defaults to 0 after complex node labelling.
+            assert self._asymmetric_unit_label is not None # defaults to (0,) after complex node labelling.
+        return self.icid
+
+
+    ## TODO: state_fingerprint and _specie_state_fingerprint should be named similarly.
+    def state_fingerprint(self):
+        """
+        This is a hash of:
+            (domain_strand_specie, complex-state, in-complex-identifier)
+
+        Note: Use domain.symmetric_icids[0] to get domain state fingerprint without symmetry-breaking labels
+
+        TODO: Consider not making duplexes state-dependent but rather just depend on their local stacking state.
+              (Because a duplex has the same de-hybridization reaction kinetics regardless of complex state.)
+        Discussion: Can we EVER use a fingerprint with non-unique ICID?
+        No, I don't think so. We *always* use fingerprints in context of
+        a reaction pair; Consider this:      A -- C -- B
+        The "symmetric state fingerprints"   |         |
+        will be the same for both As, Bs,    B -- C -- A
+        and Cs. Yet, the reaction pair {A, B} is very different depending on whether we have
+        {A (top left), B (top right)} or {A (top left), B (bottom left)}.
+        Cases where values are the same for both symmetries:
+        * Steric repulsions, ...?
+
+        """
+        #self._specie_state_fingerprint = None
+        # Do NOT invoke state_change_reset() without invoking label_complex_nodes
+        if self._specie_state_fingerprint is None:
+            # printd("(re-)calculating state fingerprint for domain %r" % (self, ))
+            dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
+            # the complex's state:
+            c_state = self.strand.complex.state_fingerprint() if self.strand.complex is not None else 0
+            # self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
+            ## TODO: Clean up: Currently including is_hybridized state in fingerprint; (has been useful for debugging)
+            in_complex_identifier = self.in_complex_identifier()
+            self._specie_state_fingerprint = (dspecie, self.partner is not None, c_state, in_complex_identifier)
+            # print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
+            # self.history.append("Domain.state_fingerprint: Calculated domain specie state fingerprint = %r..." % (self._specie_state_fingerprint,))
+        return self._specie_state_fingerprint
+
+
+    def domain_complex_state_fingerprint(self, ):
+        """ Should be inlined. """
+        return self.strand.complex.state_fingerprint() if self.strand.complex is not None else 0
+
+
+    def state_change_reset(self):
+        """
+        Reset state-dependent attributes (must be invoked after a state change).
+        Note: After resetting a domain's state fingerprint, you must now invoke label_complex_nodes()
+
+        """
+        if self._specie_state_fingerprint is None:
+            from inspect import currentframe, getframeinfo
+            frameinfo = getframeinfo(currentframe().f_back)
+            # print("Possible excessive domain.state_change_reset() called from %s:%s" %
+            #       (frameinfo.filename, frameinfo.lineno))
+            # print(" - self._in_complex_identifier=%s, self._specie_state_fingerprint=%s, complex._state_fingerprint=%s"
+            #       % (self._in_complex_identifier, self._specie_state_fingerprint,
+            #          self.strand.complex._state_fingerprint if self.strand.complex else "N/A"))
+        self._in_complex_identifier = None
+        # self._in_complex_identifier_symmetric = None
+        self._specie_state_fingerprint = None
+        # self.history.append(("Domain.state_change_reset: Unsetting specie_state_fingerprint and in_complex_identifier)...")
+        self.hash_ring.clear()
+        # None indicates *invalid value* for all of these:
+        self.icid = None
+        self._sym_break_label = None             # Used to break symmetry
+        self._asymmetric_unit_label = None  # Must be set to a tuple during Complex.label_complex_nodes()
+        # _asymmetric_unit_label is used to distinguish pairs from different asymetric parts.
+        # DISABLED support for invoking complex reset_state_fingerprint from domain_state_reset
+        # if reset_complex and self.strand.complex is not None:
+        #     self.strand.complex.reset_state_fingerprint(reset_domains=False, **kwargs)
+
+
     def print_history(self, history=None, level=0, indent_str="    ", search_str=None, entrylimit=20):
         if history is None:
             history = self.history
@@ -181,111 +272,6 @@ class Domain(object):
                 #yield from nextgen
                 for val in nextgen:
                     yield val
-
-
-    def in_complex_identifier(self, strandgraph=None, symmetric=False):
-        """
-        Return a hash that can be used to identify the current domain within the complex.
-        """
-        ## IMPORTANT: THIS MUST NOT USE COMPLEX.STATE_FINGERPRINT
-        if self._in_complex_identifier is None:
-            c = self.strand.complex
-            if c is None or len(c.strands_by_name[self.strand.name]) < 2:
-                # If only one strand in the complex, no need to calculate strand-domain identifier:
-                self._in_complex_identifier = 0
-                self._in_complex_identifier_symmetric = 0
-            else:
-                # We have a complex with more than one copy of the domain's strand specie:
-                # probably just probing the local environment is enough.
-                # It won't tell *exactly* which domain we have, but it will usually be good enough.
-                # Note: Using hybridization graph, because no reason to vary based on stacking here
-                # TODO: It is very important that the in-complex-identifier is unique.
-                #       Fortunately, you have the option to VERIFY that it actually is.
-                # Argh, this doesn't work well for DiGraphs!
-                neighbor_rings = connectivity_rings(c, self, 5,   # use self, not self.strand; we have domains.
-                                                    edge_filter=dont_follow_stacking_interactions)
-                # Done: The hash should probably include the strand specie as well
-                #       - d.domain_strand_specie vs d.name
-                # pdb.set_trace()
-                # TODO: Remove modulus when done testing
-                self._in_complex_identifier_symmetric = hash(tuple(frozenset(d.domain_strand_specie for d in ring)
-                                                                   for ring in neighbor_rings)) % 100000
-                if c.icid_use_instance:
-                    # Using domain in_complex_identifier has given non-unique values for two or more domains.
-                    # If Complex.icid_use_instance has been set to True, fall back to using domain instances as
-                    # in_complex_identifier (icid) for *all* domains. If icid_use_instance is not True but is
-                    # boolean True, it is assumed to be a set of domains for which to use domain instance as icid.
-                    if c.icid_use_instance is True or self in c.icid_use_instance:
-                        self._in_complex_identifier = self
-                else:
-                    ## The regular 'in_complex_identifier' uniquely identifies a domain within a complex.
-                    ## The 'symmetric in_complex_identifier' produces the same value for domains with the same
-                    ## rotational symmetry.
-                    self._in_complex_identifier = self._in_complex_identifier_symmetric
-                    #specie_instances = c.domains_by_name[self.name]
-            # self.history.append("in_complex_identifier: Calculated in_complex_identifier = %r..." % (self._in_complex_identifier,))
-        if symmetric:
-            return self._in_complex_identifier_symmetric
-        else:
-            return self._in_complex_identifier
-
-
-    ## TODO: state_fingerprint and _specie_state_fingerprint should be named similarly.
-    def state_fingerprint(self, strandgraph=None, accept_symmetric=False):
-        """
-        This is a hash of:
-            (domain_strand_specie, complex-state, in-complex-identifier)
-        TODO: Consider not making duplexes state-dependent but rather just depend on their local stacking state.
-              (Because a duplex has the same de-hybridization reaction kinetics regardless of complex state.)
-        Discussion: Can we EVER use a fingerprint with non-unique ICID?
-        No, I don't think so. We *always* use fingerprints in context of
-        a reaction pair; Consider this:      A -- C -- B
-        The "symmetric state fingerprints"   |         |
-        will be the same for both As, Bs,    B -- C -- A
-        and Cs. Yet, the reaction pair {A, B} is very different depending on whether we have
-        {A (top left), B (top right)} or {A (top left), B (bottom left)}.
-        Cases where values are the same for both symmetries:
-        * Steric repulsions, ...?
-
-        """
-        #self._specie_state_fingerprint = None
-        self.state_change_reset(reset_complex=False)  ## TODO: Remove this when done debugging.
-        if self._specie_state_fingerprint is None:
-            # printd("(re-)calculating state fingerprint for domain %r" % (self, ))
-            dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
-            # the complex's state:
-            c_state = self.strand.complex.state_fingerprint() \
-                      if self.strand.complex is not None else 0
-            # self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
-            ## TODO: I'm currently including hybridization state in fingerprint; this should not be needed, but...
-            in_complex_identifier = self.in_complex_identifier()
-            self._specie_state_fingerprint = (dspecie, self.partner is not None, c_state, in_complex_identifier)
-            if in_complex_identifier == self._in_complex_identifier_symmetric:
-                self._specie_state_fingerprint_symmetric = self._specie_state_fingerprint
-            else:
-                self._specie_state_fingerprint_symmetric = (
-                    dspecie, self.partner is not None, c_state, self._in_complex_identifier_symmetric)
-            # print("Calculated new fingerprint for domain %s: %s" % (self, self._specie_state_fingerprint))
-            # self.history.append("Domain.state_fingerprint: Calculated domain specie state fingerprint = %r..." % (self._specie_state_fingerprint,))
-        if accept_symmetric:
-            return self._specie_state_fingerprint_symmetric
-        else:
-            return self._specie_state_fingerprint
-
-
-    def domain_complex_state_fingerprint(self, ):
-        """ Should be inlined. """
-        return self.strand.complex.state_fingerprint() if self.strand.complex is not None else 0
-
-
-    def state_change_reset(self, reset_complex=True, **kwargs):
-        """ Reset state-dependent attributes (must be invoked after a state change). """
-        self._in_complex_identifier = None
-        self._in_complex_identifier_symmetric = None
-        self._specie_state_fingerprint = None
-        # self.history.append(("Domain.state_change_reset: Unsetting specie_state_fingerprint (and in_complex_identifier; reset_complex=%r, kwargs=%s)...") % (reset_complex, kwargs))
-        if reset_complex and self.strand.complex is not None:
-            self.strand.complex.reset_state_fingerprint(reset_domains=False, **kwargs)
 
 
     def fqdn(self):

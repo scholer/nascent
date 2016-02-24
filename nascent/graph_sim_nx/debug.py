@@ -37,5 +37,22 @@ def pprint_debug(*args, **kwargs):
         pprint(*args, **kwargs)
 
 
+def info_print(*args, **kwargs):
+    """ Will print the file and line before printing. Can be used to find spurrious print statements. """
+    from inspect import currentframe, getframeinfo
+    frameinfo = getframeinfo(currentframe().f_back)
+    print(frameinfo.filename, frameinfo.lineno)
+    pprint(*args, **kwargs)
+
+
+def info_pprint(*args, **kwargs):
+    """ Will print the file and line before printing the variable. """
+    from inspect import currentframe, getframeinfo
+    frameinfo = getframeinfo(currentframe().f_back)
+    print(frameinfo.filename, frameinfo.lineno)
+    pprint(*args, **kwargs)
+
+
+
 pprintd = pprint_debug
 printd = print_debug

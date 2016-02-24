@@ -129,7 +129,7 @@ def main():
                     pltargs['figsize'] = (16, 10)
                 else:
                     pltargs['ax'] = ax
-                pltargs['label'] = "%s in %s" % (strand, cstate)
+                pltargs['label'] = "s#%s in cstate %s" % (strand, cstate % 1000)
                 ax = s_state.plot(kind='line',
                                   # x='system_time',
                                   x='system_time_end',

@@ -671,7 +671,7 @@ class ComponentMgr(GraphManager):
                 # c1._stacking_fingerprint = None  # Reset hybridization fingerprint
                 # c1._state_fingerprint = None
                 # for end in h1end3p, h2end5p, h2end3p, h1end5p:
-                #     end.domain.state_change_reset(reset_complex=False)
+                #     end.domain.state_change_reset()
                 # new_fingerprints = c1.get_all_fingerprints()
                 # assert new_fingerprints != old_fingerprints2
 
@@ -852,9 +852,26 @@ class ComponentMgr(GraphManager):
                                     h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
             c_major.add_stacking_edge(stacking_pair)
 
-        # Reset complex: (maybe not needed here)
-        c_major.domain_distances = {} # Reset distances
-        c_major.reset_state_fingerprint()
+        ## RESET DOMAIN AND COMPLEX STATE FINGERPRINTS:
+        # c_major.domain_distances = {} # Reset distances
+        # Q: Would invoking state resets yield alternative behavior depending on whether complex breaks or not?
+        # A: join/break_complex_at is always called after hybridize/stack/dehybridize/unstack,
+        # regardless of whether it actually does break apart. That actually makes it a reasonable place to call it.
+        # EDIT: join/break_complex_at MAY NOT BE CALLED FOR STACKING INTERACTIONS WHEN
+        # INTER-COMPLEX STACKING IS DISABLED! TODO: CHECK THIS!
+        ## TODO: Determine the best place to reset domain and complex state_fingerprint.
+        if strand1.complex is None:
+            for domain in strand1.domains:
+                domain.state_change_reset()
+        else:
+            strand1.complex.reset_state_fingerprint()
+        if strand2.complex is None:
+            for domain in strand2.domains:
+                domain.state_change_reset()
+        elif strand2.complex is not strand1.complex:
+            strand2.complex.reset_state_fingerprint()
+        else:
+            assert strand2.complex == strand1.complex
 
         return result
 
@@ -965,7 +982,6 @@ class ComponentMgr(GraphManager):
 
         #### The two strands are no longer connected: ####
         c._strands_fingerprint = None
-        c.reset_state_fingerprint()
 
         ## Need to split up. Three cases:
         ## Case 2(a) Two smaller complexes - must create a new complex for detached domain:
@@ -1063,5 +1079,20 @@ class ComponentMgr(GraphManager):
             assert domain2.partner is None
         if stacking_pair:
             assert all(end.stack_partner is None for end in (h1end3p, h2end5p, h2end3p, h1end5p))
+
+        ## RESET DOMAIN AND COMPLEX STATE FINGERPRINTS:
+        ## TODO: Determine the best place to reset domain and complex state fingerprints:
+        if strand1.complex is None:
+            for domain in strand1.domains:
+                domain.state_change_reset()
+        else:
+            strand1.complex.reset_state_fingerprint()
+        if strand2.complex is None:
+            for domain in strand2.domains:
+                domain.state_change_reset()
+        elif strand2.complex is not strand1.complex:
+            strand2.complex.reset_state_fingerprint()
+        else:
+            assert strand2.complex == strand1.complex
 
         return result

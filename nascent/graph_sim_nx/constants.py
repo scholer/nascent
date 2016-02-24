@@ -19,7 +19,7 @@
 
 """
 
-Package-wide constants.
+Package-wide constants and enumerations.
 
 """
 
@@ -31,16 +31,22 @@ PHOSPHATEBACKBONE_INTERACTION = 'b'     # 1, b, pb, p, backbone,
 HYBRIDIZATION_INTERACTION = 'h'         # 2, h, hh, hyb, hybridization, hybridized
 STACKING_INTERACTION = 's'              # 3, s, ss, bs, stacked, stacking, basestacking
 
-BACKBONE_INTERACTION_ALTERNATIVES = {1, 'pb', 'p', 'backbone'}
-HYBRIDIZATION_INTERACTION_ALTERNATIVES = {2, 'hh', 'h', 'hyb', 'hybridization', 'hybridized'}
-STACKING_INTERACTION_ALTERNATIVES = {3, 's', 'ss', 'bs', 'stacked', 'stacking', 'basestacking'}
+DIRECTION_SYMMETRIC, DIRECTION_UPSTREAM, DIRECTION_DOWNSTREAM = 0, 1, 2  # or 0, 5, 3 for 5p vs 3p? Or -1, 0, +1?
+# Combined interaction type and direction:
+BACKBONE_UPSTREAM, BACKBONE_DOWNSTREAM, STACKING_UPSTREAM, STACKING_DOWNSTREAM, HYBRIDIZATION = 11, 12, 21, 22, 30
+
+
+BACKBONE_INTERACTION_ALTERNATIVES = {1, 'p', 'pb', 'backbone'}
+STACKING_INTERACTION_ALTERNATIVES = {2, 's', 'ss', 'bs', 'stacked', 'stacking', 'basestacking'}
+HYBRIDIZATION_INTERACTION_ALTERNATIVES = {3, 'h', 'hh', 'hyb', 'hybridization', 'hybridized'}
+
 
 REACTION_NAMES = {}
 # REACTION_NAMES[<is_forming>]
-REACTION_NAMES[True] = {PHOSPHATEBACKBONE_INTERACTION: 'backbone-nicking',
+REACTION_NAMES[True] = {PHOSPHATEBACKBONE_INTERACTION: 'backbone-ligation',
                         HYBRIDIZATION_INTERACTION: 'hybridization',
                         STACKING_INTERACTION: 'stacking'}
-REACTION_NAMES[False] = {PHOSPHATEBACKBONE_INTERACTION: 'backbone-ligation',
+REACTION_NAMES[False] = {PHOSPHATEBACKBONE_INTERACTION: 'backbone-nicking',
                          HYBRIDIZATION_INTERACTION: 'de-hybridization',
                          STACKING_INTERACTION: 'un-stacking'}
 
@@ -51,6 +57,9 @@ for i, interaction in enumerate(interactions):
     interactions_dict[i] = interaction
     interactions_dict[interaction] = interaction
 
+
+
+#### SCIENTIFIC CONSTANTS: ####
 
 N_AVOGADRO = 6.022e23   # /mol
 R = 1.987  # universal gas constant in cal/mol/K

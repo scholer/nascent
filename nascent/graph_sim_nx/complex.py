@@ -53,18 +53,21 @@ import pdb
 from .connected_multigraph import ConnectedMultiGraph
 from .utils import (sequential_number_generator, sequential_uuid_gen)
 from .nx_utils import draw_graph_and_save
-from .constants import (PHOSPHATEBACKBONE_INTERACTION,
-                        HYBRIDIZATION_INTERACTION,
-                        STACKING_INTERACTION,
-                        N_AVOGADRO, AVOGADRO_VOLUME_NM3)
-from .debug import printd, pprintd
+from .constants import (
+    PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
+    DIRECTION_SYMMETRIC, DIRECTION_UPSTREAM, DIRECTION_DOWNSTREAM,
+)
+from .debug import printd, pprintd, do_print
 
 # Module-level constants and variables:
+MAX_ICID_RADIUS = 10
+MAX_COMPLEX_SYMMETRY = 10
+# Sequential id generators: get next sequential id with next(make_helix_sequential_id)
 make_sequential_id = sequential_number_generator()
-# A generator, get next sequential id with next(make_helix_sequential_id)
 helix_sequential_id_generator = sequential_number_generator()
-
 # supercomplex_sequential_id_gen = sequential_number_generator()
+
+
 
 
 def state_should_change(method):
@@ -91,6 +94,9 @@ def state_should_change(method):
 class Complex(nx.MultiDiGraph):
     """
     This class represents a graph of connected domains.
+    Currently domain-level representation: Each node is a domain.
+    ## TODO: Would it make sense to have this be a regular graph of DomainEnds instead of a MultiGraph of domains?
+    ##       (see discussion below).
 
     The edges represent ALL types of connections:
      1. Phosphate backbone connections between connected domains in the same strand.
@@ -118,6 +124,14 @@ class Complex(nx.MultiDiGraph):
       - So, what graph, if any, do we need the complexes to be?
       - It *is* nice to have per-complex graphs, if only to visualize the different complexes.
       - Do we need the per-complex graphs to be directed graphs or undirected?
+
+    Note: We are currently relying on Complex being a *directed* MultiDiGraph
+    for e.g. stacking_edges() where we rely on stacking interactions being
+    *from* the 5' upstream domain *to* the 3' downstream domain and guaranteed to not be the other way around.
+    (Although I'm also maintaining the independent self.stacked_pairs which has the same content..)
+
+    It might be a lot simpler to have a DomainEnd graph as the basis...
+
     Discussion: How to generate proper state fingerprints?
     """
     def __init__(self, data=None, strands=None, origin="o", reaction_deque_size=5): #, reaction_spec_pair=None):
@@ -136,10 +150,13 @@ class Complex(nx.MultiDiGraph):
         # If we know how many of each domain species we have, we can make the problem of graph isomorphism
         # a little easier. (In particular the case where we only have *one* of each domain species.)
         # For domains with specie count >1, instead of using just domain specie, you could use
-        # domain.in_complex_identifier. It will not be 100% ceretain/accurate, but it should be close enough.
+        # domain.in_complex_identifier. It will not be 100% certain/accurate, but it should be close enough.
+        # Counters in python 3.3+ have nice unary operators. E.g. ```+mycounter``` to get all elements with positive
+        # count, and ```-mycounter``` to get all negative, by adding mycounter to a new empty Counter.
         self.domain_species_counter = Counter()
         # We are already calculating a strand-species count, might as well make it permanent running counter:
         self.strand_species_counter = Counter()
+        self.domain_strand_specie_counter = Counter()   # Entries are (strand.name, domain.name)
 
         # Distances between domains.
         # If we have N domains, then we have sum(1..(N-1)) = N**2 - N possible distances?
@@ -156,6 +173,10 @@ class Complex(nx.MultiDiGraph):
         # self.hybridized_domains = set() # set of frozenset({dom1, dom2}) sets, specifying which domains are hybridized.
         self.hybridized_pairs = set() # set of domain pairs: frozenset({dom1, dom2})
         self.stacked_pairs = set()    # set of domain two-tuples. (5p-domain, 3p-domain)
+        ## TODO: Is the above sufficiently unique? Consider replacing with a DomainEnd approach below:
+        # self.stacked_domain_end_pairs = set()
+        # self.hybridized_domain_ends = set()  # Could probably just be hybridized_domains
+        # self.backbone_connected_domain_end_pairs = set()
 
         # State fingerprint is used for cache lookup
         # To reduce recalculation overhead, it is separated into three parts:
@@ -164,6 +185,7 @@ class Complex(nx.MultiDiGraph):
         self._strands_fingerprint = None
         self._hybridization_fingerprint = None
         self._stacking_fingerprint = None
+        self._nodes_have_been_labelled = None
 
         ## DEBUG attributes: ##
         self._historic_strands = []
@@ -293,6 +315,11 @@ class Complex(nx.MultiDiGraph):
         # Since loops are mutable we cannot have a set of loops, so use a LoopID and
         self.loopids_by_interface = defaultdict(set)  # InterfaceNode => {loop1_id, loop3_id, ...}
         # Should we use a set or list? We probably have random deletion of loops, so set is arguably better.
+        # Delegatee: A person designated to act for or represent another or others.
+        # Delegator: A person who is delegating or has delegated responsibility to someone else.
+        self.loop_delegations = {}     # loop0id => {loop1id, loop2id}   (delegator => delegatees)
+        self.loop_delegations_rev = {} # loop1id => {set of loop0s split by loop1} (delegatee => delegators)
+        self.ifnode_by_ifnode_statespec = {}  # ifnode-state-hash => ifnode-instance.
 
 
         ### Graphs: ###
@@ -342,57 +369,6 @@ class Complex(nx.MultiDiGraph):
     #     return list(self.node.keys())
 
 
-    def print_history(self, history=None, level=0, indent_str="    ", search_str=None, limit=20, totlimit=100,
-                      reverse=True, last_first=True):
-        print("History for %r (%s, %s)" % (self, "reversed" if reverse else "", "last-first" if last_first else ""))
-        if history is None:
-            history = self.history
-        if last_first ^ reverse: # last_first != reverse, XOR
-            entries = self.gen_history_records(history=history, level=level, search_str=search_str,
-                                               limit=limit, totlimit=totlimit, reverse=reverse)
-        else:
-            entries = reversed(list(self.gen_history_records(
-                history=history, level=level, search_str=search_str,
-                limit=limit, totlimit=totlimit, reverse=reverse)))
-        for (level, entry) in entries:
-            print(indent_str*level + entry)
-
-    def history_str(self, history=None, level=0, indent_str="    ", search_str=None, sep="\n",
-                    limit=20, totlimit=100, reverse=False):
-        return sep.join((indent_str*level + entry) for level, entry
-            in self.gen_history_records(history=history, level=level, search_str=search_str,
-                                        limit=limit, totlimit=totlimit, reverse=reverse))
-
-    def gen_history_records(self, history=None, level=0, search_str=None, limit=20, totlimit=1000, reverse=False):
-        if history is None:
-            history = self.history
-        if limit and limit < len(history):
-            org_length = len(history)
-            history = history[-limit:] # Makes a slice copy
-            history[0] = "(...history truncated to %s of %s entries...)" % (len(history), org_length)
-        if reversed:
-            history = reversed(history)
-        for entry in history:
-            totlimit -= 1
-            if totlimit < 0:
-                yield "(...totlimit reached, breaking of here...)"
-                break
-            if isinstance(entry, str):
-                if search_str is None or search_str in entry:
-                    yield (level, entry)
-            else:
-                # Returning a final value from a generator and obtaining it with "yield from" is
-                # a new feature of python 3.3. Not available in pypy yet.
-                nextgen =  self.gen_history_records(history=entry, level=level+1,
-                                                    search_str=search_str,
-                                                    limit=limit-1, totlimit=totlimit)
-                # if sys.version_info > (3, 2):
-                # totlimit = yield from nextgen
-                # else:
-                for val in nextgen:
-                    yield val
-        # if sys.version_info > (3, 2):
-        #     return totlimit
 
     # @state_should_change
     def add_strand(self, strand, update_graph=False):
@@ -401,6 +377,7 @@ class Complex(nx.MultiDiGraph):
         self.strands.add(strand)
         self.strands_by_name[strand.name].add(strand)
         self.strand_species_counter[strand.name] += 1
+        self.domain_strand_specie_counter.update(d.domain_strand_specie for d in strand.domains)
         strand.complex = self
         for domain in strand.domains:
             self.domains_by_name[domain.name].add(domain)
@@ -416,7 +393,7 @@ class Complex(nx.MultiDiGraph):
         self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
         self.N_strand_changes += 1
         # # self.history.append("add_strand: Adding strand %r (update_graph=%s)" % (strand, update_graph))
-        self.reset_state_fingerprint()
+        # self.reset_state_fingerprint()
 
 
     # @state_should_change
@@ -427,6 +404,7 @@ class Complex(nx.MultiDiGraph):
         self.strands.remove(strand)
         self.strands_by_name[strand.name].remove(strand)
         self.strand_species_counter[strand.name] -= 1
+        self.domain_strand_specie_counter.subtract(d.domain_strand_specie for d in strand.domains)
         if self.strand_species_counter[strand.name] == 0:
             del self.strand_species_counter[strand.name]
         if strand.complex == self:
@@ -462,6 +440,7 @@ class Complex(nx.MultiDiGraph):
         for strand in strands:
             self.strands_by_name[strand.name].add(strand)
             self.strand_species_counter[strand.name] += 1
+            self.domain_strand_specie_counter.update(d.domain_strand_specie for d in strand.domains)
             strand.complex = self
             for domain in strand.domains:
                 self.domains_by_name[domain.name].add(domain)
@@ -490,6 +469,7 @@ class Complex(nx.MultiDiGraph):
         for strand in strands:
             self.strands_by_name[strand.name].remove(strand)
             self.strand_species_counter[strand.name] -= 1
+            self.domain_strand_specie_counter.subtract(d.domain_strand_specie for d in strand.domains)
             if self.strand_species_counter[strand.name] < 1:
                 del self.strand_species_counter[strand.name]
             if strand.complex == self:
@@ -524,10 +504,15 @@ class Complex(nx.MultiDiGraph):
     def add_hybridization_edge(self, domain_pair):
         # self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
         domain1, domain2 = domain_pair
-        self.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
+        self.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION, direction=DIRECTION_SYMMETRIC)
         if self.is_directed():
-            self.add_edge(domain2, domain1, key=HYBRIDIZATION_INTERACTION)
+            self.add_edge(domain2, domain1, key=HYBRIDIZATION_INTERACTION, direction=DIRECTION_SYMMETRIC)
         self.hybridized_pairs.add(frozenset(domain_pair))
+        ## TODO: This could be used to calculate fingerprints faster, but probably not worth it:
+        # hybridized_domain_name_pairs = frozenset(frozenset(d.name for d in pair) for pair in self.hybridized_pairs)
+        # if len(hybridized_domain_name_pairs) == len(self.hybridized_pairs):
+        #     # Complex has a unique combination of hybridization edges with domain names as nodes:
+        #     self._hybridization_fingerprint = hash(hybridized_domain_name_pairs)
         self._hybridization_fingerprint = None
         self._state_fingerprint = None
 
@@ -550,8 +535,11 @@ class Complex(nx.MultiDiGraph):
         """
         # self.history.append("add_stacking_edge: stacking_pair = %s" % (stacking_pair,))
         (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
-        self.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
-        self.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+        self.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION, direction=DIRECTION_DOWNSTREAM)
+        self.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, direction=DIRECTION_DOWNSTREAM)
+        if self.is_directed():
+            self.add_edge(h1end5p.domain, h1end3p.domain, key=STACKING_INTERACTION, direction=DIRECTION_UPSTREAM)
+            self.add_edge(h2end5p.domain, h2end3p.domain, key=STACKING_INTERACTION, direction=DIRECTION_UPSTREAM)
         self.stacked_pairs.add((h1end3p.domain, h1end5p.domain))
         self.stacked_pairs.add((h2end3p.domain, h2end5p.domain))
         self._stacking_fingerprint = None
@@ -559,15 +547,19 @@ class Complex(nx.MultiDiGraph):
 
     # @state_should_change
     def remove_stacking_edge(self, stacking_pair):
+        """ Remove stacking edge from complex graph and stacked_pairs set.
+        Stacking pair must be tuple ((h1end3p, h2end5p), (h2end3p, h1end5p)). """
         # self.history.append("remove_stacking_edge: stacking_pair = %s" % (stacking_pair,))
         (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
         self.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
         self.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
+        if self.is_directed():
+            self.remove_edge(h1end5p.domain, h1end3p.domain, key=STACKING_INTERACTION)
+            self.remove_edge(h2end5p.domain, h2end3p.domain, key=STACKING_INTERACTION)
         self.stacked_pairs.remove((h1end3p.domain, h1end5p.domain))
         self.stacked_pairs.remove((h2end3p.domain, h2end5p.domain))
         self._stacking_fingerprint = None
         self._state_fingerprint = None
-
 
 
     def state_fingerprint(self):
@@ -610,26 +602,55 @@ class Complex(nx.MultiDiGraph):
             The best is probably to probe the local environment.
 
         """
-        ## TODO: Add check that no two domains in the complex has the same in_complex_identifier:
-        #in_complex_id_counts = Counter([d.in_complex_identifier() for d in self.nodes()])
-        nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
-        in_complex_id_counts = Counter(nonzero_icids)
-        # if 0 in in_complex_id_counts:
-        #     # icid of 0 means "this domain is the only of its kind, no need to calculate an icid."
-        #     del in_complex_id_counts[0]
-        if any(count > 1 for icid, count in in_complex_id_counts.items()):
-            self.adjust_icid_radius_or_use_instance(in_complex_id_counts)
-        ## TODO: Add fall-back to using domain instances (rather than state species) for fingerprint.
-        ## This will not be useful for caching between complexes, but might still be used within the same
-        ## complex, as long as we don't have strand swapping.
         if self._state_fingerprint is None:
-            ## TODO: Re-enable hashing when I'm done debugging
-            ## Must not include anything unique to this complex instance such as str(self)
-            self._state_fingerprint = hash((
-                self.strands_fingerprint(),
-                self.hybridization_fingerprint(),
-                self.stacking_fingerprint()  ## TODO: Implement stacking
-                )) % 100000  # TODO: Remove modulus when done debugging.
+            # Check that all domains in complex have also been reset:
+            # assert all(d._specie_state_fingerprint is None for d in self.domains())
+            for domain in self.domains():
+                # If complex state fingerprint is None, then domains cannot have valid state fingerprint.
+                # Question is: Have the old, obsolete domain state fingerprint been used for anything?
+                if domain._specie_state_fingerprint is not None:
+                    print("WARNING: domain %s state fingerprint %s" % (domain, domain._specie_state_fingerprint),
+                          "has not been reset prior to calling Complex.state_fingerprint()!")
+                    from inspect import currentframe, getframeinfo
+                    frameinfo = getframeinfo(currentframe().f_back)
+                    print(" -- called from %s:%s" % (frameinfo.filename, frameinfo.lineno))
+                    domain._specie_state_fingerprint = None
+            if not self._nodes_have_been_labelled:
+                self.label_complex_nodes()
+            else:
+                # Check that the labelling is invariant:
+                old_icids = {d: d.icid for d in self.domains()}
+                self.label_complex_nodes()
+                new_icids = {d: d.icid for d in self.domains()}
+                assert old_icids == new_icids
+            ## State fingerprint must not include anything unique to this complex instance such as str(self)
+            # self._state_fingerprint = hash((
+            #     self.strands_fingerprint(),
+            #     self.hybridization_fingerprint(),
+            #     self.stacking_fingerprint()
+            #     )) % 100000  # TODO: Remove modulus when done debugging.
+            # The above state-fingerprint method was based on a "minimize required calculations" strategy.
+            # It works really well as long as there are no symmetric parts in the complex and I could basically
+            # just label each edge by {source.name, target.name} then there would not be any identical edges.
+            # Obviously, this breaks down really fast, and we have to assign a unique in-complex-identifier
+            # to each node/domain. The new node-labelling scheme should be fast for the case above where all
+            # (h, {source.name, target.name}) or (b, (source.name, target.name)) edges are unique.
+            # However, it must be fully re-calculated for any kind of reaction.
+            # And, when using icid labelling, we MUST recalculate state fingerprint from scratch;
+            # we cannot re-use any of the old partial hybridization/stacking fingerprints,
+            # because the icid for many nodes could have changed.
+            # We have to re-calculate domain icids after every reaction, because it can be hard to know if
+            # a reaction makes the complex symmetrix.
+            # The only case where we may not need to do this is when there is only a single copy of each
+            # domain/strand in the complex. (This might actually be a pretty common case).
+            # In that case, we can indeed make optimizations by separating the state fingerprint
+            # into different unique parts, where a stacking reaction will not affect the other partial fingerprint.
+
+            # Each edges is a tuple of (node-pair, interaction, direction):
+            edges = frozenset((frozenset(((d1.strand.name, d1.name, d1.icid), (d2.strand.name, d2.name, d2.icid))),
+                               ekey, eattr['direction']) for d1, d2, ekey, eattr in self.edges(keys=True, data=True))
+            self._state_fingerprint = hash(edges) % 100000  # TODO: Remove modulus when done debugging.
+
             # print("\nRe-calculated state fingerprint for %r: %s" % (self, self._state_fingerprint))
             #pdb.set_trace()
             # historic fingerprints are now added only through assert_state_change:
@@ -637,36 +658,166 @@ class Complex(nx.MultiDiGraph):
             # self.history.append("state_fingerprint: Calculated fingerprint: %r" % (self._state_fingerprint,))
         return self._state_fingerprint
 
-    def adjust_icid_radius_or_use_instance(self, in_complex_id_counts=None, n_tries=3):
-        if in_complex_id_counts is None:
-            # icid of 0 means "this domain is the only of its kind, no need to calculate an icid."
-            # We can have as many of these as we'd like.
-            nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
-            in_complex_id_counts = Counter(nonzero_icids)
-        while n_tries > 0:
-            # if 0 in in_complex_id_counts:
-            #     del in_complex_id_counts[0]
-            self.icid_radius *= 2 # Double the range (up to n_tries=4 times: 2, 4, 8, 16 times original)
-            for domain in self.nodes():
-                domain.state_change_reset(reset_complex=False)
-            nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
-            in_complex_id_counts = Counter(nonzero_icids)
-            n_tries -= 1
-            if all(count < 2 for icid, count in in_complex_id_counts.items()):
-                print("adjust_icid_radius_or_use_instance: Unique icid found at icid_radius %s for %r" %
-                      (self.icid_radius, self))
-                pdb.set_trace()
-                break
+
+    # def adjust_icid_radius_or_use_instance(self, in_complex_id_counts=None, n_tries=4):
+    #     """
+    #     TODO: Consider a better way to do this.
+    #     """
+    #     if in_complex_id_counts is None:
+    #         # icid of 0 means "this domain is the only of its kind, no need to calculate an icid."
+    #         # We can have as many of these as we'd like.
+    #         nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
+    #         in_complex_id_counts = Counter(nonzero_icids)
+    #     while n_tries > 0:
+    #         # if 0 in in_complex_id_counts:
+    #         #     del in_complex_id_counts[0]
+    #         self.icid_radius *= 2 # Double the range (up to n_tries=4 times: 2, 4, 8, 16 times original)
+    #         for domain in self.nodes():
+    #             domain.state_change_reset()
+    #         nonzero_icids = [icid for icid in [d.in_complex_identifier() for d in self.nodes()] if icid != 0]
+    #         in_complex_id_counts = Counter(nonzero_icids)
+    #         n_tries -= 1
+    #         if all(count < 2 for icid, count in in_complex_id_counts.items()):
+    #             print("adjust_icid_radius_or_use_instance: Unique icid found at icid_radius %s for %r" %
+    #                   (self.icid_radius, self))
+    #             pdb.set_trace()
+    #             break
+    #     else:
+    #         # Increasing icid range did not help; fall back to using domain instances...
+    #         print("Complex: Increasing icid range did not help; falling back to using domain instances...")
+    #         # If Complex.icid_use_instance has been set to True, fall back to using domain instances as
+    #         # in_complex_identifier (icid) for *all* domains. If icid_use_instance is not True but is
+    #         # boolean True, it is assumed to be a set of domains for which to use domain instance as icid.
+    #         self.icid_use_instance = True
+    #         for domain in self.nodes():
+    #             domain.state_change_reset()
+    #         #pdb.set_trace()
+
+
+    def label_complex_nodes(self):
+        """
+        Make sure all nodes in complex have a unique label.
+        Currently, this is done for Domain nodes (not DomainEnds).
+        Note that a node label is only state-specific when combined with the parent complex' state_fingerprint!
+        """
+        ### TODOS:
+        ## TODO: Assert that backbone up/downstream are properly affecting neighboring hashrings
+        ##       I'm concerned that the edge directionality of the directed MultiDiGraph complex domain_graph
+        ##       can interferre.
+        ## TODO: There should be a difference between backbone connecting upstream or downstream.
+        ##       I've added UP/DOWN STREAM enumerations to constants module.
+
+        self.symmetry_fold = 1
+        non_unique_nodes = self.domains()   # list if rebuilding, or set if updating in-place.
+        for node in non_unique_nodes:
+            node.hash_ring.clear()
+            node.icid = node.name  # or use domain_strand_specie = (strand.name, domain.name) ?
+            node._sym_break_label = 0
+            node._asymmetric_unit_label = 0 # (0,)
+            node.symmetric_icids.clear()   # Can be used to find equivalent nodes from one asymmetric unit to another.
+        node_icids = {node: node.icid for node in non_unique_nodes}
+        node_icid_count = Counter(node_icids.values())
+        non_unique_nodes = [node for node in non_unique_nodes if node_icid_count[node.icid] > 1]
+        n_previous_nonunique_nodes = len(non_unique_nodes) + 1
+        total_loops = 0
+
+        while non_unique_nodes and self.symmetry_fold <= MAX_COMPLEX_SYMMETRY:
+            ring_number = 0
+            loops_for_this_symmetry_fold = 0
+            n_previous_nonunique_nodes += 1 # Make sure we give it a try
+            while non_unique_nodes and (len(non_unique_nodes) < n_previous_nonunique_nodes): # or ring_number < MAX_ICID_RADIUS):
+                # ring_number =+ 1
+                total_loops += 1
+                loops_for_this_symmetry_fold += 1
+                n_previous_nonunique_nodes = len(non_unique_nodes)
+                for node in non_unique_nodes:  # append new hash_ring to each node
+                    # use neightbor_rings, which only gives unique neighbors? Nah.
+
+                    # node.hash_ring[ring_number] = hash(frozenset(
+                    #     (neighbor.icid, eattr['interaction']) for neighbor, eattr in self.adj[node].items()))
+
+                    # Alternatively, keep track for debugging:
+                    node.hash_ring = {
+                        neighbor: (ekey,
+                                   # No interaction key for hybridization edges; we use edge_keys
+                                   # for interactions in Complex and system domain_graph (MultiDiGraph).
+                                   # eattr['interaction'],
+                                   neighbor.icid, neighbor._sym_break_label, neighbor._asymmetric_unit_label)
+                        for neighbor, edges_by_key in self.adj[node].items() for ekey, eattr in edges_by_key.items()
+                        # for neighbor, eattr in self.adj[node].items()  # Edit: We have a MultiDiGraph with keys.
+                    }
+                print("Remaning non-unique nodes: %s" % non_unique_nodes) # , ", ".join(
+                print("\nNodes hash_ring: (symmetry fold %s, %s loops for this symmetry, %s loops total)" %
+                      (self.symmetry_fold, loops_for_this_symmetry_fold, total_loops))
+                pprint({node: node.hash_ring for node in non_unique_nodes})
+                for node in non_unique_nodes: # Then update all nodes' icid:
+                    # node.icid = node.hash_ring[-1]   # if not keeping track
+                    # Make sure to add current node.icid to next icid when hashing:
+                    node.icid = hash((node.icid, frozenset(node.hash_ring.values())))  # if keeping track for debugging
+                    node.icid %= 100000  ## TODO: Remove modulus when done debugging!
+                    hash_ring_values = list(node.hash_ring.values())
+                    # Asym label is always a tuple of (length_of_next_asym_tuple, next_asym_tuple, ...)
+                    # Asym unit label propagates from the symmetry-breaking labelled node outwards.
+                    # asym_labels = [asym_label for ekey, icid, sym_break_label, asym_label in hash_ring_values]
+                    asym_labels = [val[3] for val in hash_ring_values]
+                    # asym_labels.append(node._asymmetric_unit_label) # Include the node itself in the comparison.
+                    # Or, do:
+                    max_neighboring_asym_label = max(asym_labels) #, key=lambda asym_label: (len(asym_label), asym_label))
+                    if max_neighboring_asym_label > node._asymmetric_unit_label:
+                        node._asymmetric_unit_label = max_neighboring_asym_label
+                print("Node icid (in-complex-identifiers):")
+                pprint({node: node.icid for node in non_unique_nodes})
+                print("Node icid symmetry breaking labels:")
+                pprint({node: node._sym_break_label for node in non_unique_nodes})
+                print("Node._asymmetric_unit_label:")
+                pprint({node: node._asymmetric_unit_label for node in non_unique_nodes})
+
+                # Then update the list of non_unique nodes:
+                node_icids = {node: node.icid for node in non_unique_nodes}
+                node_icid_count = Counter(node_icids.values())
+                non_unique_nodes = [node for node in non_unique_nodes if node_icid_count[node.icid] > 1]
+
+            # Are there cases where non_unique_nodes does not decrease, but will still eventually produce uniquely-labelled nodes?
+            # If that's the case, we need to relax the len(non_unique_nodes) < n_previous_nonunique_nodes criteria in the while loop.
+            # Perhaps or instead of and: (ring_number < max_icid_radius or len(non_unique_nodes) < n_previous_nonunique_nodes) ?
+            if non_unique_nodes:
+                # We still have non_unique nodes:
+                # Need to have a consistent and invariant labelling method.
+                # To do this, start by labelling a single of the non_unique_nodes.
+                # The selection of this node should be the same for all complexes of the same state.
+                sym_break_label, node_uuid, selected_node = min(
+                    ((node.name, node._asymmetric_unit_label, node.icid, self.symmetry_fold), node.uuid, node)
+                    for node in non_unique_nodes)
+                # Increase complex symmetry:
+                self.symmetry_fold += 1
+                # Also, it would be nice to be able to label the different asymmetric units.
+                # Add a "asymetric unit" label to each node of each of the symmetric parts of complex:
+                # Using domain._asymmetric_unit_label to propagate this
+                selected_node._sym_break_label = sym_break_label
+                selected_node._asymmetric_unit_label = self.symmetry_fold*2 # sym_break_label
+                print("Increasing symmetry fold to %s by labelling node %s with symmetry-breaking label %s" %
+                      (self.symmetry_fold, selected_node, sym_break_label))
+                # pdb.set_trace()
+                for node in non_unique_nodes:
+                    # Add current icid to node.symmetric_icids so you can later find symmetric domains:
+                    node.symmetric_icids.append(node.icid)
+
+                # What is the best way to "increment" the asymmetric unit label?
+                # Could also be byte string or similar or octal or hex values.
+                # Or, instead of tuples, just do regular addition.
+                # But, for now I want to retain more info for debugging.
+            # end inner "while non_unique_nodes are being reduced" while loop.
+        # end outer "try to break symmetry" while loop
+        self._nodes_have_been_labelled = True
+
+        if self.symmetry_fold >= 10:
+            print("WARNING: Unusually high symmetry fold %s encountered!" % self.symmetry_fold,
+                  "In-complex-identifier for reactants used in reaction spec pair (state hashes) may be ambiguous!")
         else:
-            # Increasing icid range did not help; fall back to using domain instances...
-            # printd("Complex: Increasing icid range did not help; falling back to using domain instances...")
-            # If Complex.icid_use_instance has been set to True, fall back to using domain instances as
-            # in_complex_identifier (icid) for *all* domains. If icid_use_instance is not True but is
-            # boolean True, it is assumed to be a set of domains for which to use domain instance as icid.
-            self.icid_use_instance = True
-            for domain in self.nodes():
-                domain.state_change_reset(reset_complex=False)
-            #pdb.set_trace()
+            if do_print:
+                print("All nodes have been uniquely labelled in complex %s with symmetry fold %s in %s loops.\n" %
+                      (self, self.symmetry_fold, total_loops))
+
 
     def assert_state_change(self, reaction_spec_pair, reaction_attr, reset=False,
                             expected_state_fingerprint=None):
@@ -702,15 +853,15 @@ class Complex(nx.MultiDiGraph):
         ### Edit: We no longer detect micro-cycles, only reaction invocations ###
 
         """
-        if reset:
+        if reset: ## TODO: Determine if we should always reset here
             ## We could reset state fingerprints (strands, hybridizations, stackings);
             ## we can use reaction_attr.reaction_type to know whether to reset hyb or stack,
             ## but we would need to probe result['case'] in order to know whether to reset
             ## strands/backbone fingerprint.
             self.reset_state_fingerprint()
-        assert reaction_spec_pair != self.reaction_deque[-1]
+        assert reaction_spec_pair != self.reaction_deque[-1] != None
         state_fingerprint = self.state_fingerprint()
-        assert state_fingerprint != self._historic_fingerprints[-1]
+        assert state_fingerprint != self._historic_fingerprints[-1] != None
         if expected_state_fingerprint is not None:
             assert state_fingerprint == expected_state_fingerprint
         self._historic_fingerprints.append(state_fingerprint)
@@ -758,10 +909,20 @@ class Complex(nx.MultiDiGraph):
         return (self._state_fingerprint, self._strands_fingerprint, self._stacking_fingerprint)
 
 
-    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=False,
+    def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=True,
                                 reset_domains=True):
+        """ Properly reset complex state fingerprint (and also all domains, by default). """
         ## TODO: Make sure reset_stacking is properly set when required!
         # self.history.append("reset_state_fingerprint: Unsetting fingerprints: %r" % (locals(),))
+        # if self._state_fingerprint is None:
+        #     from inspect import currentframe, getframeinfo
+        #     frameinfo = getframeinfo(currentframe().f_back)
+        #     print("Possible excessive reset_state_fingerprint(%s, %s, %s, %s) called from %s:%s" %
+        #           (reset_strands, reset_hybridizations, reset_stacking, reset_domains,
+        #            frameinfo.filename, frameinfo.lineno))
+        #     frameinfo = getframeinfo(currentframe().f_back.f_back)
+        #     print(" -- Previous frameinfo file and line: %s:%s" % (frameinfo.filename, frameinfo.lineno))
+
         self._state_fingerprint = None
         if reset_strands:
             self._strands_fingerprint = None
@@ -769,42 +930,67 @@ class Complex(nx.MultiDiGraph):
             self._hybridization_fingerprint = None
         if reset_stacking:
             self._stacking_fingerprint = None
+        self._nodes_have_been_labelled = False
         if reset_domains:
             for domain in self.domains():
-                domain.state_change_reset(reset_complex=False)
+                domain.state_change_reset()
 
     # def domains_gen(self):
     #     return (domain for strand in self.strands for domain in strand.domains)
 
+
+    def get_ifnode_by_ifnode_statespec(self, ifnode_statespec):
+        """ Get ifnode instance by it's state-specific hash (fingerprint). """
+        try:
+            return self.ifnode_by_ifnode_statespec[ifnode_statespec]
+        except KeyError:
+            print("ERROR: Could not get ifnode by ifnode_statespec %s" % ifnode_statespec)
+            print(" -- resetting self.ifnode_by_ifnode_statespec")
+            # Update the map, check that no ifnode gives the same hash.
+            ifnodes = [end.ifnode for domain in self.domains() for end in (domain.end5p, domain.end3p)]
+            top_ifnodes = {ifnode for ifnode in ifnodes if ifnode.delegatee is None}
+            self.ifnode_by_ifnode_statespec = {ifnode.state_fingerprint(): ifnode for ifnode in top_ifnodes}
+            try:
+                return self.ifnode_by_ifnode_statespec[ifnode_statespec]
+            except KeyError:
+                print("ERROR: Still could not get ifnode by ifnode_statespec %s" % ifnode_statespec)
+                print(" -- invoking reset_state_fingerprint and then resetting self.ifnode_by_ifnode_statespec")
+                self.reset_state_fingerprint()
+                ifnodes = [end.ifnode for domain in self.domains() for end in (domain.end5p, domain.end3p)]
+                top_ifnodes = {ifnode for ifnode in ifnodes if ifnode.delegatee is None}
+                self.ifnode_by_ifnode_statespec = {ifnode.state_fingerprint(): ifnode for ifnode in top_ifnodes}
+                return self.ifnode_by_ifnode_statespec[ifnode_statespec]
+
+
     def strands_species_count(self):
         """ Count the number of strand species. Used as part of complex state finger-printing. """
-        species_counts = {}
+        strand_species_counts = {}
         domain_species_counts = {}
         for strand in self.strands:
-            if strand.name not in species_counts:
-                species_counts[strand.name] = 1
+            if strand.name not in strand_species_counts:
+                strand_species_counts[strand.name] = 1
             else:
-                species_counts[strand.name] += 1
+                strand_species_counts[strand.name] += 1
             for domain in strand.domains:
                 if domain.name not in domain_species_counts:
                     domain_species_counts[domain.name] = 1
                 else:
                     domain_species_counts[domain.name] += 1
-        # Remove entries with zero count:
+        # Remove entries from strand_species_counter with zero count:
         depleted = [sname for sname, count in self.strand_species_counter.items() if count < 1]
         for sname in depleted:
             del self.strand_species_counter[sname]
 
-        assert species_counts == self.strand_species_counter
+        assert strand_species_counts == self.strand_species_counter
 
-        # Remove entries with zero count:
+        # Remove entries from domain_species_counter with zero count:
         depleted = [name for name, count in self.domain_species_counter.items() if count < 1]
         for name in depleted:
             del self.domain_species_counter[name]
         assert domain_species_counts == self.domain_species_counter
-        #return species_counts
+        #return strand_species_counts
         # Used for hashing, so return a hashable frozenset(((specie1, count), ...))
-        return frozenset(species_counts.items())
+        return frozenset(strand_species_counts.items())
 
     def strands_fingerprint(self):
         """ Create a finger-print of the current strands (species). """
@@ -884,21 +1070,23 @@ class Complex(nx.MultiDiGraph):
         return self._hybridization_fingerprint
 
 
-    def hybridization_edges(self):
+    def hybridization_edges(self, direction=None):
         """
         How to get a list of domain hybridization?
         * self.edges() will generate a list of all connections: backbone, hybridization and stacking.
 
         """
         # you can loop over all edges and filter by type:
-        edges = [(d1, d2) for d1, d2, key, interaction in self.edges(keys=True, data='interaction')
-                 if key == HYBRIDIZATION_INTERACTION or interaction == HYBRIDIZATION_INTERACTION]
+        if direction is None:
+            edges = [(d1, d2) for d1, d2, key, interaction in self.edges(keys=True, data='interaction')
+                     if key == HYBRIDIZATION_INTERACTION or interaction == HYBRIDIZATION_INTERACTION]
+        else:
+            edges = [(d1, d2) for d1, d2, key, eattr in self.edges(keys=True, data=True)
+                     if key == HYBRIDIZATION_INTERACTION and eattr['direction'] == direction]
         # or maybe it is easier to keep a dict with hybridization connections:
-        # hyb_edges = self.hybridized_domains
-        # if self.is_directed():
         assert set(frozenset(tup) for tup in edges) == self.hybridized_pairs
-        # else:
-        #     assert set(frozenset(tup) for tup in edges) == self.hybridized_pairs
+        ## TODO: Remove check and only use one or the other
+        ## (I might not need self.hybridized_pairs with new domain icid labelling scheme..
         return edges
 
 
@@ -926,7 +1114,7 @@ class Complex(nx.MultiDiGraph):
         return self._stacking_fingerprint
 
 
-    def stacking_edges(self):
+    def stacking_edges(self, direction=DIRECTION_DOWNSTREAM):
         """
         stacking_edges vs stacking_ends:
          - stacking_edge is a tuple: (h1end3p, h1end5p)
@@ -941,12 +1129,16 @@ class Complex(nx.MultiDiGraph):
         # But need directionality to know which end of the domain is pairing.
         # New: Complex is now a directed graph. It won't work for analysis,
         # but we have system graphs for that, so let's try.
-        stack_edges = [(d1, d2) for d1, d2, key, interaction in self.edges(keys=True, data='interaction')
-                       if key == STACKING_INTERACTION or interaction == STACKING_INTERACTION]
+        if direction is None:
+            edges = [(d1, d2) for d1, d2, key, interaction in self.edges(keys=True, data='interaction')
+                     if key == STACKING_INTERACTION or interaction == STACKING_INTERACTION]
+        else:
+            edges = [(d1, d2) for d1, d2, key, eattr in self.edges(keys=True, data=True)
+                     if key == STACKING_INTERACTION and eattr['direction'] == direction]
         # Only if Complex is a DiGraph:
-        assert set(stack_edges) == self.stacked_pairs and len(set(stack_edges)) == len(self.stacked_pairs)
+        assert set(edges) == self.stacked_pairs # and len(set(edges)) == len(self.stacked_pairs)
         # For now, I have to keep a dict with hybridization connections:
-        return stack_edges
+        return edges
         #return self.stacked_pairs
 
 
@@ -991,9 +1183,69 @@ class Complex(nx.MultiDiGraph):
 
 
 
+    def print_history(self, history=None, level=0, indent_str="    ", search_str=None, limit=20, totlimit=100,
+                      reverse=True, last_first=True):
+        print("History for %r (%s, %s)" % (self, "reversed" if reverse else "", "last-first" if last_first else ""))
+        if history is None:
+            history = self.history
+        if last_first ^ reverse: # last_first != reverse, XOR
+            entries = self.gen_history_records(history=history, level=level, search_str=search_str,
+                                               limit=limit, totlimit=totlimit, reverse=reverse)
+        else:
+            entries = reversed(list(self.gen_history_records(
+                history=history, level=level, search_str=search_str,
+                limit=limit, totlimit=totlimit, reverse=reverse)))
+        for (level, entry) in entries:
+            print(indent_str*level + entry)
+
+    def history_str(self, history=None, level=0, indent_str="    ", search_str=None, sep="\n",
+                    limit=20, totlimit=100, reverse=False):
+        return sep.join((indent_str*level + entry) for level, entry
+            in self.gen_history_records(history=history, level=level, search_str=search_str,
+                                        limit=limit, totlimit=totlimit, reverse=reverse))
+
+    def gen_history_records(self, history=None, level=0, search_str=None, limit=20, totlimit=1000, reverse=False):
+        if history is None:
+            history = self.history
+        if limit and limit < len(history):
+            org_length = len(history)
+            history = history[-limit:] # Makes a slice copy
+            history[0] = "(...history truncated to %s of %s entries...)" % (len(history), org_length)
+        if reversed:
+            history = reversed(history)
+        for entry in history:
+            totlimit -= 1
+            if totlimit < 0:
+                yield "(...totlimit reached, breaking of here...)"
+                break
+            if isinstance(entry, str):
+                if search_str is None or search_str in entry:
+                    yield (level, entry)
+            else:
+                # Returning a final value from a generator and obtaining it with "yield from" is
+                # a new feature of python 3.3. Not available in pypy yet.
+                nextgen =  self.gen_history_records(history=entry, level=level+1,
+                                                    search_str=search_str,
+                                                    limit=limit-1, totlimit=totlimit)
+                # if sys.version_info > (3, 2):
+                # totlimit = yield from nextgen
+                # else:
+                for val in nextgen:
+                    yield val
+        # if sys.version_info > (3, 2):
+        #     return totlimit
+
+
+
+
 # class SuperComplex(ConnectedMultiGraph):
 #     """
-#     Each node is a complex.
+#     Each node is a complex. For complexes that are making temporary stacking interactions.
+#     Since stacking interactions are unlikely, the idea was to join them by forming a "SuperComplex",
+#     instead of performing a full join_complex_at followed by a costly break_complex_at cycle for a transient interaction.
+#     However, the added complexity currently isn't worth the expected gain (premature optimization).
+#     Perhaps I will do this later, or perhaps I will find a way to make break_complex_at cheaper,
+#     e.g. by better caching.
 #     """
 #     def __init__(self, **kwargs):
 #         super().__init__(**kwargs)

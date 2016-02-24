@@ -84,7 +84,7 @@ def main():
     structure = "duplex_20bp_2d_5T-loop"
     structure = "duplex_20bp_2d_4T-loop"
     structure = "duplex_20bp_2d_2T-loop"
-    structure = "circfb_1"
+    # structure = "circfb_1"
 
     #n_strand_copies_default = 400
     #n_strand_copies_default = 100
