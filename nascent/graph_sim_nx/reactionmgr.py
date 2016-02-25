@@ -99,7 +99,14 @@ RA_STACK_INTRA = ReactionAttrs(STACKING_INTERACTION, True, True)
 RA_STACK_INTER = ReactionAttrs(STACKING_INTERACTION, True, False)
 RA_STACK_INTRA = ReactionAttrs(STACKING_INTERACTION, False, True)
 
-reaction_graph_sequantial_number_generator = sequential_number_generator()
+reaction_graph_sequantial_number_generator = sequential_number_generator()  # Used for reaction_graph filenames.
+cmplx_state_sequential_number_generator = sequential_number_generator()     # Used for enumerating complex states
+# Using sequential numbers instead of hashes might be a little easier on the eyes but otherwise have no effect.
+cmplx_state_hashes = []         # number => cstate hash
+cmplx_state_enum_by_hash = {}   # cstate_hash => enum (runtime specific)
+
+loopid_sequential_number_generator = sequential_number_generator()
+
 
 
 debug_test_throttles = False
@@ -1643,7 +1650,7 @@ class ReactionMgr(ComponentMgr):
             # pprintd(ch_cmplx_domains)
             changed_domains += ch_cmplx_domains
         if result['new_complexes']:
-            self.complexes |= set(result['new_complexes'])
+            # self.complexes |= set(result['new_complexes'])
             # printd("Adding new complexes %s to sysmgr.complexes:" % result['new_complexes'])
             # pprintd(self.complexes)
             new_cmplx_domains = [domain for cmplx in result['new_complexes'] for domain in cmplx.nodes()
@@ -1660,8 +1667,8 @@ class ReactionMgr(ComponentMgr):
                               ]
             changed_domains += free_st_domains
         if result['obsolete_complexes']:
-            self.complexes -= set(result['obsolete_complexes'])
-            self.removed_complexes += result['obsolete_complexes']
+            # self.complexes -= set(result['obsolete_complexes'])
+            # self.removed_complexes += result['obsolete_complexes']
             # printd("Removing obsolete complexes %s from sysmgr.complexes:" % result['obsolete_complexes'])
             # pprintd(self.complexes)
             # printd("sysmgr.removed_complexes:")
@@ -1836,7 +1843,7 @@ class ReactionMgr(ComponentMgr):
             free_st_domains = [domain for strand in result['free_strands'] for domain in strand.domains]
             changed_domains += free_st_domains
         if result['new_complexes']:
-            self.complexes |= set(result['new_complexes'])
+            # self.complexes |= set(result['new_complexes'])
             # printd("stack_and_process: Adding new complexes %s to sysmgr.complexes:" % result['new_complexes'])
             # pprintd(self.complexes)
             new_cmplx_domains = [domain for cmplx in result['new_complexes'] for domain in cmplx.nodes()]
@@ -1844,8 +1851,8 @@ class ReactionMgr(ComponentMgr):
             # printd("stack_and_process: New complexes domains:")
             # pprintd(new_cmplx_domains)
         if result['obsolete_complexes']:
-            self.complexes -= set(result['obsolete_complexes'])
-            self.removed_complexes += result['obsolete_complexes']
+            # self.complexes -= set(result['obsolete_complexes'])
+            # self.removed_complexes += result['obsolete_complexes']
             # printd("stack_and_process: Removing obsolete complexes %s from sysmgr.complexes:" % result['obsolete_complexes'])
             # pprintd(self.complexes)
             # printd("stack_and_process: sysmgr.removed_complexes:")
@@ -1980,7 +1987,7 @@ class ReactionMgr(ComponentMgr):
                              for cmplx in lst]
 
 
-        ### 1. Assert state change for all changed complexes: ###
+        ### 0. Assert state change for all changed complexes: ###
         for cmplx in changed_complexes:
             source_state = cmplx._historic_fingerprints[-1]
             expected_state_fingerprint = None
@@ -2005,6 +2012,51 @@ class ReactionMgr(ComponentMgr):
             for strand in reaction_result['free_strands']:
                 for domain in strand.domains:
                     domain.state_change_reset()
+
+
+        ## 1. Form or break loops: ##
+        # We do this here because we need the loop energies for updating complexes and reaction graph energies
+        # By definition, if we are forming or breaking a loop, then only one complex is changed.
+        # We get info about forming loops from the loop_effects dict obtained in intracomplex_activity
+        if reaction_attr.is_forming:
+            # See if we have any loop_effects dicts registered for this reaction:
+            if reacted_spec_pair in self.reaction_loop_effects:
+                loop_effects = self.reaction_loop_effects[reacted_spec_pair]
+                ## TODO: (Optimization) Check if the old ifnodes path is still valid (if may well be...)
+                ## Re-create ifnodes from
+                assert len(reaction_result['changed_complexes']) == 1
+                assert reaction_result['new_complexes'] is None
+                assert reaction_result['free_strands'] is None
+                cmplx = reaction_result['changed_complexes'][0]
+                # The shortest-path loop should certainly be created:
+                # TODO: Consolidate all this with a Complex method register_new_loop
+                shortest_loop_path_spec = loop_effects['shortest_path_spec']  # primary loop path
+                # loop_path_spec, loop_path, loop_activity, replacing_loop_spec=None
+                cmplx.register_new_loop(
+                    shortest_loop_path_spec,
+                    loop_effects['shortest_path_activity'])
+
+                # Then consider splitted-loops:
+                # What about loops that are just adjusted? E.g. by stacking backbone-linked duplexes?
+                # old_loop_spec => [replacement_path1, replacement_path2]
+                for loop0_state_hash, replacement_loops in loop_effects['new_loops_specs'].items():
+                    # A loop is split in either 1 or two new loops.
+                    if len(replacement_loops) == 1:
+                        # Perhaps just adjust existing loop?
+                    else:
+                        for new_smaller_loop in replacement_loops:
+                            
+
+
+                # Consider other affected loops, not being split but still affected?
+                # if loop_effects['loops_affected']:
+                #     for loop0 in loop_effects['loops_affected']:
+                #         # Should re-calculate loop0 energy:
+                #         if new_loop_paths:
+                            # Loop is not
+
+
+
 
         ### 2. Calculate state energy change used to update complex energies and reaction graph: ###
         dH, dS = 0, 0  # Total reaction enthalpy and entropy
@@ -2416,6 +2468,10 @@ class ReactionMgr(ComponentMgr):
         #     self.reaction_throttle_cache[self.reverse_reaction_key[k]])
         #                 for k, v in sorted(self.reaction_throttle_cache.items())))
         # print("\n".join("\n%-52s: %s\n%-52s: %s" % (reaction_to_str(*k), v, reaction_to_str(*self.reverse_reaction_key[k]), self.reaction_throttle_cache[self.reverse_reaction_key[k]]) for k, v in sorted(self.reaction_throttle_cache.items())))
+
+
+
+
 
 
     def record_new_complex_state(self, cmplx, state_fingerprint):

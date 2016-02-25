@@ -164,21 +164,6 @@ def determine_end_end_distance(source, target, edge_attrs, interaction):
     return length, length_sq, stiffness
 
 
-def calculate_loop_hash(cmplx, loop, loopid=None):
-    """
-    Calculate a state-dependent hash for the given loop.
-    Complex state fingerprint and domain icid labelling must be up-to-date.
-    """
-    if loop is None:
-        assert loopid is not None
-        loop = cmplx.loop_by_loopid[loopid]
-    edgelist = list(zip(loop[:-1], loop[1:]))
-    edgelist.append((loop[-1], loop[0]))
-    # Converting each tuple to frozenset because order doesn't matter.
-    edges = frozenset(frozenset((src.state_fingerprint(), tgt.state_fingerprint()))
-                      for src, tgt in edgelist)
-    return hash(edges)
-
 
 
 
@@ -583,7 +568,7 @@ class GraphManager(object):
 
 
 
-    def intracomplex_activity(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION):
+    def intracomplex_activity(self, elem1, elem2, reaction_type):
         r"""
         Returns
             :intracomplex_activity:
@@ -598,7 +583,7 @@ class GraphManager(object):
         return activity
 
 
-    def loop_formation_effects(self, elem1, elem2, reaction_type=HYBRIDIZATION_INTERACTION):
+    def loop_formation_effects(self, elem1, elem2, reaction_type):
         r"""
         Returns tuple with:
             activity, loop_info
@@ -651,7 +636,11 @@ class GraphManager(object):
             assert d1end5p.ifnode.top_delegate() == d1end5p.ifnode
             assert d2end5p.ifnode.top_delegate() == d2end5p.ifnode
             reactant_nodes = {d1end3p.ifnode, d2end3p.ifnode, d1end5p.ifnode, d2end5p.ifnode}
-            ## DETECT IF THE TWO DOMAINS ARE ALREADY PART OF AN EXISTING LOOP:
+            ## TODO: (OPTIMIZATION) Instead of finding the shortest path, try to
+            ## DETECT IF THE TWO DOMAINS ARE ALREADY PART OF AN EXISTING LOOP.
+            ## If they are, then the existing loop should give the shortest path.
+            ## (For now, just assert that IF the two loops are part of an existing, non-obsolete loop,
+            ## then the shortest path is in that loop.)
             path = shortest_path(self.interface_graph, d1end5p.ifnode, d2end5p.ifnode)
             slice_start = 1 if path[1] == d1end3p.ifnode else 0
             slice_end = -1 if path[-2] == d2end3p.ifnode else None
@@ -714,22 +703,32 @@ class GraphManager(object):
 
         processed_secondary_loopids = set()
         all_affected_loops = set()
-        new_loops = {}   # old_id => [new_loop1_path, new_loop2_path, ...]
+        changed_loops = {}   # old_id => [new_loop1_path, new_loop2_path, ...]
+        # It would be nice to also have the activities for the new loops created (not just the shortest-loop)
+        # Maybe have a 'changed_loops' old_loopid => [list of dicts describing new loops]
         loop_split_factors = []
         side_effects_factor = 1
         side_effects_activities = []
         side_effects_factors = []
         loop_effects = {
-            'activity': 0,
+            'activity': 0,   # Product of shortest-path activity and any/all loop_change_factors.
             'shortest_path': path,
             'shortest_path_activity': activity,
-            'new_loops': new_loops,
+            'changed_loops': changed_loops,
+            # currently just old_loopid => [list of new paths] - but it would be nice to also have activities.
+            # Edit: Is now a list of dicts, each dict representing the new loop formed, with keys 'path' and activity.
             'loops_considered': processed_secondary_loopids,
-            'loops_affected': all_affected_loops,
+            # 'loops_affected': all_affected_loops,  # Obsoleted by changed_loops
             'loop_split_factors': loop_split_factors,
             'stacking_side_effects_activities': side_effects_activities,
             'stacking_side_effects_factors': side_effects_factors,
         }
+        loop_effects['shortest_path_spec'] = [ifnode.state_fingerprint() for ifnode in path]
+
+        if not cmplx.loopids_by_interface:
+            # Complex has no existing loops, just return already:
+            return activity, loop_effects
+
 
         ## Useful NetworkX functions:
         ## networkx.algorithms.cycles.cycle_basis
@@ -772,253 +771,283 @@ class GraphManager(object):
         ## TODO: There are cases when we are splitting an existing loop, but not by direct "pinching":
         ## In fact, IN MOST CASES, path[0] and path[-1] will NOT BOTH be part of an existing loop, even though
         ## they are effectively splitting a loop in two. See notes on Wang-Uhlenbeck entropy.
-        if False and (path[0] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[0]]) > 0
-            and path[-1] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[-1]]) > 0):
-            ## TODO: Need to test this - e.g. case 1(a) or 1(b)
-            ## TODO: I feel like we should still cosider *all* shared loops and not just break out by this one case ^^
-            ## TODO: THIS CASE NEEDS TO BE COMPLETELY RE-WORKED!
-            ## Perfect "pinching" of existing loop (rare)
-            # We have a secondary loop.
-            # Find loops containing both the first and last path interface nodes:
-            shared_loopids = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[-1]]
-            assert len(shared_loopids) == 1           ## Not sure about this...
-            loop0id = next(iter(shared_loopids))
-            loop0 = cmplx.loops[loop0id]
-            loop0_path = loop0['path'] # list of ifnodes from when the loop was made.
-            # IF the reaction/node-merge splits more than ONE loop, we want to know!
-            # Can we always use the smallest loop, or is there a particular order that must be obeyed?
-            # Also, is the number of nodes "len(loop['nodes'])" the way to go?
-            # It is not the same as the "shortest" path method..
-            ## TODO: Check/fix this code:  - EDIT: Replaced by len(shared_loops) == 1 above.
-            # loop0 = min(shared_loops, key=lambda loop: len(loop['nodes']))  # NOT GUARANTEED
-            path1_nodes = set(path)
-            assert all(node in loop0['ifnodes'] for node in path)             # NOT GUARANTEED
-            assert path1_nodes <= loop0['ifnodes']
-            # Using set operations is faster (path is subset of existing loop0)
-            # Set operators: &: intersection, -: difference), ^: symmetric_difference, <=: is subset, >=: superset.
-            path2_nodes = loop0['ifnodes'] - path1_nodes
-            loop0_path_idxs = (loop0_path.index(path[0]), loop0_path.index(path[-1]))
-            if loop0_path_idxs[0] > loop0_path_idxs[1]:
-                loop0_path_idxs = loop0_path_idxs[::-1]
-            path1 = e1 = loop0_path[loop0_path_idxs[0]:loop0_path_idxs[1]+1]
-            path2 = e2 = loop0_path[loop0_path_idxs[1]:] + loop0_path[:loop0_path_idxs[0]+1]
-            # path is the shortest path and should equal either e1 or e2:
-            assert all(node in path1 for node in path) or all(node in path2 for node in path)
-            # a1 = self.calculate_loop_activity(path1, simulate_reaction=reaction_type)
-            a2 = self.calculate_loop_activity(path2, simulate_reaction=reaction_type)
-            a0 = loop0["activity"]
-            ## THIS SHOULD JUST BE APPENDED TO loop_split_factors:
-            loop_split_factors.append(a2/a0)
-            processed_secondary_loopids.add(loop0id)
-            pdb.set_trace()
-            # If hybridization, special case where we account for the length of the newly-formed duplex.
-            # TODO: This should not preclude processing of other shared loops, but rather be just an optimization.
-        elif cmplx.loopids_by_interface:
-            ## Check for non-pinching loop-splitting cases: (partial loop sharing)
-            ##           Λ₀              .------.
-            ##            .----------,--´------. \
-            ##           /   Λ₁     /          \  \ e₄ (not part of the original discussion)
-            ##        e₁ \      e₃ /:/   Λ₂    /   \
-            ##            \         |         / e₂  \
-            ##             `----.--´---------´      |
-            ##                   `-----------------´
-            ## Where symbols Λ₀ Λ₁ Λ₂ e₁ e₂ e₃
-            ## Λ₁ = e₁+e₃ is the shortest path loop, for the reaction in question,
-            ## Λ₀ = e₁+e₂ is an existing loop, overlapping the reaction shortest loop path,
-            ## Λ₂ = e₂+e₃ is the path for the other loop, formed by splitting Λ₀.
-            ## e₁ is the part shared by both Λ₁ and Λ₀ but not in Λ₂
-            ## e₃ is the path in both Λ₁ and Λ₂ but not in Λ₀,
-            ## e₂ is the part shared by both Λ₂ and Λ₀ but not in Λ1
-            ## e2 > e1 because by shortest-path definition e₁+e₃ < e₂+e₃.
-            ## The Wang-Uhlenbeck matrix can be written as:
-            ##      ┌ e1+e3   e3  ┐   ┌ e1+e3   e1  ┐   ┌ e1+e2   e2  ┐
-            ##  W = │             │ = │             │ = │             │
-            ##      └  e3   e2+e3 ┘   └  e1   e1-e2 ┘   └  e2   e3+e2 ┘
-            ## In general we have Wang-Uhlenbeck determinant (where dS = R α ln(det(W)))
-            ##      Before forming e3: det(W₀) = Λ₀ = e₁+e₂
-            ##      After  forming e3: det(W₁) = e₁e₂ + e₂e₃ + e₃e₁
-            ##                         = (e1+e3) (e2+e3) - e3^2  = Λ₁ Λ₂ - e3^2
-            ##                         = (e3+e1) (e2+e1) - e1^2  = Λ₁ Λ₀ - e1^2
-            ## For e₃ == 0, we have the special case:
-            ##  det(W₀) = e₁e₂       and det(W₀) = Λ₀ = e₁+e₂
-            ##      a = a₁*a₂/a₀     where aᵢ is the activity calculated for loop Λᵢ alone.
-            ## What about the case where e3 is a single, rigid element?
-            ##  * This would be the stacking-reaction side-effects considered above..
-            ##  * Means that Λ₁ and Λ₂ are independent. Same as for e3 == 0.
-            ## Maybe all cases where Λ₁ and Λ₂ are independent can be calculated by multiplying a₁ with a₂/a₀.
-            ## Can we consider the a₂/a₀ a "side-effect"?
-            ## Thus, just go over all shared loops and ask:
-            ## * Is e3 splitting the loop into two independent loops? - Calculate factor a₂/a₀.
-            ## The criteria for e3 yielding independent loop splitting is:
-            ## * If e3 is a single, rigid segment,
-            ## * If e1 >> 0 and e3 < e1 (e1 < e2 by definition).
-            ## For e1 ≈ 0:
-            ##  det(W₁) = Λ₁ Λ₀ - e1^2 ≈ Λ₁ Λ₀
-            ##  a ≈ a₁*a₀/a₀ = a₁
-            ## This latter condition should also be applicable if e3 >> e2 > e1
-            ## However, these case approximations assume e1, e2, e3 are made up of a big number of flexible kuhn links.
-            ##
-            ## Is there a way to look at these purely from a
-            ##
-            ## Can we view this as "the shortest-path activity modulated by the
-            ## This is really non-obvious, but let's give it a try...
-            ## First see if there is any overlap between the shortest path and existing loops:
-            path1_nodes = set(path)
-            shared_nodes = path1_nodes.intersection(cmplx.loopids_by_interface.keys())
-            if shared_nodes:
-                shared_loopids = set.union(*[cmplx.loopids_by_interface[ifnode] for ifnode in shared_nodes])
-            else:
-                shared_loopids = {}
-            ## We have a few special cases:
-            ## If the new edge e₃ is completely rigid, then e₂ has no influence on Λ₁, nor does e₁ influence on Λ₂.
-            ## - The "e₃ == 0" aka "loop pinching" above can be seen as a special case of this.
-            ## Perhaps just simplify as:
-            ## * If e₃ has fewer segments than e₁, e₂ then calculate activity as:
-            ##      a = a₁*a₂/a₀, where a₁ = f(e₁+e₃)e₂, a₂ = f(e₂+e₃), and a₀ = f(e₁+e₂) is the outer loop activity.
-            ##      and f is calculate_loop_activity function.
-            ##   How is this different from what is done in the side-effects?
-            ##   * Currently we only search for side-effects from stacking.
-            ## * If e₃ has more segments than e₁, e₂ then calculate activity simply using the shortest path:
-            ##      a = a₁ if e₁ < e₂ else a₂
-            ## Symbols: Λ₀ Λ₁ Λ₂ e₁ e₂ e₃
-            if shared_loopids:
-                shared_loops = [cmplx.loops[loop0id] for loop0id in shared_loopids]
-                ## TODO: Check that this does not overlap with the "side-effects" factors calculation..
-                ## It actually seems like this could supplant the side-effects calculation.
-                # Find nodes that are not part of any loops:
-                # fully_unshared_nodes = path1_nodes.difference(cmplx.loopids_by_interface.keys())
-                for loop0 in shared_loops:
-                    # path is shortest-path loop Λ₁, shared loop is Λ₀ aka "loop0".
-                    # Makes lookup faster for long loop0 but with constant overhead.
-                    loop0_nodes = loop0['ifnodes']
-                    loop0_path = loop0['path']
-                    assert loop0_nodes == set(loop0_path)  ## TODO: Remove assertion
-                    # Casting group_iter to list: (TODO: Check if that is really needed...)
-                    e1_or_e3_sub_paths = [(is_shared, list(group_iter)) for is_shared, group_iter in
-                                          groupby(path, lambda ifnode: ifnode in loop0_nodes)]
-                    # grouped_path consists of the first part of e3, then e1, then the last part of e3.
-                    # Do we ever encounter e2? Well, not when we are grouping shortest path (e3+e1 by definition)..
-                    # Except if e3a or e3b have zero length (full or half pinching).
-                    # If e3 == 0 (e3_nodes = Ø), then we'll only have a single group!
-                    # This can happen both for stacking and hybridization.
-                    # There are also cases where len(e1_or_e3_sub_paths) == 2!
-                    assert len(e1_or_e3_sub_paths) <= 3
-                    if len(e1_or_e3_sub_paths) == 1:
-                        assert e1_or_e3_sub_paths[0][0] is True  # verify that e₁ is on Λ₀
+        # if False and (path[0] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[0]]) > 0
+        #     and path[-1] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[-1]]) > 0):
+        #     ## Uh, OK so both elems are part of one or more existing loops. But we don't know if they are
+        #     ##  part of the SAME loop. Not the best way to do it.. In any case, it is probably better
+        #     ##  to handle this case like any other, as it is done below.
+        #     ## For the record, this is what you should have done:
+        #     loop_with_both_nodes = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[0]]
+        #     ## TODO: Need to test this - e.g. case 1(a) or 1(b)
+        #     ## TODO: I feel like we should still cosider *all* shared loops and not just break out by this one case ^^
+        #     ## TODO: THIS CASE NEEDS TO BE COMPLETELY RE-WORKED!
+        #     ## Perfect "pinching" of existing loop (rare)
+        #     # We have a secondary loop.
+        #     # Find loops containing both the first and last path interface nodes:
+        #     shared_loopids = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[-1]]
+        #     assert len(shared_loopids) == 1           ## Not sure about this...
+        #     loop0id = next(iter(shared_loopids))
+        #     loop0 = cmplx.loops[loop0id]
+        #     loop0_path = loop0['path'] # list of ifnodes from when the loop was made.
+        #     # IF the reaction/node-merge splits more than ONE loop, we want to know!
+        #     # Can we always use the smallest loop, or is there a particular order that must be obeyed?
+        #     # Also, is the number of nodes "len(loop['nodes'])" the way to go?
+        #     # It is not the same as the "shortest" path method..
+        #     ## TODO: Check/fix this code:  - EDIT: Replaced by len(shared_loops) == 1 above.
+        #     # loop0 = min(shared_loops, key=lambda loop: len(loop['nodes']))  # NOT GUARANTEED
+        #     shortest_path_nodes = set(path)
+        #     assert all(node in loop0['ifnodes'] for node in path)             # NOT GUARANTEED
+        #     assert shortest_path_nodes <= loop0['ifnodes']
+        #     # Using set operations is faster (path is subset of existing loop0)
+        #     # Set operators: &: intersection, -: difference), ^: symmetric_difference, <=: is subset, >=: superset.
+        #     path2_nodes = loop0['ifnodes'] - shortest_path_nodes
+        #     loop0_path_idxs = (loop0_path.index(path[0]), loop0_path.index(path[-1]))
+        #     if loop0_path_idxs[0] > loop0_path_idxs[1]:
+        #         loop0_path_idxs = loop0_path_idxs[::-1]
+        #     path1 = e1 = loop0_path[loop0_path_idxs[0]:loop0_path_idxs[1]+1]
+        #     path2 = e2 = loop0_path[loop0_path_idxs[1]:] + loop0_path[:loop0_path_idxs[0]+1]
+        #     # path is the shortest path and should equal either e1 or e2:
+        #     assert all(node in path1 for node in path) or all(node in path2 for node in path)
+        #     # a1 = self.calculate_loop_activity(path1, simulate_reaction=reaction_type)
+        #     a2 = self.calculate_loop_activity(path2, simulate_reaction=reaction_type)
+        #     a0 = loop0["activity"]
+        #     ## THIS SHOULD JUST BE APPENDED TO loop_split_factors:
+        #     loop_split_factors.append(a2/a0)
+        #     processed_secondary_loopids.add(loop0id)
+        #     pdb.set_trace()
+        #     # If hybridization, special case where we account for the length of the newly-formed duplex.
+        #     # TODO: This should not preclude processing of other shared loops, but rather be just an optimization.
+
+        # elif cmplx.loopids_by_interface:
+
+        ## Check for non-pinching loop-splitting cases: (partial loop sharing)
+        ##           Λ₀              .------.
+        ##            .----------,--´------. \
+        ##           /   Λ₁     /          \  \ e₄ (not part of the original discussion)
+        ##        e₁ \      e₃ /:/   Λ₂    /   \
+        ##            \         |         / e₂  \
+        ##             `----.--´---------´      |
+        ##                   `-----------------´
+        ## Where symbols Λ₀ Λ₁ Λ₂ e₁ e₂ e₃
+        ## Λ₁ = e₁+e₃ is the shortest path loop, for the reaction in question,
+        ## Λ₀ = e₁+e₂ is an existing loop, overlapping the reaction shortest loop path,
+        ## Λ₂ = e₂+e₃ is the path for the other loop, formed by splitting Λ₀.
+        ## e₁ is the part shared by both Λ₁ and Λ₀ but not in Λ₂
+        ## e₃ is the path in both Λ₁ and Λ₂ but not in Λ₀,
+        ## e₂ is the part shared by both Λ₂ and Λ₀ but not in Λ1
+        ## e2 > e1 because by shortest-path definition e₁+e₃ < e₂+e₃.
+        ## The Wang-Uhlenbeck matrix can be written as:
+        ##      ┌ e1+e3   e3  ┐   ┌ e1+e3   e1  ┐   ┌ e1+e2   e2  ┐
+        ##  W = │             │ = │             │ = │             │
+        ##      └  e3   e2+e3 ┘   └  e1   e1-e2 ┘   └  e2   e3+e2 ┘
+        ## In general we have Wang-Uhlenbeck determinant (where dS = R α ln(det(W)))
+        ##      Before forming e3: det(W₀) = Λ₀ = e₁+e₂
+        ##      After  forming e3: det(W₁) = e₁e₂ + e₂e₃ + e₃e₁
+        ##                         = (e1+e3) (e2+e3) - e3^2  = Λ₁ Λ₂ - e3^2
+        ##                         = (e3+e1) (e2+e1) - e1^2  = Λ₁ Λ₀ - e1^2
+        ## For e₃ == 0, we have the special case:
+        ##  det(W₀) = e₁e₂       and det(W₀) = Λ₀ = e₁+e₂
+        ##      a = a₁*a₂/a₀     where aᵢ is the activity calculated for loop Λᵢ alone.
+        ## What about the case where e3 is a single, rigid element?
+        ##  * This would be the stacking-reaction side-effects considered above..
+        ##  * Means that Λ₁ and Λ₂ are independent. Same as for e3 == 0.
+        ## Maybe all cases where Λ₁ and Λ₂ are independent can be calculated by multiplying a₁ with a₂/a₀.
+        ## Can we consider the a₂/a₀ a "side-effect"?
+        ## Thus, just go over all shared loops and ask:
+        ## * Is e3 splitting the loop into two independent loops? - Calculate factor a₂/a₀.
+        ## The criteria for e3 yielding independent loop splitting is:
+        ## * If e3 is a single, rigid segment,
+        ## * If e1 >> 0 and e3 < e1 (e1 < e2 by definition).
+        ## For e1 ≈ 0:
+        ##  det(W₁) = Λ₁ Λ₀ - e1^2 ≈ Λ₁ Λ₀
+        ##  a ≈ a₁*a₀/a₀ = a₁
+        ## This latter condition should also be applicable if e3 >> e2 > e1
+        ## However, these case approximations assume e1, e2, e3 are made up of a big number of flexible kuhn links.
+        ##
+        ## Is there a way to look at these purely from a
+        ##
+        ## Can we view this as "the shortest-path activity modulated by the
+        ## This is really non-obvious, but let's give it a try...
+        ## First see if there is any overlap between the shortest path and existing loops:
+        loops_with_both_nodes = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[0]]
+        shortest_path_nodes = set(path)
+        # Quick way to get all nodes on the shortest path that are already on *ANY* existing loop.
+        shared_nodes = shortest_path_nodes.intersection(cmplx.loopids_by_interface.keys())
+        if shared_nodes:
+            shared_loopids = set.union(*[cmplx.loopids_by_interface[ifnode] for ifnode in shared_nodes])
+        else:
+            shared_loopids = {}
+        assert loops_with_both_nodes <= shared_loopids
+        assert len(loops_with_both_nodes) <= 1
+        ## We have a few special cases:
+        ## If the new edge e₃ is completely rigid, then e₂ has no influence on Λ₁, nor does e₁ influence on Λ₂.
+        ## - The "e₃ == 0" aka "loop pinching" above can be seen as a special case of this.
+        ## Perhaps just simplify as:
+        ## * If e₃ has fewer segments than e₁, e₂ then calculate activity as:
+        ##      a = a₁*a₂/a₀, where a₁ = f(e₁+e₃)e₂, a₂ = f(e₂+e₃), and a₀ = f(e₁+e₂) is the outer loop activity.
+        ##      and f is calculate_loop_activity function.
+        ##   How is this different from what is done in the side-effects?
+        ##   * Currently we only search for side-effects from stacking.
+        ## * If e₃ has more segments than e₁, e₂ then calculate activity simply using the shortest path:
+        ##      a = a₁ if e₁ < e₂ else a₂
+        ## Symbols: Λ₀ Λ₁ Λ₂ e₁ e₂ e₃
+        if shared_loopids:
+            # shared_loops = [ for loop0id in shared_loopids]
+            ## TODO: Check that this does not overlap with the "side-effects" factors calculation..
+            ## It actually seems like this could supplant the side-effects calculation.
+            # Find nodes that are not part of any loops:
+            # fully_unshared_nodes = shortest_path_nodes.difference(cmplx.loopids_by_interface.keys())
+            for loop0id in shared_loopids:
+                loop0 = cmplx.loop_by_loopid[loop0id]
+                # path is shortest-path loop Λ₁, shared loop is Λ₀ aka "loop0".
+                # Makes lookup faster for long loop0 but with constant overhead.
+                ## TODO (optimization): If path[0] and path[-1] are both in the loop, then this can be optimized,
+                ##  because you don't have to group, but can simply calculate the e1, e2 paths directly.
+                #loop0_nodes = loop0['ifnodes']
+                loop0_path = loop0['path']
+                loop0_hash = cmplx.calculate_loop_hash(loop0_path)
+                loop0_nodes = set(loop0_path)
+                # Casting group_iter to list: (TODO: Check if that is really needed...)
+                e1_or_e3_sub_paths = [(is_shared, list(group_iter)) for is_shared, group_iter in
+                                      groupby(path, lambda ifnode: ifnode in loop0_nodes)]
+                # grouped_path consists of the first part of e3, then e1, then the last part of e3.
+                # Do we ever encounter e2? Well, not when we are grouping shortest path (e3+e1 by definition)..
+                # Except if e3a or e3b have zero length (full or half pinching).
+                # If e3 == 0 (e3_nodes = Ø), then we'll only have a single group!
+                # This can happen both for stacking and hybridization.
+                # There are also cases where len(e1_or_e3_sub_paths) == 2!
+                assert len(e1_or_e3_sub_paths) <= 3
+                if len(e1_or_e3_sub_paths) == 1:
+                    assert e1_or_e3_sub_paths[0][0] is True  # verify that e₁ is on Λ₀
+                    e1 = e1_or_e3_sub_paths[0][1]
+                    e3a, e3b = [e1[0]], [e1[-1]]
+                elif len(e1_or_e3_sub_paths) == 2:
+                    if e1_or_e3_sub_paths[0][0] is True:
+                        # We have e3b > 0; e3a starts at e1 (has zero length)
                         e1 = e1_or_e3_sub_paths[0][1]
                         e3a, e3b = [e1[0]], [e1[-1]]
-                    elif len(e1_or_e3_sub_paths) == 2:
-                        if e1_or_e3_sub_paths[0][0] is True:
-                            # We have e3b > 0; e3a starts at e1 (has zero length)
-                            e1 = e1_or_e3_sub_paths[0][1]
-                            e3a, e3b = [e1[0]], [e1[-1]]
-                            e3b.extend(e1_or_e3_sub_paths[1][1])
-                        else:
-                            # We have e3a > 0; e3b starts and ends on e1 (has zero length)
-                            e3a, e1 = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1]
-                            e3a, e3b = [e1[0]], [e1[-1]]
-                            e3a.append(e1[0])
+                        e3b.extend(e1_or_e3_sub_paths[1][1])
                     else:
-                        assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (False, True, False)
-                        # Note: grouped_path is grouped by whether node is on Λ₀ or not, not stiffness:
-                        # The "intersection" nodes are usually considered part of both e1, e2 and e3:
-                        # intersect_nodes = (e1[0], e1[-1])
+                        # We have e3a > 0; e3b starts and ends on e1 (has zero length)
                         e3a, e1 = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1]
+                        e3a, e3b = [e1[0]], [e1[-1]]
                         e3a.append(e1[0])
-                        # e3b starts with the last node in e1 and then extends the rest of the sub-path:
-                        e3b = [e1[-1]]
-                        e3b.extend(e1_or_e3_sub_paths[2][1])
-                    ## TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
-                    e1_groups = [(is_shared, list(group_iter)) for is_shared, group_iter
-                                 in self.group_interfaces_path_by_stiffness(e1)]
-                    e3a_groups = [(is_shared, list(group_iter)) for is_shared, group_iter
-                                  in self.group_interfaces_path_by_stiffness(e3a)] # First part of e3
-                    e3b_groups = [(is_shared, list(group_iter)) for is_shared, group_iter
-                                  in self.group_interfaces_path_by_stiffness(e3b)] # Last part of e3
-                    ## If e3a and e3b are just single nodes, we won't have any edges!
-                    ## Maybe it is better to join the groups first before joining the edges?
-                    ## Or maybe we need to include the intersection node in both e1 and e3a/e3b?
+                else:
+                    assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (False, True, False)
+                    # Note: grouped_path is grouped by whether node is on Λ₀ or not, not stiffness:
+                    # The "intersection" nodes are usually considered part of both e1, e2 and e3:
+                    # intersect_nodes = (e1[0], e1[-1])
+                    e3a, e1 = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1]
+                    e3a.append(e1[0])
+                    # e3b starts with the last node in e1 and then extends the rest of the sub-path:
+                    e3b = [e1[-1]]
+                    e3b.extend(e1_or_e3_sub_paths[2][1])
+                ## TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
+                e1_groups = [(is_shared, list(group_iter)) for is_shared, group_iter
+                             in self.group_interfaces_path_by_stiffness(e1)]
+                e3a_groups = [(is_shared, list(group_iter)) for is_shared, group_iter
+                              in self.group_interfaces_path_by_stiffness(e3a)] # First part of e3
+                e3b_groups = [(is_shared, list(group_iter)) for is_shared, group_iter
+                              in self.group_interfaces_path_by_stiffness(e3b)] # Last part of e3
+                ## If e3a and e3b are just single nodes, we won't have any edges!
+                ## Maybe it is better to join the groups first before joining the edges?
+                ## Or maybe we need to include the intersection node in both e1 and e3a/e3b?
 
-                    if e3a_groups and e3b_groups:
-                        e3_groups = self.join_two_edge_groups(e3a_groups, e3b_groups, simulate_reaction=reaction_type)
-                    # elif e3a_groups:
-                    #     # start of e3a stacks directly with end of e1
-                    #     e3_groups = self.join_two_edge_groups(e3a_groups, e1, simulate_reaction=reaction_type)
-                    else:
-                        # This is new (but not unexpected; will happen for empty e3a/e3b) - seems to work.
-                        # TODO: CHECK THIS MORE.
-                        e3_groups = [group for segment in (e3a_groups, e3b_groups) if segment for group in segment]
-                    # Uh, it would, perhaps be nice to be able to join/react un-grouped paths,
-                    # and then group afterwards...
-                    # edge groups is a list of (stiffness, [(length, len_sq, stiffness, source, target), ...]) tuples.
-                    # Use edge groups if you need to process something.
-                    # (it is also slightly cheaper because it does not calculate segment length/length_sq sums).
-                    if len(e3_groups) <= 1:
+                if e3a_groups and e3b_groups:
+                    e3_groups = self.join_two_edge_groups(e3a_groups, e3b_groups, simulate_reaction=reaction_type)
+                # elif e3a_groups:
+                #     # start of e3a stacks directly with end of e1
+                #     e3_groups = self.join_two_edge_groups(e3a_groups, e1, simulate_reaction=reaction_type)
+                else:
+                    # This is new (but not unexpected; will happen for empty e3a/e3b) - seems to work.
+                    # TODO: CHECK THIS MORE.
+                    e3_groups = [group for segment in (e3a_groups, e3b_groups) if segment for group in segment]
+                # Uh, it would, perhaps be nice to be able to join/react un-grouped paths,
+                # and then group afterwards...
+                # edge groups is a list of (stiffness, [(length, len_sq, stiffness, source, target), ...]) tuples.
+                # Use edge groups if you need to process something.
+                # (it is also slightly cheaper because it does not calculate segment length/length_sq sums).
+                if len(e3_groups) <= 1:
+                    independt_loops = True
+                else:
+                    # Just summing length and see if e3 is shorter than e1.
+                    e1_length = sum(edge_tup[0] for stiffness, edge_tuples in e1_groups for edge_tup in edge_tuples)
+                    e3_length = sum(edge_tup[0] for stiffness, edge_tuples in e3_groups for edge_tup in edge_tuples)
+                    # summing segment-length squared:
+                    e1_len_sq = sum(sum(etup[0] for etup in edge_tuples)**2 if stiffness > 0 else
+                                    sum(etup[1] for etup in edge_tuples)
+                                    for stiffness, edge_tuples in e1_groups)
+                    e3_len_sq = sum(sum(etup[0] for etup in edge_tuples)**2 if stiffness > 0 else
+                                    sum(etup[1] for etup in edge_tuples)
+                                    for stiffness, edge_tuples in e3_groups)
+                    if e3_length < e1_length and e3_len_sq < e1_len_sq:
                         independt_loops = True
                     else:
-                        # Just summing length:
-                        e1_length = sum(edge_tup[0] for stiffness, edge_tuples in e1_groups for edge_tup in edge_tuples)
-                        e3_length = sum(edge_tup[0] for stiffness, edge_tuples in e3_groups for edge_tup in edge_tuples)
-                        # summing segment-length squared:
-                        e1_len_sq = sum(sum(etup[0] for etup in edge_tuples)**2 if stiffness > 0 else
-                                        sum(etup[1] for etup in edge_tuples)
-                                        for stiffness, edge_tuples in e1_groups)
-                        e3_len_sq = sum(sum(etup[0] for etup in edge_tuples)**2 if stiffness > 0 else
-                                        sum(etup[1] for etup in edge_tuples)
-                                        for stiffness, edge_tuples in e3_groups)
-                        if e3_length < e1_length and e3_len_sq < e1_len_sq:
-                            independt_loops = True
-                        else:
-                            independt_loops = False
-                    if independt_loops:
-                        # New loops Λ₁ and Λ₂ are independent, multiply activity by factor a₁/a₀:
-                        # TODO: Account for cases where e3a == [] or e3b == [] or both (e3==0) !
-                        a0 = loop0['activity']
-                        e2_nodes = loop0_nodes - set(e1)
-                        loop0_path = loop0['path']
-                        e2_or_e1 = [(is_shared, list(group_iter)) for is_shared, group_iter
-                                    in groupby(loop0_path, lambda node: node in e2_nodes)]
-                        e2_subpaths = [sub_path_group[1] for sub_path_group in e2_or_e1 if sub_path_group[0]]
-                        # If Λ₀ loop path starts inside e2, we will have two sub-paths, otherwise only 1:
-                        if len(e2_subpaths) > 1:
-                            e2 = e2_subpaths[1] + e2_subpaths[0]
-                        else:
-                            e2 = e2_subpaths[0]
-                        # alternatively, you could have looked at whether loop0_path[0] and loop0_path[-1]
-                        # are both in e2_nodes
-                        # Figure out how e2 and e3 should be combined: e2+e3 or e3+e2.
-                        # Note: e1, e2 and e3a/e3b all share the node at the intersection, right? Edit: No, only e1, e3
-                        if e2[0] in self.interface_graph[e3a[-1]]:
-                            # Connection between first part of e3 and start of e2, and last part of e3 and end of e2:
-                            assert e3a[-1] in self.interface_graph[e2[0]]
-                            assert e2[-1] in self.interface_graph[e3b[0]]
-                            assert e3b[0] in self.interface_graph[e2[-1]]
-                            loop2_path = e3a + e2 + e3b
-                        else:
-                            # Connection between last node of first part of e3 and the last  node of e2,
-                            # and between        first node of last part of e3 and the first node of e2:
-                            assert e3a[-1] in self.interface_graph[e2[-1]] # last node of e3a + last of e2
-                            assert e2[-1] in self.interface_graph[e3a[-1]]
-                            assert e3b[0] in self.interface_graph[e2[0]]   # first node of e3a + first of e2
-                            assert e2[0] in self.interface_graph[e3b[0]]
-                            # Need to reverse direction of e3 or e2 before joining them:
-                            # e3 is e3b extended by e3a (list performs best by extending at the end)
-                            loop2_path = e3a + e2[::-1] + e3b
-                        print("Loop2 path:\n", loop2_path)
-                        a2 = self.calculate_loop_activity(loop2_path, simulate_reaction=reaction_type)
-                        loop_split_factor = a2/a0
-                        if loop_split_factor == 0:
-                            return 0, None
-                        loop_split_factors.append(loop_split_factor)
-                # end for loop0 in shared_loops:
-                ## TODO: THIS IS NOT DONE YET!
-                # Union-assignment operator should modify in-place and be equilvalent to myset.update(other_set)
-                processed_secondary_loopids |= shared_loopids
-            else:
-                ## NO SHARED LOOPS: PATH IS NEITHER PARTIALLY OR FULLY PART OF ANY CURRENT LOOPS:
-                loop_split_factor = 1
-                # pass
-            # end if shared_loop ... else
+                        independt_loops = False
+                if independt_loops:
+                    # New loops Λ₁ and Λ₂ are independent, multiply activity by factor a₁/a₀:
+                    # TODO: Account for cases where e3a == [] or e3b == [] or both (e3==0) !
+                    a0 = loop0['activity']
+                    e2_nodes = loop0_nodes - set(e1)
+                    loop0_path = loop0['path']
+                    e2_or_e1 = [(is_shared, list(group_iter)) for is_shared, group_iter
+                                in groupby(loop0_path, lambda node: node in e2_nodes)]
+                    e2_subpaths = [sub_path_group[1] for sub_path_group in e2_or_e1 if sub_path_group[0]]
+                    # If Λ₀ loop path starts inside e2, we will have two sub-paths, otherwise only 1:
+                    if len(e2_subpaths) > 1:
+                        e2 = e2_subpaths[1] + e2_subpaths[0]
+                    else:
+                        e2 = e2_subpaths[0]
+                    # alternatively, you could have looked at whether loop0_path[0] and loop0_path[-1]
+                    # are both in e2_nodes
+                    # Figure out how e2 and e3 should be combined: e2+e3 or e3+e2.
+                    # Note: e1, e2 and e3a/e3b all share the node at the intersection, right? Edit: No, only e1, e3
+                    if e2[0] in self.interface_graph[e3a[-1]]:
+                        # Connection between first part of e3 and start of e2, and last part of e3 and end of e2:
+                        assert e3a[-1] in self.interface_graph[e2[0]]
+                        assert e2[-1] in self.interface_graph[e3b[0]]
+                        assert e3b[0] in self.interface_graph[e2[-1]]
+                        loop2_path = e3a + e2 + e3b
+                    else:
+                        # Connection between last node of first part of e3 and the last  node of e2,
+                        # and between        first node of last part of e3 and the first node of e2:
+                        assert e3a[-1] in self.interface_graph[e2[-1]] # last node of e3a + last of e2
+                        assert e2[-1] in self.interface_graph[e3a[-1]]
+                        assert e3b[0] in self.interface_graph[e2[0]]   # first node of e3a + first of e2
+                        assert e2[0] in self.interface_graph[e3b[0]]
+                        # Need to reverse direction of e3 or e2 before joining them:
+                        # e3 is e3b extended by e3a (list performs best by extending at the end)
+                        loop2_path = e3a + e2[::-1] + e3b
+                    print("Loop2 path:\n", loop2_path)
+                    a2 = self.calculate_loop_activity(loop2_path, simulate_reaction=reaction_type)
+                    loop_split_factor = a2/a0
+                    if loop_split_factor == 0:
+                        return 0, None
+                    ## Question: Do we need to add loop1 = e1+e3 as replacement loop?
+                    ## Current answer: No, loop1 will always be created as the shortest_path loop.
+                    ## The 'e1' and 'e2' edges may be different for different loop0s,
+                    ## but loop1 should always be the same (PROVIDED THAT THE SHORTEST PATH IS ON loop0)
+                    ## Note that this is NOT the always the case below where I'm considering loops on the full ds helix.
+                    replacement_loop = {}
+                    changed_loops[loop0_hash] = [replacement_loop]  # list of dicts. Actually just ONE for shared_loops.
+                    replacement_loop['path'] = loop2_path
+                    replacement_loop['loop_hash'] = cmplx.calculate_loop_hash(loop2_path)
+                    replacement_loop['a0'] = a0
+                    replacement_loop['loop0_hash'] = loop0_hash
+                    replacement_loop['old_loop0_id'] = loop0id
+                    replacement_loop['new_activity'] = a2
+                    replacement_loop['loop_change_factor'] = loop_split_factor
+                    replacement_loop['description'] = "Case 1: shared loop on shortest_path."
+                    loop_split_factors.append(loop_split_factor)
+            # end for loop0 in shared_loops:
+            ## TODO: THIS IS NOT DONE YET!
+            # Union-assignment operator should modify in-place and be equilvalent to myset.update(other_set)
+            processed_secondary_loopids |= shared_loopids
+        else:
+            ## NO SHARED LOOPS: PATH IS NEITHER PARTIALLY OR FULLY PART OF ANY CURRENT LOOPS:
+            loop_split_factor = 1
+            # pass
+        # end if shared_loop ... else
 
 
         #### Checking for further secondary side-effects: ####
@@ -1081,42 +1110,90 @@ class GraphManager(object):
             ## However, we must either modify the path to ensure it goes through the stacked junction,
             ## or re-calculate the shortest path for the loop, expecting it to go through the junction.
             for loop0id in affected_loops:
+                pdb.set_trace()
                 if loop0id in processed_secondary_loopids:
                     # pass
                     continue
-                loop0 = cmplx.loops[loop0id]
+                loop0 = cmplx.loop_by_loopid[loop0id]
                 # What is stored in a loop? Let's just start by letting loop be a dict with whatever info we need:
                 loop0_path = loop0["path"]   # List of ifnodes
-                new_paths = []
+                loop0_hash = cmplx.calculate_loop_hash(loop0_path)
+                loop0_nodes = set(loop0_path)
+                assert len(loop0_path) == len(loop0_nodes)
+                # Make sure the shortest path is not a sub-path of loop0, this should've been processed above.
+                assert not shortest_path_nodes <= loop0_nodes
+                # new_paths = []
                 a0 = loop0['activity']
                 a1a2 = []
+                # changed_loops[loop0id] = {
+                #     'new_paths': new_paths,
+                #     'a1a2': a1a2,   # Primary loop closing activity for each new path
+                #     'a0': a0,       # Store this, for good measure...
+                #     #'loop_pinching_activity': loop_pinching_activity  # Combined effect of splitting old loop in two
+                # }
+                replacement_loop1 = {}
+                # list of dicts. Two dicts, unless the two ends are currently adjacent.
+                # Note: Any loop with nodes present on the shortest-path should be considered in the check above.
+                # If the two ends are adjacent in the interface graph, then they are certainly on the shortest path!
                 if dh1_delegate in loop0["path"] and dh2_delegate in loop0["path"]: #and \
                     ## TODO: MAKE SURE WE ARE NOT DOUBLE-COUNTING; C.F. CALCULATION USING SECONDARY LOOP SEARCH BELOW.
+                    print("WEIRD: Reaction ifnodes %s and %s are both on an existing loop, but somehow this loop "
+                          "was not included when processing shared_loops??")
                     # abs(loop0["path"].index(dh1_delegate) - loop0["path"].index(dh2_delegate)) == 1:
                     # We can just modify the path, joining it together at the new junction:
                     idx1, idx2 = loop0["path"].index(dh1_delegate), loop0["path"].index(dh2_delegate)
                     if idx1 > idx2:
                         idx1, idx2 = idx2, idx1
                     new_path1 = loop0["path"][idx2:] + loop0["path"][:idx1+1]  # +1 to include the node.
-                    new_paths.append(new_path1)  # new_paths = [new_path1, new_path2] aka [e1, e2]
+                    # new_paths.append(new_path1)  # new_paths = [new_path1, new_path2] aka [e1, e2]
                     a1 = self.calculate_loop_activity(new_path1, simulate_reaction=reaction_type)
+                    if a1 == 0:
+                        return a1, None
                     a1a2.append(a1)
+                    replacement_loop1['path'] = new_path1
+                    replacement_loop1['loop_hash'] = cmplx.calculate_loop_hash(new_path1)
+                    replacement_loop1['a0'] = a0
+                    replacement_loop1['loop0_hash'] = loop0_hash
+                    replacement_loop1['old_loop0_id'] = loop0id
+                    replacement_loop1['new_activity'] = a1
+                    replacement_loop1['loop_change_factor'] = a1/a0
                     if idx2-idx1 == 1:
                         # Case 1a: Special case: The two joined interface nodes are adjacent; just re-calculate current loop0.
                         # No extra paths
-                        pass
+                        changed_loops[loop0_hash] = [replacement_loop1]
+                        # Case 0 is shortest_path is a complete subset of loop0, i.e. e3=0.
+                        # Case 1 is loop0 is partially overlapping with shortest path,
+                        # Case 3 is no overlap with shortest_path; loop0 detected through stacked double-helix.
+                        replacement_loop1['description'] = ("Case 0: shared loop affected by duplex stacking "
+                                                            "of adjacent ifnodes.")
+                        print("WEIRD: ifnode %s and %s are adjacent for STACKING reaction, "
+                              "yet they were not processed when considering loops on the shortest path!?")
+                        pdb.set_trace()
                     else:
                         # Case 1b: Split the existing path into two new loops:
                         # We have already split out one of the loops, just need the other:
                         new_path2 = loop0["path"][idx1:] + loop0["path"][:idx2+1]
-                        new_paths.append(new_path2)
+                        # new_paths.append(new_path2)
                         a2 = self.calculate_loop_activity(new_path2, simulate_reaction=reaction_type)
+                        if a2 == 0:
+                            return 0, None
                         a1a2.append(a2)
+                        replacement_loop2 = {}
+                        replacement_loop2['path'] = new_path2
+                        replacement_loop2['loop_hash'] = cmplx.calculate_loop_hash(new_path2)
+                        replacement_loop2['a0'] = a0
+                        replacement_loop2['loop0_hash'] = loop0_hash
+                        replacement_loop2['old_loop0_id'] = loop0id
+                        replacement_loop2['new_activity'] = a2
+                        replacement_loop2['loop_change_factor'] = a2/a0
+                        replacement_loop2['description'] = "Case 0: shared loop splitted by duplex stacking."
+                        changed_loops[loop0_hash] = [replacement_loop1, replacement_loop2]
                 else:
                     # Case 2: Stacking forms a genuine new loop paths: loop0 -> loop1, loop2
                     # (I think this will also take care of case 1b and even 1a)
                     # We have to generate two new loops, partially composed of the old path
                     # and partially of the newly-stacked double-helix:
+                    # OBS OBS: One of the two loops you are creating will already have been
                     # First, split the existing loop0 in two on the nodes that touch the newly-stacked double-helix:
                     grouped_path = [(is_in_dh, list(group_iter)) for is_in_dh, group_iter in
                                     itertools.groupby(loop0_path, lambda ifnode: ifnode in dh_ifnodes)]
@@ -1137,7 +1214,11 @@ class GraphManager(object):
 
                     # Note: The variable nomenclature here is different from the "loops on shortest path" search above;
                     # e1, e2 are parts of the newly-formed arm, i.e. e3a and e3b above.
+                    changed_loops[loop0id] = []
                     for dh_before, t_group, dh_after in ((e1, t1, e2), (e2, t2, e1)):
+                        # double-helix before the t-loop, then t-loop, then the double-helix after.
+                        # ARGH: One of the loops just formed will already have been formed when processing/"splitting"
+                        # the previous loop.
                         # These are signed, + for dh1 and - for dh2:
                         # e1_start, e1_end, e2_start, e2_end = (
                         #     dh_arm_idx_by_ifnode[dh_before[0]], dh_arm_idx_by_ifnode[dh_before[-1]],
@@ -1156,7 +1237,11 @@ class GraphManager(object):
                         # if arm1_idx == 0 and arm2_idx == 0: print("Case 1(b)")
                         # Revert arm2 so order is outside-in:
                         new_path = arm1[:arm1_idx+1] + t_group + arm2[arm2_idx::-1]  # start-at:stop-before:step-by
-                        new_paths.append(new_path)
+                        assert not set(new_path) == shortest_path_nodes
+                        # This "new_path" is already considered as the shortest path.
+                        # Note that this MUSTN'T happen: The present loop0 should have been included in
+                        # processed_secondary_loopids when checking shared_loops above.
+                        # new_paths.append(new_path)
                         print("Adding new stacking-induced path:\n", new_path)
                         #pdb.set_trace()
                         # ... so, is the idea to just take the product of all of them ?
@@ -1166,9 +1251,19 @@ class GraphManager(object):
                         # However, here I am not including a₀ in my side-effect factor,
                         # but only including it at the end. Not sure that is right.
                         a2 = self.calculate_loop_activity(new_path, simulate_reaction=reaction_type)
+                        if a2 == 0:
+                            return 0, None
                         # side_effects_new_loop_activities.append(a2)
                         side_effects_factors.append(a2/a0)
                         a1a2.append(a2)
+                        replacement_loop = {}
+                        replacement_loop['path'] = new_path
+                        replacement_loop['a0'] = a0
+                        replacement_loop['old_loop_id'] = loop0id
+                        replacement_loop['new_activity'] = a2
+                        replacement_loop['loop_change_factor'] = a2/a0
+                        replacement_loop['description'] = "Case 1+stack: shared loop on shortest_path from stacking."
+                        changed_loops[loop0id].append(replacement_loop)
                     side_effects_activities.append(a1a2[0]*a1a2[1]/a0)
 
                 # pdb.set_trace()
@@ -1181,20 +1276,20 @@ class GraphManager(object):
                 #loop_pinching_activity = prod(path_activities)/loop0["activity"]
                 #side_effects_factors.append(loop_pinching_activity)
                 # For the moment, just: old_loopid => dict with new loop paths
-                new_loops[loop0id] = {
-                    'new_paths': new_paths,
-                    'a1a2': a1a2,   # Primary loop closing activity for each new path
-                    'a0': a0,       # Store this, for good measure...
-                    #'loop_pinching_activity': loop_pinching_activity  # Combined effect of splitting old loop in two
-                }
+                # changed_loops[loop0id] = {
+                #     'new_paths': new_paths,
+                #     'a1a2': a1a2,   # Primary loop closing activity for each new path
+                #     'a0': a0,       # Store this, for good measure...
+                #     #'loop_pinching_activity': loop_pinching_activity  # Combined effect of splitting old loop in two
+                # }
                 processed_secondary_loopids.add(loop0id)
             # end for loop in affected_loops
 
             # side_effects_factors = [(self.calculate_loop_activity(loop["path"], simulate_reaction=reaction_type)/
             #                          loop["activity"]) for loop in affected_loops]
 
-            if any(factor == 0 for factor in side_effects_factors):
-                return 0
+            # if any(factor == 0 for factor in side_effects_factors):  # Edit: Is checked as early as possible
+            #     return 0
             side_effects_factor = prod(side_effects_factors)
 
 
@@ -1222,11 +1317,32 @@ class GraphManager(object):
             #pdb.set_trace()
 
 
+        """
+        ALTERNATIVE IDEA:
+        Assume you are always gonna form exactly one new loop.
+        Everything else is side-effects.
+        * You form the primary loop (shortest path).
+        * Then you look at secondary loops = loops touching the primary loop / shortest path.
+        * For secondary loops which were modified:
+        * Then you look at tertiary loops = loops touching the modified secondary loops
+        * For the tertiary loops that were modified:
+        * Repeat, etc.
+        At every level you define:
+            e1 = the edge which this loop have in common with the previous loop.
+            e3 = the edge which split the previous loop in two (e.g. a stacking duplex).
+            e2 = the edge in this loop that is not e1
+
+        """
+
+
+
         # loop_effects = {
         #     'activity': 0,
         #     'shortest_path': path,
+        #     'shortest_path_spec': path-of-ifnode-fingerprints
         #     'shortest_path_activity': activity,
-        #     'new_loops': new_loops,  # old_id => [new_loop1_path, new_loop2_path, ...]
+        #     'changed_loops': changed_loops,  # old_id => [new_loop1_path, new_loop2_path, ...]
+        #     'changed_loops_specs': changed_loops_specs, # loop_state_hash => [path of ifnodes_state_fingerprints]
         #     'loops_considered': processed_secondary_loopids,
         #     'loops_affected': all_affected_loops,
         #     'loop_split_factors': loop_split_factors,
@@ -1234,17 +1350,22 @@ class GraphManager(object):
         #     'stacking_side_effects_factors': side_effects_factors,
         # }
         ## Make paths using ifnode state fingerprints:
-        loop_effects['shortest_path_spec'] = [ifnode.state_fingerprint() for ifnode in loop_effects['shortest_path']]
         ## TODO: loopids should be based on either the path edges or some cyclic hash of the nodes (not tuple nor set).
         ##       such that loopids are invariant between instances and the same for the same state.
         ##       ...but then, it would not be easy to have a constant loopid... it would constantly change.
         ##       OK then, have a loop_spec fingerprint, and map it to loopids as-needed.
-        new_loops_specs = {
-            calculate_loop_hash(cmplx, None, loopid=old_id): [
-                [ifnode.state_fingerprint() for ifnode in new_path] for new_path in new_loops_paths
-            ] for old_id, new_loops_paths in new_loops.items()
-        }
-        loop_effects['new_loops_specs'] = new_loops_specs  # loop_hash => [list of new loop_path_specs]
+        # changed_loops_specs = {}
+        for loop0_hash, replacement_loops in changed_loops.items():
+            loop_specs = []
+            for replacement_loop in replacement_loops:
+                replacement_loop['path_spec'] = [ifnode.state_fingerprint() for ifnode in replacement_loop['path']]
+            # changed_loops_specs[cmplx.calculate_loop_hash(None, loopid=old_id)] = replacement_loops
+        # changed_loops_specs = {
+        #     cmplx.calculate_loop_hash(None, loopid=old_id): [
+        #         [ifnode.state_fingerprint() for ifnode in new_path] for new_path in changed_loops_paths
+        #     ] for old_id, replacement_loops in changed_loops.items()
+        # }
+        # loop_effects['changed_loops_specs'] = changed_loops_specs  # loop_hash => [list of new loop_path_specs]
 
         # The activity here is just for possible reactions.
         # How to get the actual path and side-effects when performing the reaction?
@@ -1624,11 +1745,11 @@ class GraphManager(object):
     #         assert len(shared_loops) > 0
     #         # Can we always use the smallest loop, or is there a particular order that must be obeyed?
     #         smallest_loop = min(shared_loops, key=lambda loop: len(loop['nodes']))
-    #         path1_nodes = set(path)
+    #         shortest_path_nodes = set(path)
     #         assert all(node in smallest_loop['nodes'] for node in path)
-    #         assert path1_nodes <= smallest_loop['nodes']  # Using set operations is faster
+    #         assert shortest_path_nodes <= smallest_loop['nodes']  # Using set operations is faster
     #         # Set operators: & = intersection, - = difference, ^ = symmetric_difference, <= subset, >= superset.
-    #         path2_nodes = smallest_loop['nodes'] - path1_nodes
+    #         path2_nodes = smallest_loop['nodes'] - shortest_path_nodes
     #
     #     # path_elements is a list of tuples as: [(stiffness, (total-length, sum-of-squared-lengths)), ...]
     #     # For rigid, double-helical elements, element length, l, is N_bp * 0.34 nm.

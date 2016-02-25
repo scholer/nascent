@@ -281,6 +281,11 @@ class ComponentMgr(GraphManager):
 
         if join_complex:
             result = self.join_complex_at(domain_pair=(domain1, domain2), edge_kwargs=edge_kwargs)
+            if result['new_complexes']:
+                self.complexes |= set(result['new_complexes'])
+            if result['obsolete_complexes']:
+                self.complexes -= set(result['obsolete_complexes'])
+                self.removed_complexes += result['obsolete_complexes']
         else:
             c1 = strand1.complex
             result = {'changed_complexes': [c1] if c1 is not None else None,
@@ -414,6 +419,11 @@ class ComponentMgr(GraphManager):
 
         if break_complex:
             result = self.break_complex_at(domain_pair=(domain1, domain2))
+            if result['new_complexes']:
+                self.complexes |= set(result['new_complexes'])
+            if result['obsolete_complexes']:
+                self.complexes -= set(result['obsolete_complexes'])
+                self.removed_complexes += result['obsolete_complexes']
             # printd("Result for breaking complex %s between %r and %r:" % (c, domain1, domain2))
             # pprintd(result)
         else:
@@ -540,6 +550,11 @@ class ComponentMgr(GraphManager):
 
         if join_complex and self.stacking_joins_complexes:
             result = self.join_complex_at(stacking_pair=stacking_tuple, edge_kwargs=edge_kwargs)
+            if result['new_complexes']:
+                self.complexes |= set(result['new_complexes'])
+            if result['obsolete_complexes']:
+                self.complexes -= set(result['obsolete_complexes'])
+                self.removed_complexes += result['obsolete_complexes']
         else:
             assert False  # Making sure this doesn't happen during testing...
             result = {'changed_complexes': [c1],
@@ -646,6 +661,11 @@ class ComponentMgr(GraphManager):
 
         if break_complex and self.stacking_joins_complexes:
             result = self.break_complex_at(stacking_pair=stacking_tuple)
+            if result['new_complexes']:
+                self.complexes |= set(result['new_complexes'])
+            if result['obsolete_complexes']:  # Shouldn't happen...
+                self.complexes -= set(result['obsolete_complexes'])
+                self.removed_complexes += result['obsolete_complexes']
         else:
             # Manually update complex domain graph, but do not process/break the complex into two (if applicable).
             # assert False # checking that this does not happen during testing..

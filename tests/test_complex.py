@@ -52,6 +52,7 @@ from nascent.graph_sim_nx.constants import STACKING_INTERACTION
 def test_asymmetric_complex_01():
     """
     Simple case, no duplicate strands or domains, complex is obviously asymmetric.
+    Structure is case 2(a) from the graph_manager test module.
     """
 
     ### Case 2(a) from test_graphmgr:   ###
@@ -83,6 +84,7 @@ def test_asymmetric_complex_01():
         cstates.append(cmplx.state_fingerprint())
         domain_states = {d: d.state_fingerprint() for d in cmplx.domains()}
         dspecs.append(frozenset(domain_states.items()))
+        # dspec_counts should be the same for different instances in the same state:
         dspec_counts.append(Counter(domain_states.values()))
         assert dspec_counts[-1].most_common(1)[0][1] == 1  # Count (value) of most common dspec hash is 1
 
@@ -147,9 +149,9 @@ def test_symmetric_complex_01():
             dspecs.append(frozenset(domain_states.items()))
             dspec_counts.append(domain_state_count)
         else:
-            assert cstate == cstates[i]
-            assert frozenset(domain_states.items()) == dspecs[i]
-            assert domain_state_count == dspec_counts[i]
+            assert cstate == cstates[match_idx]
+            assert frozenset(domain_states.items()) == dspecs[match_idx]
+            assert domain_state_count == dspec_counts[match_idx]
         assert dspec_counts[-1].most_common(1)[0][1] == 1  # Count (value) of most common dspec hash is 1
 
     update_and_assert()

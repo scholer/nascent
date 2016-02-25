@@ -87,7 +87,6 @@ def state_should_change(method):
 
 
 
-
 # connected_component_subgraphs is not implemented for directed graphs.
 # But we can just use system graphs instead...
 
@@ -289,9 +288,12 @@ class Complex(nx.MultiDiGraph):
         # Having loops as dicts indexed by an ID is nearly identical to having loops being objects in Python.
         # In Python, objects can be a little slow because they are not just data containers but also have methods etc.
         # In e.g. Julia, having a separate "Loop" type would be faster than Dict. (Julia is ALL about types).
-        self.loops = {}  # LoopID => loop dict
+        self.loops = {}  # "loops_by_id; LoopID => loop dict
+        self.loop_by_loopid = self.loops # alias. 
+        # What is a loop? It is primarily made up of InterfaceNodes, because that's the only thing that makes sense.
         # For each loop, we have a dict with entries (suggested):
-        #     path_list: The original path with the nodes forming the loop in the ends.
+        #     loopid: uuid for this loop.
+        #     path: list of ifnodes, formed by reaction between the first and last element, but considered cyclic!
         #     ifnodes: list of InterfaceNodes. Should this always be the top delegate?
         #           What if we have a duplex in a loop and the duplex dehybridises but the loop is not broken.
         #           Would we update the ifnodes list?
@@ -314,12 +316,17 @@ class Complex(nx.MultiDiGraph):
         # self.loops_by_interface = defaultdict(set)  # InterfaceNode => {loop1, loop3, ...}
         # Since loops are mutable we cannot have a set of loops, so use a LoopID and
         self.loopids_by_interface = defaultdict(set)  # InterfaceNode => {loop1_id, loop3_id, ...}
+        self.loopid_by_hash = {}   # loop hash => loop_id. See calculate_loop_hash function.
         # Should we use a set or list? We probably have random deletion of loops, so set is arguably better.
         # Delegatee: A person designated to act for or represent another or others.
         # Delegator: A person who is delegating or has delegated responsibility to someone else.
         self.loop_delegations = {}     # loop0id => {loop1id, loop2id}   (delegator => delegatees)
         self.loop_delegations_rev = {} # loop1id => {set of loop0s split by loop1} (delegatee => delegators)
+
+        ## IFNODES (which makes up a path): ##
         self.ifnode_by_ifnode_statespec = {}  # ifnode-state-hash => ifnode-instance.
+        # ifnode_by_ifnode_statespec is reset with complex and should be updated at every change to the complex..
+        #
 
 
         ### Graphs: ###
@@ -934,13 +941,17 @@ class Complex(nx.MultiDiGraph):
         if reset_domains:
             for domain in self.domains():
                 domain.state_change_reset()
+        self.ifnode_by_ifnode_statespec = {}
 
     # def domains_gen(self):
     #     return (domain for strand in self.strands for domain in strand.domains)
 
 
+    #### LOOP TRACKING LOGIC: ####
+
     def get_ifnode_by_ifnode_statespec(self, ifnode_statespec):
         """ Get ifnode instance by it's state-specific hash (fingerprint). """
+        # Q: Is it really worth bothering with caching of this? We are only going to use it once, I think.
         try:
             return self.ifnode_by_ifnode_statespec[ifnode_statespec]
         except KeyError:
@@ -961,6 +972,73 @@ class Complex(nx.MultiDiGraph):
                 self.ifnode_by_ifnode_statespec = {ifnode.state_fingerprint(): ifnode for ifnode in top_ifnodes}
                 return self.ifnode_by_ifnode_statespec[ifnode_statespec]
 
+
+    def calculate_loop_hash(self, loop_path, loop=None, loopid=None):
+        """
+        Calculate a state-dependent hash for the given loop.
+        Complex state fingerprint and domain icid labelling must be up-to-date.
+        """
+        if loop_path is None:
+            if loop is None:
+                assert loopid is not None
+                loop = self.loop_by_loopid[loopid]
+            loop_path = loop['path']
+        edgelist = list(zip(loop_path[:-1], loop_path[1:]))
+        edgelist.append((loop_path[-1], loop_path[0]))
+        # Converting each tuple to frozenset because order doesn't matter.
+        edges = frozenset(frozenset((src.state_fingerprint(), tgt.state_fingerprint()))
+                          for src, tgt in edgelist)
+        return hash(edges)
+
+
+    def recreate_loop_ifnodes_from_spec(self, ifnodes_specs, use_cached=False):
+        """
+        Recreate a current ifnodes loop path from a list of ifnodes fingerprints.
+        """
+        ## TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
+        if use_cached:
+            ifnode_by_hash = self.ifnode_by_ifnode_statespec
+        else:
+            cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)
+                             if end.ifnode.delegatee is None]
+            ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in cmplx_ifnodes}
+            self.ifnode_by_ifnode_statespec = ifnode_by_hash
+        assert all(spec in ifnode_by_hash for spec in ifnodes_specs)
+        return [ifnode_by_hash[spec] for spec in ifnodes_specs]
+
+
+    def register_new_loop(self, loop_path_spec, loop_activity, loop_path=None, replacing_loop_spec=None):
+        """ Register a new loop. """
+        if loop_path_spec is None:
+            loop_path_spec = [ifnode.state_fingerprint() for ifnode in loop_path]
+        else:
+            loop_path = self.recreate_loop_ifnodes_from_spec(loop_path_spec)
+        # recreate_loop_ifnodes_from_spec will update self.ifnode_by_ifnode_statespec
+        # You can then do: ifnodes = [self.ifnode_by_ifnode_statespec[spec] for spec in ifnodes_specs]
+        loop_hash = self.calculate_loop_hash(loop_path)
+        # To get a loop dict from a loop hash, first get the id with loopid_by_hash,
+        # then use self.loops[loopid] (loops_by_id) to get loop info dict.
+        assert loop_hash not in self.loopid_by_hash
+        # Get new id for loop: (It would be a little easier if loops were object instances)
+        loopid = next(loopid_sequential_number_generator)  # Is currently a uuid
+        # What's in a loop (dict/object)?
+        loop = {
+            'loopid': loopid,
+            'path': loop_path,
+            'path_spec': loop_path_spec,
+            'node_set': set(loop_path),  # Not sure this is worth it...
+            'original_path': tuple(loop_path), # For later reference..
+            'activity': loop_activity,  # a1 in the calculations, not "a"?
+            'original_activity': loop_activity,  # For later reference..
+            'original_loop_hash': loop_hash,  # The current loop hash is in self.loopid_by_hash.
+            # For loop delegation/overrides see self.loop_delegations(_rev).
+        }
+        assert loopid not in self.loops_by_id
+        self.loops_by_id[loopid] = shortest_loop
+
+
+
+    ## OLD FINGERPRINT METHODS: ##
 
     def strands_species_count(self):
         """ Count the number of strand species. Used as part of complex state finger-printing. """

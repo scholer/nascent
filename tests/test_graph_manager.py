@@ -16,7 +16,7 @@
 ##    You should have received a copy of the GNU Affero General Public License
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# pylint: disable=C0103
+# pylint: disable=C0103,W0201
 
 """
 Test graph_manager module.
@@ -26,6 +26,7 @@ Test graph_manager module.
 import pytest
 import pdb
 import sys
+from pprint import pprint
 sys.path.insert(0, ".")
 try:
     from numpy import isclose
@@ -43,8 +44,19 @@ from nascent.graph_sim_nx.strand import Strand
 from nascent.graph_sim_nx.graph_manager import GraphManager
 from nascent.graph_sim_nx.componentmgr import ComponentMgr
 from nascent.graph_sim_nx import graph_manager
-from nascent.graph_sim_nx.constants import STACKING_INTERACTION
+from nascent.graph_sim_nx.constants import STACKING_INTERACTION, HYBRIDIZATION_INTERACTION
 
+
+class AttrDict(dict):
+    """ Allows you to use AttrDict.key instead of AttrDict["key"] """
+    def __getattribute__(self, key):
+        try:
+            return dict.__getattribute__(self, key)
+        except AttributeError:
+            return self[key]
+
+    def __setattribute__(self, key, value):
+        self[key] = value
 
 
 
@@ -295,6 +307,17 @@ def test_intracomplex_activity_1():
     # t2 - E2 - t1 - E1
     loop0 = (t2.end5p, t2.end3p, E2.end5p, E2.end3p, t1.end5p, t1.end3p, E1.end5p, E1.end3p)
     loop0_path = [end.ifnode.top_delegate() for end in loop0]
+    loop0_state_hash = cmplx.calculate_loop_hash(loop0_path)
+    # quick check that loop hash is independent on start point:
+    loop0_alt = (E2.end3p, t1.end5p, t1.end3p, E1.end5p, E1.end3p, t2.end5p, t2.end3p, E2.end5p)
+    loop0_path_alt = [end.ifnode.top_delegate() for end in loop0_alt]
+    assert loop0_state_hash == cmplx.calculate_loop_hash(loop0_path_alt)
+    # quick test that another path gives a wrong hash:
+    loop0_wrong = (E2.end3p, t1.end5p, E1.end5p, t1.end3p, E1.end3p, t2.end5p, t2.end3p, E2.end5p)
+    loop0_path_wrong = [end.ifnode.top_delegate() for end in loop0_wrong]
+    assert loop0_state_hash != cmplx.calculate_loop_hash(loop0_path_wrong)
+
+
     loop0_activity_before = mgr.calculate_loop_activity(loop0_path)
     print("loop0_activity_before:", loop0_activity_before)
 
@@ -314,8 +337,10 @@ def test_intracomplex_activity_1():
     ## Intracomplex activity for forming the left stack:
     dh1, dh2 = (e4.end3p, e3.end5p), (E3.end3p, E4.end5p)
     stack1_activity = mgr.intracomplex_activity(dh1, dh2, reaction_type=STACKING_INTERACTION)
+    activity, loop_effects = mgr.loop_formation_effects(dh1, dh2, reaction_type=STACKING_INTERACTION)
+    assert stack1_activity == activity
     print("stack1_activity:", stack1_activity)
-
+    # pdb.set_trace()
 
 
 def test_intracomplex_activity_2():
@@ -539,15 +564,173 @@ def test_intracomplex_activity_4():
 
 
 
+from random import choice
+WC = dict(zip("ATGC", "TACG"))
+def rcompl(seq):
+    return "".join(WC[b] for b in seq[::-1])
+
+
+
+def test_loop_formation_effects_01():
+    """
+    ### Case 3a-4xT+bp:   ###
+    ### All four T-loops plus direct link of A1-3p and B1-5p
+    """
+    d = AttrDict() # A dict where you can write d.key instead of d["key"].
+    for arm in "AB":
+        for i in range(1, 4):
+            seq = [choice("ATGC") for _ in range(16)]
+            rseq = rcompl(seq)
+            #for case in (arm.upper(), arm.lower())
+            name1 = '%s%s' % (arm.upper(), i)
+            name2 = '%s%s' % (arm.lower(), i)
+            d[name1] = Domain(name1, seq=seq)
+            d[name2] = Domain(name2, seq=rseq)
+            if arm == 'B' and i == 3:
+                # Maybe it would have been simpler to extend the arms??
+                d[name1+'a'] = Domain(name1+'a', seq=seq[:8])
+                d[name2+'a'] = Domain(name2+'a', seq=rseq[8:])
+                d[name1+'b'] = Domain(name1+'b', seq=seq[8:])
+                d[name2+'b'] = Domain(name2+'b', seq=rseq[:8])
+
+    d.t0 = Domain("t1", seq="T"*10)
+    d.t1 = Domain("t1", seq="T"*20)
+    d.t2 = Domain("t2", seq="T"*50)     # 30 or larger should be enough to reach
+    d.t3 = Domain("t2", seq="T"*60)     # 30 or larger should be enough to reach
+    # Stacked double-helix is 16+6+5+16 bp = 43 bp, 0.34nm/bp*43bp = 14.6 nm.
+    # t2 contour length is 50*0.6 = 30 nm; t2 dist_ee_sq is 10*0.6*1.8 = 10.8 nm², dist_ee_nm = 3.3 nm.
+    # It can reach, but only by stretching.
+    # dist_ee_sq = n_nt * ss_rise_per_nt * ss_kuhn_length
+    sA = Strand("sA", [d[n] for n in "A1 A2 A3".split()])
+    sB = Strand("sB", [d[n] for n in "B1 B2 B3".split()])
+    #sAB = Strand("sB", [d[n] for n in "A1 A2 A3 B1 B2 B3".split])
+    s1 = Strand("s1", [d[n] for n in "b1 t0 a1".split()]) # Make sure domains are ordered 5'->3' !
+    s2 = Strand("s2", [d[n] for n in "b2 t1 a2".split()])
+    s3 = Strand("s3", [d[n] for n in "b3a t2 b3b t3".split()])
+    # s4 = Strand("s4", [d[n] for n in "b1 t0 a1".split()])
+    # We use ComponentMgr because that has what we need to prepare the complex assembly:
+
+
+
+def test_loop_formation_effects_02():
+    """
+    ### Case 3b-4xT+bp:   ###
+    ### All four T-loops plus direct link of A1-3p and B1-5p.
+    ### Same as _01, but making the structure a bit more regular.
+    """
+    d = AttrDict() # A dict where you can write d.key instead of d["key"].
+    for arm in "AB":
+        for i in range(4):
+            seq = [choice("ATGC") for _ in range(10)]
+            rseq = rcompl(seq)
+            #for case in (arm.upper(), arm.lower())
+            name1 = '%s%s' % (arm.upper(), i)
+            name2 = '%s%s' % (arm.lower(), i)
+            d[name1] = Domain(name1, seq=seq)
+            d[name2] = Domain(name2, seq=rseq)
+
+    for i, N in enumerate([10, 20, 50, 80]):
+        name = "t%s"%i
+        d[name] = Domain(name, seq="T"*N)
+    # d.t0 = Domain("t0", seq="T"*10)
+    # d.t1 = Domain("t1", seq="T"*20)
+    # d.t2 = Domain("t2", seq="T"*50)     # 30 or larger should be enough to reach
+    # d.t3 = Domain("t2", seq="T"*60)     # 30 or larger should be enough to reach
+    # Stacked double-helix is 16+6+5+16 bp = 43 bp, 0.34nm/bp*43bp = 14.6 nm.
+    # t2 contour length is 50*0.6 = 30 nm; t2 dist_ee_sq is 10*0.6*1.8 = 10.8 nm², dist_ee_nm = 3.3 nm.
+    # It can reach, but only by stretching.
+    # dist_ee_sq = n_nt * ss_rise_per_nt * ss_kuhn_length
+    sA = Strand("sA", [d[n] for n in "A0 A1 A2 A3".split()])
+    sB = Strand("sB", [d[n] for n in "B3 B2 B1 B0".split()])
+    #sAB = Strand("sB", [d[n] for n in "A1 A2 A3 B1 B2 B3".split])
+    s0 = Strand("s0", [d[n] for n in "a0 t0 b0".split()]) # Make sure domains are ordered 5'->3' !
+    s1 = Strand("s1", [d[n] for n in "a1 t1 b1".split()]) # Make sure domains are ordered 5'->3' !
+    s2 = Strand("s2", [d[n] for n in "a2 t2 b2".split()])
+    s3 = Strand("s3", [d[n] for n in "a3 t3 b3".split()])
+
+    strands = [sA, sB, s0, s1, s2, s3]
+    mgr = ComponentMgr(strands, params={})
+    for arm in "AB":
+        for i in range(4):
+            name1 = '%s%s' % (arm.upper(), i)
+            name2 = '%s%s' % (arm.lower(), i)
+            if arm > "A" and i > 0:
+                mgr.intracomplex_activity(d[name1], d[name2], reaction_type=HYBRIDIZATION_INTERACTION)
+            mgr.hybridize(d[name1], d[name2])       # No loops registered yet.
+    # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
+    for arm in "A":
+        for i in range(3):
+            # Stack A0/3p with A1/5p, a1/3p + a0/5p
+            # Edit: Again, we order by duplex end: dh1end3p, dh1end5p, dh2end3p, dh2end5p
+            # So it's: A0/3p, a0/5p, a1/3p, A1/5p
+            ends = (d['%s%s' % (arm.upper(), i)].end3p, d['%s%s' % (arm.lower(), i)].end5p,
+                    d['%s%s' % (arm.lower(), i+1)].end3p, d['%s%s' % (arm.upper(), i+1)].end5p)
+            mgr.intracomplex_activity(ends[:2], ends[2:], reaction_type=STACKING_INTERACTION) # No loops registered yet
+            mgr.stack(*ends)
+    for arm in "B":
+        for i in range(3):
+            # Stack B1/3p, b1/5p, b0/3p, B0/5p
+            ends = (d['%s%s' % (arm.upper(), (i+1))].end3p, d['%s%s' % (arm.lower(), (i+1))].end5p,
+                    d['%s%s' % (arm.lower(), i)].end3p, d['%s%s' % (arm.upper(), i)].end5p)
+            mgr.intracomplex_activity(ends[:2], ends[2:], reaction_type=STACKING_INTERACTION) # No loops registered yet
+            mgr.stack(*ends)
+
+    # cmplx = res['changed_complexes'][0]
+    cmplx = next(iter(mgr.complexes)) # mgr.complexes has set of all complexes.
+
+    ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
+    # t2 - E2 - t1 - E1
+    # l = AttrDict()
+    loops = [[end.ifnode.top_delegate() for end in (
+        d["a%s"%i].end5p, d["a%s"% i].end3p, d["t%s"%i].end5p, d["t%s" % i].end3p,
+        d["b%s"%i].end5p, d["b%s"% i].end3p, d["t%s"%(i+1)].end3p, d["t%s"%(i+1)].end5p)]
+             for i in range(3)]
+    loop_hashes = [cmplx.calculate_loop_hash(loop) for loop in loops]
+
+    # Primary (shortest-path) activities, not considering reaction's effect on other loops:
+    loop_activities_before = [mgr.calculate_loop_activity(loop) for loop in loops]
+    print("loop_activities_before:", loop_activities_before)
+
+    del i
+    ## WIP: Manually adding the loop to the complex until that is automated:
+    # loopid = 1
+    for loopid, loop in enumerate(loops):
+        loop_info = {'id': loopid,
+                     'path': loop,
+                     'activity': loop_activities_before[loopid],
+                    }
+        cmplx.loops[loopid] = loop_info
+        for ifnode in loop:
+            cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
+
+
+    ## Intracomplex activity for forming the left stack:
+    dh1, dh2 = (d.a0.end3p, d.A0.end5p), (d.B0.end3p, d.b0.end5p)
+    stack1_activity = mgr.intracomplex_activity(dh1, dh2, reaction_type=STACKING_INTERACTION)
+    activity, loop_effects = mgr.loop_formation_effects(dh1, dh2, reaction_type=STACKING_INTERACTION)
+    assert stack1_activity == activity
+    print("\n\nstack1_activity:", stack1_activity)
+    print("loop_effects:")
+    pprint(loop_effects)
+    pdb.set_trace()
+
+
+
+
 
 if __name__ == "__main__":
-    # Test 2:
-    test_calculate_loop_activity_2()
-    # Test 3:
-    test_calculate_loop_activity_3()
 
+    # # Test 2:
+    # test_calculate_loop_activity_2()
+    # # Test 3:
+    # test_calculate_loop_activity_3()
+    #
+    # INTRACOMPLEX_ACTIVITY tests:
+    # test_intracomplex_activity_1()
+    # test_intracomplex_activity_2()
+    # test_intracomplex_activity_3()
+    # test_intracomplex_activity_4()
 
-    test_intracomplex_activity_1()
-    test_intracomplex_activity_2()
-    test_intracomplex_activity_3()
-    test_intracomplex_activity_4()
+    ## LOOP_FORMATION_EFFECTS tests:
+
+    test_loop_formation_effects_02()
