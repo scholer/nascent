@@ -105,7 +105,6 @@ cmplx_state_sequential_number_generator = sequential_number_generator()     # Us
 cmplx_state_hashes = []         # number => cstate hash
 cmplx_state_enum_by_hash = {}   # cstate_hash => enum (runtime specific)
 
-loopid_sequential_number_generator = sequential_number_generator()
 
 
 
@@ -221,6 +220,9 @@ class ReactionMgr(ComponentMgr):
         ## Stacking reaction parameters:
         self.stacking_rate_constant = params.get('stacking_rate_constant', 1e4)
         self.enable_intercomplex_stacking = params.get("enable_intercomplex_stacking", False)
+        self.disable_stacking_of_nonadjacent_ends = params.get("disable_stacking_of_nonadjacent_ends", False)
+        self.stacking_overhang_steric_factor = params.get("stacking_overhang_steric_factor", None)
+
 
         ## Reaction graph: ##
         # reaction_graph is directed, but should it be a MultiGraph? I can't imagine why..
@@ -579,7 +581,7 @@ class ReactionMgr(ComponentMgr):
         return self._statedependent_dH_dS[state_spec_pair]
 
 
-    def intracomplex_activity(self, elem1, elem2, reaction_type, reaction_spec_pair=None):
+    def intracomplex_activity(self, elem1, elem2, reaction_type, reaction_spec_pair):
         """
         Return the activity for hybridization of two domains within a complex.
         :elem1:, :elem2: are either two domains, or two pairs of duplex domain ends:
@@ -596,6 +598,7 @@ class ReactionMgr(ComponentMgr):
                                                 (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
                 d1, d2 = elem1[0].domain, elem2[0].domain
             else:
+                assert reaction_type is HYBRIDIZATION_INTERACTION
                 assert isinstance(elem1, Domain)
                 d1, d2 = elem1, elem2
                 reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
@@ -603,6 +606,9 @@ class ReactionMgr(ComponentMgr):
             # Assert that the finger-print is correct. (TODO: Remove assertion when done debugging.)
             if reaction_type is STACKING_INTERACTION:
                 d1, d2 = elem1[0].domain, elem2[0].domain
+                # :elem1: = (h1end3p, h2end5p)  and  :elem2: = (h2end3p, h1end5p)
+                h1end3p, h2end5p = elem1
+                h2end3p, h1end5p = elem2
                 assert (end.partner is None for duplex_end_tup in (elem1, elem2) for end in duplex_end_tup)
                 assert reaction_spec_pair == frozenset(((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
                                                         (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
@@ -637,16 +643,43 @@ class ReactionMgr(ComponentMgr):
         # print({d: d.partner for d in (d1, d2)})
         # print({d: (d.in_complex_identifier(), d.state_fingerprint(), d.partner) for d in (d1, d2)})
 
+        # Check if we have disabled stacking of non-adjacent duplex ends:
+        steric_overhang_factor = 1
+        if reaction_type is STACKING_INTERACTION:
+            if self.disable_stacking_of_nonadjacent_ends:
+                # :elem1: = (h1end3p, h2end5p)  and  :elem2: = (h2end3p, h1end5p)
+                # Use interface_graph to detect adjacency? Or just backbone?
+                if (elem1[0].pb_downstream != elem2[1]) and (elem2[0].pb_downstream != elem1[1]):
+                    # The two stacking ends are not directly connected by backbone connection:
+                    return 0
+            ## TODO: Add interferrence if duplex end has overhangs
+            ##       (and increase activity if duplex ends are directly connected by backbone link)
+            ## Perhaps just multiply the activity by e.g. 0.5 if the downstream domain is unhybridized.
+            ## If the downstream domain IS hybridized, then stacking of it *IS* considered in availability.
+            if self.stacking_overhang_steric_factor:
+                # DomainEnds up/downstream
+                # We can just check if domain.partner is None - if the duplex ends are backbone connected,
+                # they will not have partner == None because they are hybridized.
+                neighboring_overhangs = sum([
+                    1 for end in
+                    (h1end3p.pb_downstream, h2end5p.pb_upstream, h1end3p.pb_downstream, h2end5p.pb_upstream)
+                    if end is not None and end.domain.partner is not None])
+                steric_overhang_factor = self.stacking_overhang_steric_factor**neighboring_overhangs
+
         ## Check cache and return activity from cache if found: ##
         if reaction_spec_pair in self.cache['intracomplex_activity']:
             return self.cache['intracomplex_activity'][reaction_spec_pair]
         # activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
         activity, loop_info = self.loop_formation_effects(elem1, elem2, reaction_type)
+
         # print("Intracomplex activity %0.04f for %s+ reaction between %s and %s" % (
         #     activity, reaction_type, elem1, elem2))
         # reaction will always be forming and intra:
+        activity *= steric_overhang_factor
+
         reaction_attr = ReactionAttrs(reaction_type=reaction_type, is_forming=True, is_intra=True)
         print("activity %0.03f for reaction %s" % (activity, reaction_to_str(reaction_spec_pair, reaction_attr)))
+
         self.cache['intracomplex_activity'][reaction_spec_pair] = activity
         if activity > 0:
             self.reaction_loop_effects[reaction_spec_pair] = loop_info
@@ -1402,6 +1435,15 @@ class ReactionMgr(ComponentMgr):
                         # printd("Removing from possible_stacking_reactions obsolete stacking_pair:", reaction_pair)
                         del self.possible_stacking_reactions[reaction_pair]
                         del self.reaction_attrs[reaction_pair]
+                    # check:
+                    for pair, ra in self.reaction_attrs.items():
+                        if not ra.reaction_type is STACKING_INTERACTION:
+                            continue
+                        assert pair in self.possible_stacking_reactions
+                        if ra.is_forming:
+                            assert all(end.stack_partner is None for tup in tuple(pair) for end in tup)  # Error in check_system()
+                        else:
+                            assert all(end.stack_partner is not None for tup in tuple(pair) for end in tup)  # Error in check_system()
                 else:
                     # We have just performed un-stacking reaction, so the ends should be stacked by now:
                     assert all(end.stack_partner is None for end in reacted_ends)
@@ -1434,6 +1476,7 @@ class ReactionMgr(ComponentMgr):
                                           if len(dehybridized_duplex_ends & other_pair) > 0]
                     for stacking_pair in obsolete_reactions:
                         del self.possible_stacking_reactions[stacking_pair]
+                        del self.reaction_attrs[stacking_pair]
 
 
         # if dehybridized_ends is not None:
@@ -1666,7 +1709,7 @@ class ReactionMgr(ComponentMgr):
                                # edit: we need to have all, not just unhybridized - for stacking
                               ]
             changed_domains += free_st_domains
-        if result['obsolete_complexes']:
+        # if result['obsolete_complexes']:
             # self.complexes -= set(result['obsolete_complexes'])
             # self.removed_complexes += result['obsolete_complexes']
             # printd("Removing obsolete complexes %s from sysmgr.complexes:" % result['obsolete_complexes'])
@@ -1850,7 +1893,7 @@ class ReactionMgr(ComponentMgr):
             changed_domains += new_cmplx_domains
             # printd("stack_and_process: New complexes domains:")
             # pprintd(new_cmplx_domains)
-        if result['obsolete_complexes']:
+        # if result['obsolete_complexes']:
             # self.complexes -= set(result['obsolete_complexes'])
             # self.removed_complexes += result['obsolete_complexes']
             # printd("stack_and_process: Removing obsolete complexes %s from sysmgr.complexes:" % result['obsolete_complexes'])
@@ -1936,6 +1979,9 @@ class ReactionMgr(ComponentMgr):
         edge_key = (reacted_spec_pair, reaction_attr)
         self.reaction_invocation_count[edge_key] += 1
         throttle_factor = self.reaction_throttle_cache[edge_key][0] if edge_key in self.reaction_throttle_cache else 1.0
+        # Keys include:
+        #   reaction_attr_str, activity, c_j, c_j_throttled, throttle_factor, traversals,
+        #   elem1, elem2
         edge_label_fmt = ("{reaction_attr_str}  {activity:0.02g}  {c_j:0.03g}\n"
                           "{traversals}  {throttle_factor:0.03g}  {c_j_throttled:0.03g}")
         reaction_attr_str = (reaction_attr.reaction_type + ("+" if reaction_attr.is_forming else "-")
@@ -1988,8 +2034,10 @@ class ReactionMgr(ComponentMgr):
 
 
         ### 0. Assert state change for all changed complexes: ###
+        source_states, target_states = set(), set()
         for cmplx in changed_complexes:
-            source_state = cmplx._historic_fingerprints[-1]
+            source_state = cmplx._historic_fingerprints[-1]  # Can be 0 for new complexes!
+            source_states.add(source_state)
             expected_state_fingerprint = None
             expected_state_fingerprints = None
             if edge_key in self.endstates_by_reaction[source_state]:
@@ -2003,8 +2051,9 @@ class ReactionMgr(ComponentMgr):
             ## (will update complex state fingerprint - but not reset it first unless you pass reset=True):
             target_state, _ = cmplx.assert_state_change(
                 reacted_spec_pair, reaction_attr, expected_state_fingerprint=expected_state_fingerprint)
+            target_states.add(target_state)
             if expected_state_fingerprints is not None:
-                assert target_state in expected_state_fingerprints
+                assert target_state in expected_state_fingerprints  # List of target states via edge with edge_key.
 
         ### 1b: Reset domain state fingerprint and icid for all free strand's domains:
         ### (This is also done in componentmgr.join/break_complex_at, but better safe than sorry)
@@ -2015,10 +2064,18 @@ class ReactionMgr(ComponentMgr):
 
 
         ## 1. Form or break loops: ##
+
+        ## ERROR: At this point we have already performed the reaction and closed the loop by forming the bond.
+        ## If we try to calculate ifnode fingerprints, they will no longer match the hashes in loop path_spec.
+        ## Thus, we should either update the loop_effects dict *before* doing the reaction, injecting the actual
+        ## ifnode instances and loopid, or we should register the new loop (and corresponding changes) BEFORE
+        ## doing the actual reaction.
+        ##
+
         # We do this here because we need the loop energies for updating complexes and reaction graph energies
         # By definition, if we are forming or breaking a loop, then only one complex is changed.
         # We get info about forming loops from the loop_effects dict obtained in intracomplex_activity
-        if reaction_attr.is_forming:
+        if False and reaction_attr.is_forming:
             # See if we have any loop_effects dicts registered for this reaction:
             if reacted_spec_pair in self.reaction_loop_effects:
                 loop_effects = self.reaction_loop_effects[reacted_spec_pair]
@@ -2039,13 +2096,16 @@ class ReactionMgr(ComponentMgr):
                 # Then consider splitted-loops:
                 # What about loops that are just adjusted? E.g. by stacking backbone-linked duplexes?
                 # old_loop_spec => [replacement_path1, replacement_path2]
-                for loop0_state_hash, replacement_loops in loop_effects['new_loops_specs'].items():
+                for loop0_hash, replacement_loops in loop_effects['changed_loops'].items():
+                    # loop0_hash => list of one or two new loops. (Should always just be 1, right?)
                     # A loop is split in either 1 or two new loops.
-                    if len(replacement_loops) == 1:
-                        # Perhaps just adjust existing loop?
-                    else:
-                        for new_smaller_loop in replacement_loops:
-                            
+                    # if len(replacement_loops) == 1:
+                    #     # Perhaps just adjust existing loop?
+                    # else:
+                    for replacement_loop in replacement_loops:
+                        cmplx.update_changed_loop(loop0_hash, replacement_loop)
+
+
 
 
                 # Consider other affected loops, not being split but still affected?
@@ -2131,7 +2191,15 @@ class ReactionMgr(ComponentMgr):
                 # We could try to find the activity in the reaction graph, assuming the opposite
                 # "forming" reaction has already occurred, but there is no guarantee of that.
                 # Instead, we can simply use
-                reverse_activity = self.intracomplex_activity(elem1, elem2, reaction_attr.reaction_type)
+                if reaction_attr.reaction_type is STACKING_INTERACTION:
+                    reverse_reaction_spec_pair = frozenset(
+                        ((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
+                         (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
+                else:
+                    assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
+                    reverse_reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
+                reverse_activity = self.intracomplex_activity(elem1, elem2, reaction_attr.reaction_type,
+                                                              reverse_reaction_spec_pair)
                 # This should work just fine, since we have just asserted state fingerprint change,
                 # and so it should be OK to re-calculate the activity.
                 # We are going to be calculating the activity when we update possible reactions,
@@ -2199,9 +2267,13 @@ class ReactionMgr(ComponentMgr):
 
             ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
             #source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]
-            assert source_state == cmplx._historic_fingerprints[-2]
-            assert target_state == cmplx._historic_fingerprints[-1]
-
+            # Uh, source and target state was defined when looping over changed complexes to assert state changes.
+            # If we are e.g. merging two complexes, then source_state will match src_state of the last complex
+            # in changed_complexes.
+            source_state = cmplx._historic_fingerprints[-2]
+            target_state = cmplx._historic_fingerprints[-1]
+            assert source_state in source_states
+            assert target_state in target_states
 
             ### 3(b) Update reaction_graph  ###
 
@@ -2264,8 +2336,13 @@ class ReactionMgr(ComponentMgr):
                         rev_edge_key = self.reaction_graph.adj[target_state][source_state]['edge_key']
                         self.reverse_reaction_key[edge_key] = rev_edge_key
                         self.reverse_reaction_key[rev_edge_key] = edge_key
-            else:
+            elif source_state != 0 or reaction_attr.is_forming:
                 # There is already an edge from source to target: Check that the edge is correct
+                # NOTE: Breaking complexes in two will produce a new complex with
+                # source_state = cmplx._historic_fingerprints[-2] = 0, but edge_key will differ from that in edge_attr.
+                # A reaction can yield multiple incoming or outgoing edges to/from a state with same edge key.
+                # Maybe it is not a good idea to have complexes start with a "0" state??
+                ## TODO: CHEKC THAT THIS IS ALL CORRECT!
                 edge_attrs = self.reaction_graph[source_state][target_state]
                 assert edge_attrs['reaction_attr'] == reaction_attr
                 assert edge_attrs['reaction_spec_pair'] == reacted_spec_pair
@@ -2297,11 +2374,16 @@ class ReactionMgr(ComponentMgr):
             assert reaction_attr.is_forming is False
             assert reaction_attr.is_intra
             assert c1state == c2state
-            source_state = c1state
+            source_state = c1state  # c1state from reacted_spec_pair.
+            # We should only have free strands if de-hybridizing, not unstacking
             target_state = 0
             activity = 1
-            if edge_key in self.endstates_by_reaction[source_state]:
-                assert target_state in self.endstates_by_reaction[source_state][edge_key]
+            # # if edge_key in self.endstates_by_reaction[source_state]:  # [source][key] = [list of targets]
+            # # if target_state in self.reaction_graph[source_state]:     # [source][target][key] = eattrs
+            #     # self.endstates_by_reaction[source_state][edge_key] is a list of possible end-states.
+            #     # I don't think there is a guarantee that target_state "0" is in end state.
+            #     # In fact, we might have created the edge_key entry just above.
+            #     # assert target_state in self.endstates_by_reaction[source_state][edge_key]
             # for strand in reaction_result['free_strands']:
             # edit: using the same node "0" for all free strands
             # No need to check that the expected target state is in the graph; it should be
@@ -2330,15 +2412,18 @@ class ReactionMgr(ComponentMgr):
                 self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
                 self.save_reaction_graph()  # Disabled, performance. [post_reaction_processing, free strands]
                 # Update self.endstates_by_reaction[source_state]
-                assert edge_key not in self.endstates_by_reaction[source_state]
+                # assert edge_key not in self.endstates_by_reaction[source_state]  # Again, could JUST be added above.
+                # Did you mean to write assert edge_key in self.endstates_by_reaction[source_state]?
                 self.endstates_by_reaction[source_state][edge_key].append(target_state)
                 if edge_key not in self.reverse_reaction_key:
                     if source_state in self.reaction_graph.adj[target_state]:
                         rev_edge_key = self.reaction_graph.adj[target_state][source_state]['edge_key']
                         self.reverse_reaction_key[edge_key] = rev_edge_key
                         self.reverse_reaction_key[rev_edge_key] = edge_key
-            else:
+            elif source_state != 0 or reaction_attr.is_forming:
                 # There is already an edge from source to target: Check that the edge is correct
+                # Again, there might be issues with multiple edges when complexes break down to form a new complex.
+                ## TODO: Fix all this.
                 edge_attrs = self.reaction_graph[source_state][target_state]
                 assert edge_attrs['reaction_attr'] == reaction_attr
                 assert edge_attrs['reaction_spec_pair'] == reacted_spec_pair
@@ -2583,6 +2668,12 @@ class ReactionMgr(ComponentMgr):
             #draw_graph_and_save(graph, path, pos=pos) # draw graph with matplotlib
             draw_with_graphviz(graph, path)
             printd("%s saved to file %s" % (graph_name, path))
+        reaction_graph_complexes_fn = os.path.join(
+            self.reaction_graph_complexes_directory, "reaction_graph_complexes.txt")
+        # Make sure that for each reaction graph we save, we can go back and determine which complexes were present:
+        with open(reaction_graph_complexes_fn, 'a') as fd:
+            fd.write("%s\t%s\t%s\n" % (fn_number, self.system_time, ",".join(
+                [str(cmplx.state_fingerprint()) for cmplx in self.complexes])))
 
 
 
@@ -2683,21 +2774,25 @@ class ReactionMgr(ComponentMgr):
         ### Check self.reaction_attrs:
         for reaction_pair, reaction_attr in self.reaction_attrs.items():
             elem1, elem2 = tuple(reaction_pair)
-            if isinstance(elem1, Domain):
+            if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+                assert isinstance(elem1, Domain)
                 assert isinstance(elem2, Domain)
-                assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
+                assert reaction_pair in self.possible_hybridization_reactions
+                # assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
                 if reaction_attr.is_forming:
                     assert elem1.partner is None and elem2.partner is None
                 else:
                     assert elem1.partner is elem2 and elem2.partner is elem1
             else:
-                assert isinstance(elem1, tuple)
                 assert reaction_attr.reaction_type is STACKING_INTERACTION
+                assert isinstance(elem1, tuple)
+                assert isinstance(elem2, tuple)
+                assert reaction_pair in self.possible_stacking_reactions
                 (h1end3p, h2end5p), (h2end3p, h1end5p) = elem1, elem2
                 if reaction_attr.is_forming:
-                    assert all(end.stack_partner is None for end in (h1end3p, h2end5p, h2end3p, h2end5p))
+                    assert all(end.stack_partner is None for end in (h1end3p, h2end5p, h2end3p, h1end5p))
                 else:
-                    assert all(end.stack_partner is not None for end in (h1end3p, h2end5p, h2end3p, h2end5p))
+                    assert all(end.stack_partner is not None for end in (h1end3p, h2end5p, h2end3p, h1end5p))
                     assert h1end3p.stack_partner is h1end5p and h1end5p.stack_partner is h1end3p
                     assert h2end3p.stack_partner is h2end5p and h2end5p.stack_partner is h2end3p
 

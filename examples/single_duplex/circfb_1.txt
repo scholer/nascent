@@ -1,13 +1,13 @@
 Strand	Domains	Sequence
 templ	A, T, B, C, D, E	CGACTGGAAAGCGGGC, TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT, TGACCATGATTACGAA, TGGCGCCCAATACGCA, TGATTTATAAGGGATTTTGCCGATTTCGGAAC, GGCACGACAGGTTTCC
-splint	c, e, a, b	TGCGTATTGGGCGCCA, GGAAACCTGTCGTGCC, GCCCGCTTTCCAGTCG, TTCGTAATCATGGTCA
+splint	b, a, e, c	TTCGTAATCATGGTCA, GCCCGCTTTCCAGTCG, GGAAACCTGTCGTGCC, TGCGTATTGGGCGCCA
 
 ####          Circfb design (Circular FoldBack):        ####
 #                            E          A          T
 # 5' .---------------------------3'5'---------------------.
 #    |                 .----------------------.            |
 #    |                (                        )           |
-#    |                 `---------5' 3'--------'            |
+#    |                 \_____c___3'5'___b_____/            |
 #    |_____________________________________________________|
 #            D               C          B
 # Domains:

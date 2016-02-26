@@ -662,13 +662,13 @@ class GraphManager(object):
             #             h2end5p         h2end3p
             #             dh1, d2         dh2, d3
             # So, we could use alternative names:
-            dh1end3p = d1end3p = h1end3p
-            dh1end5p = d2end5p = h2end5p
-            dh2end3p = d3end3p = h2end3p
-            dh2end5p = d4end5p = h1end5p
+            # dh1end3p = d1end3p = h1end3p
+            # dh1end5p = d2end5p = h2end5p
+            # dh2end3p = d3end3p = h2end3p
+            # dh2end5p = d4end5p = h1end5p
             # and elem1, elem2 would then be:
-            assert (dh1end3p, dh1end5p), (dh2end3p, dh2end5p) == (elem1, elem2) # double-helix ends
-            assert (d1end3p, d2end5p), (d3end3p, d4end5p) == (elem1, elem2)     # domain ends
+            # assert (dh1end3p, dh1end5p), (dh2end3p, dh2end5p) == (elem1, elem2) # double-helix ends
+            # assert (d1end3p, d2end5p), (d3end3p, d4end5p) == (elem1, elem2)     # domain ends
 
             dh1_delegate, dh2_delegate = h1end3p.ifnode.top_delegate(), h2end3p.ifnode.top_delegate()
             ## DETECT IF THE TWO DOMAINS ARE ALREADY PART OF AN EXISTING LOOP:
@@ -1318,7 +1318,7 @@ class GraphManager(object):
 
 
         """
-        ALTERNATIVE IDEA:
+        ### ALTERNATIVE IDEA: ###
         Assume you are always gonna form exactly one new loop.
         Everything else is side-effects.
         * You form the primary loop (shortest path).
@@ -1332,6 +1332,24 @@ class GraphManager(object):
             e3 = the edge which split the previous loop in two (e.g. a stacking duplex).
             e2 = the edge in this loop that is not e1
 
+        This should probably be done with a breath-first algorithm using a deque or similar.
+
+        For loops between two stacking double helices, since all existing loops will be split, this should work.
+        What if you have more complex networks, where the loops are not just
+
+
+        ### TODO - a better way to determine the effect of stacking double-helices: ###
+        For stacking interactions of domains, there is no guarantee that looking at (primary/shortest loops)
+        will detect if the helices being stacked are connected by other means upstream of the stacking ends.
+        A better approach would be to detect branch-points:
+            1. Find nodes on each arm that are branching off, and order them by distance to the stacking ends,
+                with the nodes furthest away first.
+            2. For each pair of furthest away from the stacking ends, find the shortest path between the two nodes.
+                If the shortest-path goes through a node downstream (closer to the stacking ends),
+                make that node the current node and discart the more distant nodes.
+            3. Calculate loop activity for path = (arm1 + current_shortest_path + arm2)
+            4. Proceed to the next pair in the list until the list is empty.
+
         """
 
 
@@ -1341,7 +1359,7 @@ class GraphManager(object):
         #     'shortest_path': path,
         #     'shortest_path_spec': path-of-ifnode-fingerprints
         #     'shortest_path_activity': activity,
-        #     'changed_loops': changed_loops,  # old_id => [new_loop1_path, new_loop2_path, ...]
+        #     'changed_loops': changed_loops,  # old_id => [new_loop1_dict, (new_loop2_dict]
         #     'changed_loops_specs': changed_loops_specs, # loop_state_hash => [path of ifnodes_state_fingerprints]
         #     'loops_considered': processed_secondary_loopids,
         #     'loops_affected': all_affected_loops,

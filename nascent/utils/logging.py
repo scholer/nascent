@@ -67,9 +67,9 @@ def init_logging(args=None, logfilepath=None, logdir=None):
     ## We want different output formatting for file vs console logging output.
     ## File logs should be simple and easy to regex; console logs should be short and nice on the eyes
     logfilefmt = '%(asctime)s %(levelname)-6s - %(name)s:%(lineno)s - %(funcName)s() - %(message)s'
-    logdatefmt = "%Y%m%d-%H:%M:%S.%f"
-    loguserfmt = "%(asctime)s %(levelname)-5s %(name)30s:%(lineno)-4s%(funcName)16s() %(message)s"
-    loguserfmt = "%(asctime)s %(levelname)-5s %(module)30s:%(lineno)-4s%(funcName)16s() %(message)s"
+    logdatefmt = None # "%Y%m%d-%H:%M:%S.%f"  # Milliseconds doesn't work unless you make a custom Formatter
+    loguserfmt = "%(asctime)s %(levelname)-5s %(name)20s:%(lineno)-4s%(funcName)16s() %(message)s"  # Using logger name
+    loguserfmt = "%(asctime)s %(levelname)-5s %(module)20s:%(lineno)-4s%(funcName)16s() %(message)s"# Using module name
     logtimefmt = "%H:%M:%S" # Nice for output to user in console and testing.
     # See https://docs.python.org/3/library/logging.html#logrecord-attributes for full list of attributes
 
@@ -85,8 +85,8 @@ def init_logging(args=None, logfilepath=None, logdir=None):
     if args.get('basic_logging', False):
         logging.basicConfig(level=loglevel,
                             format=loguserfmt,
-                            datefmt=logtimefmt,
-                            filename=logfilename)
+                            # datefmt=logtimefmt,
+                            filename=logfilepath)
         logger.debug("Logging system initialized with loglevel %s", loglevel)
     else:
 

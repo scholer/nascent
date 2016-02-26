@@ -72,6 +72,7 @@ import pdb
 #, R # N_AVOGADRO in /mol, R universal Gas constant in cal/mol/K
 # from .constants import R, N_AVOGADRO, AVOGADRO_VOLUME_NM3
 from .constants import HYBRIDIZATION_INTERACTION, PHOSPHATEBACKBONE_INTERACTION, STACKING_INTERACTION
+from .constants import DIRECTION_SYMMETRIC, DIRECTION_DOWNSTREAM, DIRECTION_UPSTREAM
 from .constants import HELIX_XOVER_DIST, HELIX_STACKING_DIST, HELIX_WIDTH
 from .complex import Complex
 from .graph_manager import GraphManager
@@ -241,6 +242,7 @@ class ComponentMgr(GraphManager):
                        'dist_ee_sq': HELIX_WIDTH**2,
                        'dist_ee_nm': HELIX_WIDTH,
                        'stiffness': 1,
+                       'direction': DIRECTION_SYMMETRIC
                       }
         #key = (domain1.universal_name, domain2.universal_name, HYBRIDIZATION_INTERACTION)
         s_edge_key = (frozenset((domain1.universal_name, domain2.universal_name)), HYBRIDIZATION_INTERACTION)
@@ -257,12 +259,15 @@ class ComponentMgr(GraphManager):
         # Remember, interface_graph.adj reflects the current *representation*. After merging/delegating ifnodes,
         # the edges from delegator is no longer available. Either update edge before merge or only update delegatee.
         # Edit: Isn't this updated when we update the ends5p3p_graph since the eattr dicts are the same instance?
+        # Update domain PHOSPHATE_BACKBONE edge:
         self.interface_graph[end1_delegatee][end2_delegatee]['len_contour'] = domain1.ds_len_contour
         self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_nm'] = domain1.ds_dist_ee_nm
         self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_sq'] = domain1.ds_dist_ee_sq
         self.interface_graph[end1_delegatee][end2_delegatee]['stiffness'] = 1
+        # self.interface_graph[end1_delegatee][end2_delegatee]['direction'] = DIRECTION_SYMMETRIC # No, domain pb edge
 
-        # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
+        # Update PHOSPHATE_BACKBONE edge dist_ee_nm, dist_ee_sq and stiffness attrs
+        # for edge between d.end5p and d.end3p (for both d):
         for d in (domain1, domain2):
             if self.ends5p3p_graph.is_multigraph():
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['len_contour'] = d.ds_len_contour
@@ -361,7 +366,8 @@ class ComponentMgr(GraphManager):
         self.interface_graph.split(domain1.end5p.ifnode, domain2.end3p.ifnode)
         self.interface_graph.split(domain1.end3p.ifnode, domain2.end5p.ifnode)
 
-        # Update edge dist_ee_nm, dist_ee_sq and stiffness attrs for edge between d.end5p and d.end3p (for both d):
+        # Update DOMAIN BACKBONE edge dist_ee_nm, dist_ee_sq and stiffness attrs
+        # for edge between d.end5p and d.end3p (for both d):
         for d in (domain1, domain2):
             if self.ends5p3p_graph.is_multigraph():
                 self.ends5p3p_graph[d.end5p][d.end3p][PHOSPHATEBACKBONE_INTERACTION]['len_contour'] = d.ss_len_contour
@@ -738,7 +744,8 @@ class ComponentMgr(GraphManager):
                                #"weight": 2,
                                'dist_ee_nm': HELIX_WIDTH,
                                'dist_ee_sq': HELIX_WIDTH**2,
-                               'stiffness': 1
+                               'stiffness': 1,
+                               'direction': DIRECTION_SYMMETRIC
                               }
             domain_edge_kwargs = edge_kwargs
             #h1end3p = h1end5p = (h2end3p, h2end5p) = ()

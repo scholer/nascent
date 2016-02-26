@@ -83,8 +83,9 @@ def main():
     structure = "duplex_16bp_2d_10b-loop"
     structure = "duplex_20bp_2d_5T-loop"
     structure = "duplex_20bp_2d_4T-loop"
-    structure = "duplex_20bp_2d_2T-loop"
-    # structure = "circfb_1"
+    # structure = "duplex_20bp_2d_2T-loop"
+    structure = "circfb_1"
+    structure = "fourway_junction_1"
 
     #n_strand_copies_default = 400
     #n_strand_copies_default = 100
@@ -131,7 +132,7 @@ def main():
 
     statsfolder = run_directory # os.path.join(strand_defs_folder, "simdata", structure)
     log_args = {'loglevel': logging.DEBUG,
-                #'basic_logging': True,  # False = custom logging setup
+                'basic_logging': True,   # False = custom logging setup, both file and stdout  (default)
                 #'rotating': False,
                }
     init_logging(args=log_args, logdir=run_directory)
@@ -197,6 +198,8 @@ def main():
               "stacking_joins_complexes": True,
               # Allow ends in one complex to stack against ends in another complex:
               "enable_intercomplex_stacking": False,
+              "disable_stacking_of_nonadjacent_ends": True,
+              "stacking_overhang_steric_factor": 0.7, # 30 % chance that stack cannot form per overhang.
               # Re-calculate changed domain reactions against all other (complementary) domains,
               # or only re-calculate for pairs against other changed domains?
               "reaction_update_pair_against_all": True,
@@ -205,7 +208,7 @@ def main():
               # Use a reaction throttle cache, decrementing the throttle when reaction is triggered, rather than
               # calculating throttle factor in calculate_c_j using a custom exponential decreasing with Nric.
               "reaction_throttle_use_cache": True, # True: Throttle is decreased in post_reaction_processing.
-              "reaction_throttle_factor_base": 0.9997, # 1.00, #0.99, # 1.00, # True: Throttle is decreased in post_reaction_processing.
+              "reaction_throttle_factor_base": 0.995, # 1.00, #0.99, # 1.00, # True: Throttle is decreased in post_reaction_processing.
               "reaction_throttle_per_complex": False, # True: Have per-reaction throttles for each complex.
               "reaction_throttle_offset": 0,
               "reaction_throttle_reset_on_temperature_change": True,
@@ -316,7 +319,7 @@ def main():
             else:
                 # pdb.set_trace()
                 simulator.stats_writer.monitored_strands = [input_oligos[0]]
-                simulator.simulate(T=330, n_steps_max=100000, systime_max=2000)
+                simulator.simulate(T=337, n_steps_max=200000, systime_max=2000)
                 # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
                 # simulator.simulate(T=330, n_steps_max=4000, systime_max=200)

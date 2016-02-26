@@ -1,13 +1,14 @@
 import os, yaml
 desc = """
-####          Circfb design (Circular FoldBack):        ####
-#                            E          A          T
-# 5' .---------------------------3'5'---------------------.
-#    |                 .----------------------.            |
-#    |                (                        )           |
-#    |                 \_____c___3'5'___b_____/            |
-#    |_____________________________________________________|
-#            D               C          B
+####          Fourway Junction 1        ####
+#         A       .        B
+# 5' ------------' `--------------- 3'
+# 3' -----a------. .-------b------- 5'
+#                | |                  .
+# 5' -----d------' `-------c------- 3'
+# 3' ------------...--------------- 5'
+#         D                C
+# See also: fourway1
 # Domains:
 # - A, a	CGACTGGAAAGCGGGC, GCCCGCTTTCCAGTCG
 # - T, TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
@@ -15,23 +16,41 @@ desc = """
 # - C, c	TGGCGCCCAATACGCA, TGCGTATTGGGCGCCA
 # - D	TGATTTATAAGGGATTTTGCCGATTTCGGAAC
 # - E, h2b	GGCACGACAGGTTTCC, GGAAACCTGTCGTGCC
+#### Fourway Junction 1 conformation AB/CD     ####
+#              A         .        B
+#  A 5' CGACTGGAAAGCGGGC' `TGACCATGATTACGAA 3'  B
+#  a 3' GCTGACCTTTCGCCCG. .ACTGGTACTAATGCTT 5'  b
+#                       | |
+#  d 5' GGAAACCTGTCGTGCC' `TGCGTATTGGGCGCCA 3' c
+#  D 3' CCTTTGGACAGCACGG...ACGCATAACCCGCGGT 5' C
+#              D                  C
+#### Fourway Junction 1 conformation AD/CB     ####
+#              b         .        c
+#  b 5' TTCGTAATCATGGTCA' `TGCGTATTGGGCGCCA 3'  c
+#  B 3' AAGCATTAGTACCAGT. .ACGCATAACCCGCGGT 5'  C
+#                       | |
+#  A 5' CGACTGGAAAGCGGGC' `GGCACGACAGGTTTCC 3' D
+#  a 3' GCTGACCTTTCGCCCG...CCGTGCTGTCCAAAGG 5' d
+#              a                  d
+#
+# Most prevalent is AD/CB, but CB not stacked.
+
 """
 seqs = """
     A: CGACTGGAAAGCGGGC
     a: GCCCGCTTTCCAGTCG
-    T: TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
     B: TGACCATGATTACGAA
     b: TTCGTAATCATGGTCA
     C: TGGCGCCCAATACGCA
     c: TGCGTATTGGGCGCCA
-    D: TGATTTATAAGGGATTTTGCCGATTTCGGAAC
-    E: GGCACGACAGGTTTCC
-    e: GGAAACCTGTCGTGCC
+    D: GGCACGACAGGTTTCC
+    d: GGAAACCTGTCGTGCC
 """
-# Edit: splint was in the wrong direction!
 strands = """
-    templ: [A, T, B, C, D, E]
-    splint: [b, a, e, c]
+    s1: [A, B]
+    s2: [b, c]
+    s3: [C, D]
+    s4: [d, a]
 """
 seqs = yaml.load(seqs)
 strands = yaml.load(strands)

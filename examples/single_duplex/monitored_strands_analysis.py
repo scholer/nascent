@@ -57,16 +57,18 @@ colors = list("rgbcmk") + "silver firebrick darkslategrey orange darkmagenta".sp
 def main():
     pyplot = load_pyplot()
 
-    plot_tot_hyb = True
-    plot_tot_stacked = False
-    plot_melting_curve = False
+    # plot_tot_hyb = True
+    # plot_tot_stacked = False
+    # plot_melting_curve = False
 
     structure = "duplex2"
     # structure = "duplex_16bp-d2"
     structure = "duplex_16bp_2d_10b-loop"
     structure = "duplex_20bp_2d_5T-loop"
     structure = "duplex_20bp_2d_4T-loop"
-    structure = "duplex_20bp_2d_2T-loop"
+    # structure = "duplex_20bp_2d_2T-loop"
+    structure = "circfb_1"
+    structure = "fourway_junction_1"
 
     # stats, statsfolders = load_stats()
     runidxs = [-1] #

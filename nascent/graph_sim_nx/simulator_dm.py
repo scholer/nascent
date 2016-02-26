@@ -55,6 +55,7 @@ from .dispatcher import StateChangeDispatcher
 from .stats_manager import StatsWriter
 # N_AVOGADRO in /mol,
 # Universal Gas constant in cal/mol/K
+from .reaction_graph import reaction_to_str
 from .constants import (N_AVOGADRO, R,
                         HYBRIDIZATION_INTERACTION,
                         PHOSPHATEBACKBONE_INTERACTION,
@@ -386,6 +387,7 @@ class DM_Simulator(Simulator):
                         (d1.strand.complex is not None and d1.strand.complex == d2.strand.complex))
 
                 # Returns the reacted pair and a dict with changed complexes
+                logger.debug("Performing reaction %s" % reaction_to_str(reaction_spec_pair, reaction_attr))
                 reacted_pair, result = sysmgr.hybridize_and_process(reaction_pair, reaction_attr)
                 assert (d1, d2) == tuple(reacted_pair) or (d2, d1) == tuple(reacted_pair)
 
@@ -399,6 +401,7 @@ class DM_Simulator(Simulator):
                 (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(reaction_pair)
                 reaction_spec_pair = frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
                                                 (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
+                logger.debug("Performing reaction %s" % reaction_to_str(reaction_spec_pair, reaction_attr))
                 reacted_pair, result = sysmgr.stack_and_process(reaction_pair)
                 # (h1end3p, h2end5p), (h2end3p, h1end5p) = reacted_pair
             else:

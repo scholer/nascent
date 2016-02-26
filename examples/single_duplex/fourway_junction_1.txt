@@ -1,0 +1,22 @@
+Strand	Domains	Sequence
+s2	b, c	TTCGTAATCATGGTCA, TGCGTATTGGGCGCCA
+s1	A, B	CGACTGGAAAGCGGGC, TGACCATGATTACGAA
+s3	C, D	TGGCGCCCAATACGCA, GGCACGACAGGTTTCC
+s4	d, a	GGAAACCTGTCGTGCC, GCCCGCTTTCCAGTCG
+
+####          Fourway Junction 02        ####
+#         A       .        B
+# 5' ------------' `--------------- 3'
+# 3' -----a------. .-------b------- 5'
+#                | |                  .
+# 5' -----d------' `-------c------- 3'
+# 3' ------------. .--------------- 5'
+#         D                C
+# See also: fourway1
+# Domains:
+# - A, a	CGACTGGAAAGCGGGC, GCCCGCTTTCCAGTCG
+# - T, TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+# - B, b	TGACCATGATTACGAA, TTCGTAATCATGGTCA
+# - C, c	TGGCGCCCAATACGCA, TGCGTATTGGGCGCCA
+# - D	TGATTTATAAGGGATTTTGCCGATTTCGGAAC
+# - E, h2b	GGCACGACAGGTTTCC, GGAAACCTGTCGTGCC

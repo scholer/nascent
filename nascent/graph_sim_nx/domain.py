@@ -378,7 +378,7 @@ class DomainEnd(object):
         upstream_list = [] if start_list is None else start_list
         end = self.stacked_upstream()
         while end is not None:
-            upstream_list.append(upstream)
+            upstream_list.append(end)
             end = end.stacked_upstream()
         return upstream_list
 

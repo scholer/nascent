@@ -66,6 +66,8 @@ MAX_COMPLEX_SYMMETRY = 10
 make_sequential_id = sequential_number_generator()
 helix_sequential_id_generator = sequential_number_generator()
 # supercomplex_sequential_id_gen = sequential_number_generator()
+loopid_sequential_number_generator = sequential_number_generator()
+
 
 
 
@@ -289,7 +291,7 @@ class Complex(nx.MultiDiGraph):
         # In Python, objects can be a little slow because they are not just data containers but also have methods etc.
         # In e.g. Julia, having a separate "Loop" type would be faster than Dict. (Julia is ALL about types).
         self.loops = {}  # "loops_by_id; LoopID => loop dict
-        self.loop_by_loopid = self.loops # alias. 
+        self.loop_by_loopid = self.loops # alias.
         # What is a loop? It is primarily made up of InterfaceNodes, because that's the only thing that makes sense.
         # For each loop, we have a dict with entries (suggested):
         #     loopid: uuid for this loop.
@@ -612,18 +614,25 @@ class Complex(nx.MultiDiGraph):
         if self._state_fingerprint is None:
             # Check that all domains in complex have also been reset:
             # assert all(d._specie_state_fingerprint is None for d in self.domains())
-            for domain in self.domains():
-                # If complex state fingerprint is None, then domains cannot have valid state fingerprint.
-                # Question is: Have the old, obsolete domain state fingerprint been used for anything?
-                if domain._specie_state_fingerprint is not None:
-                    print("WARNING: domain %s state fingerprint %s" % (domain, domain._specie_state_fingerprint),
-                          "has not been reset prior to calling Complex.state_fingerprint()!")
-                    from inspect import currentframe, getframeinfo
-                    frameinfo = getframeinfo(currentframe().f_back)
-                    print(" -- called from %s:%s" % (frameinfo.filename, frameinfo.lineno))
-                    domain._specie_state_fingerprint = None
+            old_domain_fingerprints = {domain: domain._specie_state_fingerprint
+                                       for domain in self.domains()
+                                       if domain._specie_state_fingerprint is not None}
             if not self._nodes_have_been_labelled:
                 self.label_complex_nodes()
+                if old_domain_fingerprints:
+                    for domain, old_fingerprint in old_domain_fingerprints.items():
+                        # If complex state fingerprint is None, then domains cannot have valid state fingerprint.
+                        # Question is: Have the old, obsolete domain state fingerprint been used for anything?
+                        print("WARNING: domain %s state fingerprint" % (domain, ),
+                              "had not been reset prior to calling Complex.state_fingerprint()!")
+                        if domain.state_fingerprint() != old_fingerprint:
+                            print(" -- AND NEW STATE FINGERPRINT DIFFERS FROM OLD: %s vs %s" %
+                                  (domain._specie_state_fingerprint, old_fingerprint))
+                        else:
+                            print(" -- redundant label_complex_nodes: new fingerprint same as old.")
+                        from inspect import currentframe, getframeinfo
+                        frameinfo = getframeinfo(currentframe().f_back)
+                        print(" -- called from %s:%s" % (frameinfo.filename, frameinfo.lineno))
             else:
                 # Check that the labelling is invariant:
                 old_icids = {d: d.icid for d in self.domains()}
@@ -826,7 +835,7 @@ class Complex(nx.MultiDiGraph):
                       (self, self.symmetry_fold, total_loops))
 
 
-    def assert_state_change(self, reaction_spec_pair, reaction_attr, reset=False,
+    def assert_state_change(self, reaction_spec_pair, reaction_attr, reset=True,
                             expected_state_fingerprint=None):
         """
         Will
@@ -973,11 +982,16 @@ class Complex(nx.MultiDiGraph):
                 return self.ifnode_by_ifnode_statespec[ifnode_statespec]
 
 
-    def calculate_loop_hash(self, loop_path, loop=None, loopid=None):
+    def calculate_loop_hash(self, loop_path, loop_path_spec=None, loop=None, loopid=None):
         """
         Calculate a state-dependent hash for the given loop.
         Complex state fingerprint and domain icid labelling must be up-to-date.
         """
+        if loop_path_spec:
+            edgelist = list(zip(loop_path_spec[:-1], loop_path_spec[1:]))
+            edgelist.append((loop_path_spec[-1], loop_path_spec[0]))
+            edges = frozenset(frozenset((src, tgt)) for src, tgt in edgelist)
+            return hash(edges)
         if loop_path is None:
             if loop is None:
                 assert loopid is not None
@@ -999,12 +1013,30 @@ class Complex(nx.MultiDiGraph):
         if use_cached:
             ifnode_by_hash = self.ifnode_by_ifnode_statespec
         else:
+            # Go over all ifnodes (for all domain ends):
             cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)
                              if end.ifnode.delegatee is None]
             ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in cmplx_ifnodes}
             self.ifnode_by_ifnode_statespec = ifnode_by_hash
         assert all(spec in ifnode_by_hash for spec in ifnodes_specs)
         return [ifnode_by_hash[spec] for spec in ifnodes_specs]
+
+    def update_ifnodes_and_loops_specs(self, ):
+        """ Update all ifnodes and loop hashes. """
+        cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)
+                         if end.ifnode.delegatee is None]
+        ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in cmplx_ifnodes}
+        self.ifnode_by_ifnode_statespec = ifnode_by_hash
+        loopid_by_hash = {}
+        old_loop_hash_by_id = {loopid: loop_hash for loop_hash, loopid in self.loopid_by_hash.items()}
+        for loopid, loop in self.loop_by_loopid.items():
+            new_path_spec = [ifnode.state_fingerprint() for ifnode in loop['path']]
+            new_loop_hash = self.calculate_loop_hash(new_path_spec)
+            loop['path_spec'] = new_path_spec
+            loop['loop_hash'] = new_loop_hash
+            loopid_by_hash[new_loop_hash] = loopid
+            del self.loopid_by_hash[old_loop_hash_by_id[loopid]] # Checking that the old one was present
+        self.loopid_by_hash = loopid_by_hash # overwrite the old map
 
 
     def register_new_loop(self, loop_path_spec, loop_activity, loop_path=None, replacing_loop_spec=None):
@@ -1033,9 +1065,27 @@ class Complex(nx.MultiDiGraph):
             'original_loop_hash': loop_hash,  # The current loop hash is in self.loopid_by_hash.
             # For loop delegation/overrides see self.loop_delegations(_rev).
         }
-        assert loopid not in self.loops_by_id
-        self.loops_by_id[loopid] = shortest_loop
+        assert loopid not in self.loop_by_loopid
+        self.loop_by_loopid[loopid] = loop
 
+
+    def update_changed_loop(self, loop0_hash, replacement_loop, refresh_cache=True):
+        """ Update an existing loop to use a new, shorter path: """
+        if refresh_cache:
+            self.update_ifnodes_and_loops_specs()
+        loop0id = self.loopid_by_hash[loop0_hash]
+        loop0 = self.loop_by_loopid[loop0id]
+        if 'loop_hash' in loop0: # This should usually just be a lookup entry in self.loopid_by_hash
+            try:
+                del self.loopid_by_hash[loop0['loop_hash']]
+            except KeyError:
+                print("Could not delete old entry in loopid_by_hash using old loop_hash %s" % loop0['loop_hash'])
+        loop0.update(replacement_loop)  # Or you could just overwrite the old entry in loop_by_loopid.
+
+
+
+
+    ## TODO: Need method to register broken loop. What is the best way to deal with that?
 
 
     ## OLD FINGERPRINT METHODS: ##
