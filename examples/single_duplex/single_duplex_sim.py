@@ -227,6 +227,7 @@ def main():
               "reaction_graph_output_fnfmt": "reaction_graph_{systime:0.04f}.{ext}", #
               # Supported output format: "yaml", "edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek", "png"
               "reaction_graph_output_formats": ["png", "yaml"], # Should be a sequence of output formats
+              "reaction_graph_save_when_updated": True,   # Save reaction graph during run to see evolution
               # How far back to look when looking for reaction microcycles:
               "reaction_microcycles_slice_size": 5,
              }

@@ -79,14 +79,14 @@ def reaction_attr_to_str(reaction_attr):
                     " " if reaction_attr.is_intra else "*"))
 
 
-def reaction_spec_pair_str(reaction_spec_pair):
+def reaction_spec_pair_to_str(reaction_spec_pair):
     """
     Alternative name: reaction_spec_pair_repr ?
     Return
 
     Appends an asterix (*) for inter-molecular reactions.
     """
-    return ", ".join(sorted(reaction_spec_pair))
+    return ", ".join(str(val) for val in sorted(reaction_spec_pair))
 
 
 def reaction_to_str(reaction_spec_pair, reaction_attr):
@@ -117,7 +117,7 @@ def reaction_to_str(reaction_spec_pair, reaction_attr):
             dspecie, is_hyb, cstate, icid = d['fp']
             d['dspecie'] = "_".join(dspecie)     # dspecie = (strand.name, domain.name)
             d['hyb'] = "-" if is_hyb else " "   # whether domain is currently hybridized
-            d['cstate'] = str(cstate % 100000)   # complex state (fingerprint)
+            d['cstate'] = str(cstate % 100000) if isinstance(cstate, int) else cstate  # complex state (fingerprint)
             d['icid'] = "" if icid == 0 else str(icid)  # in-complex identifier (for symmetric complexes)
         cstates = []
         for d in (d1, d2):

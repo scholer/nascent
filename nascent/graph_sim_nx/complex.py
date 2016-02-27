@@ -99,6 +99,9 @@ class Complex(nx.MultiDiGraph):
     ## TODO: Would it make sense to have this be a regular graph of DomainEnds instead of a MultiGraph of domains?
     ##       (see discussion below).
 
+    ## TODO: (Optimization) Instead of creating a new complex whenever two strands hybridize, consider having a
+    ##       "delegation" system where one strand's complex simply delegates responsibility to another strand's complex.
+
     The edges represent ALL types of connections:
      1. Phosphate backbone connections between connected domains in the same strand.
      2. Hybridization connections.
@@ -185,6 +188,7 @@ class Complex(nx.MultiDiGraph):
         self._state_fingerprint = None
         self._strands_fingerprint = None
         self._hybridization_fingerprint = None
+        self._merged_complexes_historic_fingerprints = []
         self._stacking_fingerprint = None
         self._nodes_have_been_labelled = None
 
@@ -569,6 +573,49 @@ class Complex(nx.MultiDiGraph):
         self.stacked_pairs.remove((h2end3p.domain, h2end5p.domain))
         self._stacking_fingerprint = None
         self._state_fingerprint = None
+
+    def update_complex_energy(self, dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume):
+        # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
+        # use result['case'] to determine if the volume energy of the complex is changed.
+        # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
+        # has been called. Also: Is this really state dependent? Can't we just let de-hybridization and unstacking
+        # be independent of complex state?
+        #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
+        # Made this more simple by inverting values once depending on is_forming, when calculating dH_hyb etc.
+
+        # if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+        #     cmplx.energies_dHdS[0]['hybridization'] += dH_hyb
+        #     cmplx.energies_dHdS[1]['hybridization'] += dS_hyb
+        # elif reaction_attr.reaction_type is STACKING_INTERACTION:
+        #     cmplx.energies_dHdS[0]['stacking'] += dH_stack
+        #     cmplx.energies_dHdS[1]['stacking'] += dS_stack
+        # else:
+        #     raise ValueError("Un-supported reaction type %s" % reaction_attr.reaction_type)
+        # # Cases:
+        # #   Formation Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
+        # #   Formation Case 2/3/4: IntER-complex hybridization between two complexes/strands.
+        # #   Breaking  Case 0/1:   Complex is still intact.
+        # #   Breaking  Case 2/3/4: Complex is split in two.
+        # if reaction_result['case'] <= 1:
+        #     # IntRA-complex reaction. A single complex both before and after reaction.
+        #     cmplx.energies_dHdS[1]['shape'] += dS_shape
+        # else:
+        #     # IntER-strand/complex reaction; Two strands/complexes coming together or splitting up.
+        #     cmplx.energies_dHdS[1]['volume'] += dS_volume
+        if dH_hyb:
+            self.energies_dHdS[0]['hybridization'] += dH_hyb
+            self.energies_dHdS[1]['hybridization'] += dS_hyb
+        if dH_stack:
+            self.energies_dHdS[0]['stacking'] += dH_stack
+            self.energies_dHdS[1]['stacking'] += dS_stack
+        if dS_shape:
+            self.energies_dHdS[1]['shape'] += dS_shape
+        if dS_volume:
+            self.energies_dHdS[1]['volume'] += dS_volume
+
+        ## TODO: Use a more appropriate rounding, not just integer. Using tuple to indicate immutable.
+        self.energy_total_dHdS = tuple([int(sum(d.values())) for d in self.energies_dHdS])
+
 
 
     def state_fingerprint(self):

@@ -822,6 +822,7 @@ class ComponentMgr(GraphManager):
                 c_major.history.append(c_minor.history)
                 c_major.hybridized_pairs |= c_minor.hybridized_pairs
                 c_major.stacked_pairs |= c_minor.stacked_pairs
+                ## TODO: c_major should also add on energies from c_minor!
                 # Complex.add_strands takes care of updating counters:
                 #c_major.domain_species_counter += c_minor.domain_species_counter
                 #c_major.strand_species_counter += c_minor.strand_species_counter
@@ -1053,6 +1054,8 @@ class ComponentMgr(GraphManager):
             removed_hybridization_pairs, removed_stacking_pairs = \
                 c.remove_strands(new_complex_oligos, update_graph=True, update_edge_pairs=True)
             c_new = Complex(data=graph_minor, strands=new_complex_oligos)
+            # c_new._merged_complexes_historic_fingerprints.append(c._historic_fingerprints)
+            c_new._historic_fingerprints.append(c._historic_fingerprints[-1])
             # Remember to add the hybridized_pairs and stacked_pairs removed from the major complex.
             c_new.hybridized_pairs |= removed_hybridization_pairs
             c_new.stacked_pairs |= removed_stacking_pairs

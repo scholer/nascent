@@ -33,7 +33,13 @@ desc = """
 #  a 3' GCTGACCTTTCGCCCG...CCGTGCTGTCCAAAGG 5' d
 #              a                  d
 #
-# Most prevalent is AD/CB, but CB not stacked.
+# Most prevalent is AD/C/B, AD stacked but CB not stacked (cstate 25268, t_sum=634s)
+# Second is AD/CB  (cstate 89632, t_sum=484) (AD/CB means AD and CB stacked)
+# Third  is AB/CD  (cstate 36224, t_sum=269)
+# Fourth is CD/A/B (cstate 82748, t_sum=198)
+# Fifth  is AB/C/D (cstate 82204, t_sum=193)
+# Sixth  is CB/A/D (cstate 91988, t_sum=134)
+
 
 """
 seqs = """

@@ -202,7 +202,7 @@ class Domain(object):
             # printd("(re-)calculating state fingerprint for domain %r" % (self, ))
             dspecie = self.domain_strand_specie  # e.g. (strandA, domain1)
             # the complex's state:
-            c_state = self.strand.complex.state_fingerprint() if self.strand.complex is not None else 0
+            c_state = self.strand.complex.state_fingerprint() if self.strand.complex is not None else self.strand.name
             # self._specie_state_fingerprint = hash((dspecie, c_state, self.in_complex_identifier()))
             ## TODO: Clean up: Currently including is_hybridized state in fingerprint; (has been useful for debugging)
             in_complex_identifier = self.in_complex_identifier()
