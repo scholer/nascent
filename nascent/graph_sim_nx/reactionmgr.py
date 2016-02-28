@@ -66,7 +66,7 @@ except ImportError:
 # Using namedtuple is quite slow in CPython, but faster than dicts in PyPy.
 # (Attribute accessing namedtuple.a is faster than dict['a']; not sure about instantiation.)
 #import math
-from math import exp, log #, log as ln
+from math import exp, log, sqrt #, log as ln
 ln = log
 #from datetime import datetime
 from pprint import pprint
@@ -266,7 +266,9 @@ class ReactionMgr(ComponentMgr):
             # Add un-complexed strand's names as nodes in the reaction graph:
             # See self.record_new_complex_state
             for strand in strands:
-                self.update_reaction_graph_state_node(strand.name) # Should've been done when initializing strands
+                x, y, z =1, 100*random.random(), 0.0
+                # Some graph layout algorithms (e.g. graphviz) can only handle two-valued (x,y) positions:
+                self.update_reaction_graph_state_node(strand.name, n_strands=1, x=x, y=y, z=z) #, pos=[x,y])
 
 
         ## Reaction throttle:  (doesn't work, yet)
@@ -1943,7 +1945,7 @@ class ReactionMgr(ComponentMgr):
         return stacking_pair, result
 
 
-    def post_reaction_processing(self, reacted_spec_pair, reaction_attr, reacted_pair, reaction_result):
+    def post_reaction_processing(self, reacted_spec_pair, reaction_attr, reacted_pair, reaction_result, tau=0):
         """
         post_reaction_processing is invoked *just after* a reaction has been performed,
         but *before* updating possible reactions.
@@ -2044,7 +2046,7 @@ class ReactionMgr(ComponentMgr):
 
 
         ### 0. ASSERT STATE CHANGE FOR ALL CHANGED COMPLEXES: ###
-        source_states, target_states = set(), set()
+        source_states, asserted_target_states = set(), set()
         for cmplx in new_or_changed_complexes:
             source_state = cmplx._historic_fingerprints[-1]  # Can be 0 for new complexes!
             ## TODO: How about when merging, you make fingerprint = frozenset of the two merging complexes?
@@ -2064,7 +2066,7 @@ class ReactionMgr(ComponentMgr):
             ## (will update complex state fingerprint - but not reset it first unless you pass reset=True):
             target_state, _ = cmplx.assert_state_change(
                 reacted_spec_pair, reaction_attr, expected_state_fingerprint=expected_state_fingerprint)
-            target_states.add(target_state)
+            asserted_target_states.add(target_state)
             if expected_state_fingerprints is not None:
                 assert target_state in expected_state_fingerprints  # List of target states via edge with edge_key.
 
@@ -2233,6 +2235,7 @@ class ReactionMgr(ComponentMgr):
                 # Increase in entropy (in units of R) when a volume restriction is lifted.
                 dS_volume = self.volume_entropy  # Multiply by -R*T to get dG.
                 dS += dS_volume
+        assert (dS_shape is None) != (dS_volume is None)
 
 
         ### 3. For all new and changed complexes: Update complex energies/entropies and update reaction graph: ###
@@ -2265,74 +2268,59 @@ class ReactionMgr(ComponentMgr):
         # Note: We do this for both changed/existing complexes and *new* complexes;
         # Although we don't need to check that the state-fingerprint has changed,
         # we do need to add the new complex to the reaction_graph, and make the reaction_spec_pair edge.
-        ## TODO: Go back to using new_or_changed_complexes
-        if reaction_result['changed_complexes']:
-            for cmplx in reaction_result['changed_complexes']:
-                ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
-                ## TODO: This would also prevent the bug where dS is altered multiple times!
+        ## 3a. Go over all new or changed complexes:
+        for cmplx in new_or_changed_complexes:
+            ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
+            ## TODO: This would also prevent the bug where dS is altered multiple times!
 
-                ### 3(a). Update complex energy: ###
-                assert (dS_shape is None) != (dS_volume is None)
-                cmplx.update_complex_energy(dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume)
+            ### 3(a). Update complex energy: ###
+            cmplx.update_complex_energy(dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume)
 
-                ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
-                #source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]
-                # Uh, source and target state was defined when looping over changed complexes to assert state changes.
-                # If we are e.g. merging two complexes, then source_state will match src_state of the last complex
-                # in changed_complexes.
+            ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
+            #source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]
+            # Uh, source and target state was defined when looping over changed complexes to assert state changes.
+            # If we are e.g. merging two complexes, then source_state will match src_state of the last complex
+            # in changed_complexes.
 
-                ### 3(b) Update reaction_graph  ###
-                target_state = cmplx._state_fingerprint
-                assert cmplx._historic_fingerprints[-2] in reaction_spec_source_states
-                assert cmplx._historic_fingerprints[-2] in source_states
-                assert cmplx._historic_fingerprints[-1] in target_states
-                assert cmplx._historic_fingerprints[-1] == target_state
+            ### 3(b) Update reaction_graph  ###
+            target_state = cmplx._state_fingerprint
+            assert cmplx._historic_fingerprints[-1] in asserted_target_states
 
-                # new_nodes_added += self.update_reaction_graph_changed_complex(cmplx)
-                new_node_added = self.update_reaction_graph_state_node(target_state, dHdS=cmplx.energy_total_dHdS)
-                if new_node_added:
-                    self.record_new_complex_state(cmplx, target_state)
-                new_nodes_added += new_node_added
+            # new_nodes_added += self.update_reaction_graph_changed_complex(cmplx)
+            # Regarding z-coordinate: Some software uses x, y, z attribute names, others uses a single pos=(x,y,z).
+            # Adding a z coordinate may cause display issues in e.g. Gephi.
+            n_strands = len(cmplx.strands)
+            x = 100*n_strands**1.2
+            y = (sum(self.reaction_graph.node[source_state]['y'] #  ['pos'][1]
+                     for source_state in reaction_spec_source_states)
+                 /len(reaction_spec_source_states)) # + random.random()
+            z = cmplx.energy_total_dHdS[0]-self.temperature*cmplx.energy_total_dHdS[1]
+            # Some graph layout algorithms (e.g. graphviz) can only handle two-valued (x,y) positions:
+            # pos = [x, y]  # Even this doesn't work with graphviz.. not sure how to give pos..
+            new_node_added = self.update_reaction_graph_state_node(
+                target_state,
+                dHdS=cmplx.energy_total_dHdS,
+                n_strands=n_strands, size=10*sqrt(n_strands),
+                # pos=pos,
+                x=x, y=y, z=z)
+            if new_node_added:
+                self.record_new_complex_state(cmplx, target_state)
+            new_nodes_added += new_node_added
 
-                assert target_state in self.reaction_graph
-                for source_state in reaction_spec_source_states:
-                    assert source_state in self.reaction_graph
-                    self.update_reaction_graph_edge(source_state, target_state, edge_key, edge_attrs)
-                src_state, tgt_state = cmplx._historic_fingerprints[-2:]
-                assert cmplx._historic_fingerprints[-2] in self.reaction_graph
-                assert cmplx._historic_fingerprints[-1] in self.reaction_graph
-                assert tgt_state in self.endstates_by_reaction[src_state][edge_key]
-                del src_state, tgt_state
-                del source_state, target_state # Debugging, prevent bugs from variable reuse.
-            # end for cmplx in changed_complexes:
-
-        if reaction_result['new_complexes']:
-            for cmplx in reaction_result['new_complexes']:
-                ## New complexes are a little different from changed complexes,
-                ## since they emerged from two free strands.
-                ## I.e.
-                target_state = cmplx._state_fingerprint
-                cmplx.update_complex_energy(dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume)
-                # new_node_added = self.update_reaction_graph_changed_complex(cmplx, source_state=strand.name)
-                new_node_added = self.update_reaction_graph_state_node(target_state, dHdS=cmplx.energy_total_dHdS)
-                if new_node_added:
-                    self.record_new_complex_state(cmplx, target_state)
-                new_nodes_added += new_node_added
-
-                # for strand in cmplx.strands:
-                for source_state in reaction_spec_source_states:
-                    # source_state = strand.name
-                    # self.update_reaction_graph_state_node(strand.name) # Should've been done when initializing strands
-                    new_edges_added += self.update_reaction_graph_edge(source_state, target_state, edge_key, edge_attrs)
-                del source_state, target_state # Debugging, prevent bugs from variable reuse.
+            assert target_state in self.reaction_graph
+            for source_state in reaction_spec_source_states:
+                assert source_state in self.reaction_graph
+                new_edges_added += self.update_reaction_graph_edge(source_state, target_state, edge_key, edge_attrs)
+                assert source_state in self.reaction_graph
+                assert target_state in self.endstates_by_reaction[source_state][edge_key]
+        # end for cmplx in changed_complexes:
 
         if reaction_result['obsolete_complexes']:
             for cmplx in reaction_result['obsolete_complexes']:
                 # Should be empty; released strands are available in 'free_strands'.
                 assert len(cmplx.strands) == 0
 
-
-        ### 4. For all freed strands: Update reaction graph: ###
+        ### 3b. For all freed strands: Update reaction graph: ###
         if reaction_result['free_strands']:
             """
             Wait, is this proper? I mean, what if we are in a state with two strands bound to the scaffold and
@@ -2352,8 +2340,17 @@ class ReactionMgr(ComponentMgr):
                     self.update_reaction_graph_edge(source_state, strand.name, edge_key, edge_attrs)
                 del source_state # Debugging, prevent bugs from variable reuse.
 
+        ## 3c: Update source states with tau, if given: ##
+        if tau:
+            for source_state in reaction_spec_source_states:
+                assert source_state in self.reaction_graph.node
+                try:
+                    self.reaction_graph.node[source_state]['tau'] += tau
+                except KeyError:
+                    self.reaction_graph.node[source_state]['tau'] = tau
 
-        ### 3c: Save reaction graph to file: ###
+
+        ### 3d: Save reaction graph to file: ###
         if (new_edges_added or new_nodes_added) and self.params.get('reaction_graph_save_when_updated'):
             # pass
             self.save_reaction_graph()  # Disabled, performance. [post_reaction_processing, free strands]
@@ -2475,7 +2472,7 @@ class ReactionMgr(ComponentMgr):
         # print("\n".join("\n%-52s: %s\n%-52s: %s" % (reaction_to_str(*k), v, reaction_to_str(*self.reverse_reaction_key[k]), self.reaction_throttle_cache[self.reverse_reaction_key[k]]) for k, v in sorted(self.reaction_throttle_cache.items())))
 
 
-    def update_reaction_graph_state_node(self, target_state, dHdS=(0, 0)): #, source_state=None, edge_key=None, edge_attrs=None):
+    def update_reaction_graph_state_node(self, target_state, dHdS=(0, 0), **node_attrs): #, source_state=None, edge_key=None, edge_attrs=None):
         """
         Update a strand state. If arriving to strand state node from a previous complex
         and you would like to update the dH_dS_count for the strand state (which should both be 0 for the free state),
@@ -2485,9 +2482,7 @@ class ReactionMgr(ComponentMgr):
         if target_state not in self.reaction_graph.node:
             # self.record_new_complex_state
             assert target_state not in self.reaction_graph.adj   # edge-attrs dict, {src: {tgt1: {edge1_attrs}, ...}}
-            node_attrs = {'dH_dS_first': dHdS,
-                          'dH_dS_count': {dHdS: 1},
-                          'encounters': 1}
+            node_attrs.update({'dH_dS_first': dHdS, 'dH_dS_count': {dHdS: 1}, 'encounters': 1})
             # MultiGraph, with edges keyed by (reacted_spec_pair, reaction_attr):
             # reaction_graph.adj[source][target][(reacted_spec_pair, reaction_attr)] = eattr
             self.reaction_graph.add_node(target_state, node_attrs)
@@ -2505,6 +2500,7 @@ class ReactionMgr(ComponentMgr):
             assert target_state in self.endstates_by_reaction
             return True
         else:
+            self.reaction_graph.node[target_state].update(node_attrs)
             self.reaction_graph.node[target_state]['encounters'] += 1  # could also simply be 'size'?
             # For now, we keep statistics of the different complex energies that have been calculated
             # https://treyhunner.com/2015/11/counting-things-in-python/
@@ -2624,7 +2620,7 @@ class ReactionMgr(ComponentMgr):
             ## There is currently no edge from source to target, so add new edge:
             self.reaction_graph.add_edge(source_state, target_state, edge_attrs)
             self.reaction_graph[source_state][target_state]['traversals'] = 1
-            self.reaction_graph[source_state][target_state]['weight'] = 1
+            self.reaction_graph[source_state][target_state]['weight'] = 0.5
 
             # Update self.endstates_by_reaction[source_state]
             # assert edge_key not in self.endstates_by_reaction[source_state]  # Again, could JUST be added above.
@@ -2647,7 +2643,7 @@ class ReactionMgr(ComponentMgr):
             assert existing_edge_attrs['reaction_spec_pair'] == edge_attrs['reaction_spec_pair']
             assert existing_edge_attrs['edge_key'] == edge_attrs['edge_key']
             existing_edge_attrs['traversals'] += 1
-            existing_edge_attrs['weight'] += 0.5/edge_attrs['reaction_invocation_count']   # Should make weight logarithmic with traversals
+            existing_edge_attrs['weight'] += 0.1/edge_attrs['reaction_invocation_count']   # Should make weight logarithmic with traversals
             existing_edge_attrs['throttle_factor'] = edge_attrs['throttle_factor'] # = throttle_factor
             existing_edge_attrs['c_j_throttled'] = edge_attrs['c_j_throttled'] # = c_j
             existing_edge_attrs['label'] = edge_attrs['label'] # = edge_label_fmt.format(**edge_attrs)
@@ -2702,6 +2698,10 @@ class ReactionMgr(ComponentMgr):
         # self.reaction_graph.node[state_fingerprint]['dH_dS_count'][dHdS] = 1
         # #self.reaction_graph.node[state_fingerprint] = node_attrs
         # #self.reaction_graph.adj[state_fingerprint] = {}
+
+        ## TODO: Provide suggested x-coordinate:
+        ## Should essentially be proportional to the number of strands, BUT ALSO provide room
+        ## depending on the previous state (small adjustments within the same area).
 
 
         if self.reaction_graph_complexes_directory is not None:
@@ -2769,6 +2769,7 @@ class ReactionMgr(ComponentMgr):
             # (defaults: k=sqrt(N_nodes), scale=1.0, weight='weight')
             #draw_graph_and_save(graph, path, pos=pos) # draw graph with matplotlib
             draw_with_graphviz(graph, path)
+            # TODO: Save yaml/gefx format as well (for better import to Gephi)
             printd("%s saved to file %s" % (graph_name, path))
         reaction_graph_complexes_fn = os.path.join(
             self.reaction_graph_complexes_directory, "reaction_graph_complexes.txt")
