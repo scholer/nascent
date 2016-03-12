@@ -62,8 +62,15 @@ What camera? Turntable or Arcball (trackball) ?
 import sys
 import os
 import time
+import json
 import numpy as np
 sys.path.insert(1, '/Users/rasmus/Dev/repos-others/vispy')
+if sys.platform.startswith('win'):
+    cstart = systime.clock()
+    from time import clock as system_time
+else:
+    from time import time as system_time
+
 
 import vispy
 # from vispy.util.transforms import perspective
@@ -72,7 +79,7 @@ import vispy
 from vispy import app
 from vispy import scene
 from vispy.scene.canvas import SceneCanvas
-from vispy import io
+# from vispy import io   # use vispy.io to avoid confusion with std lib of same name
 from vispy.color import Color
 # from vispy.util.transforms import translate # Returns a translation-transformation matrix.
 from vispy.visuals.transforms import STTransform  # STTransform(scale, translation)
@@ -89,6 +96,61 @@ def increase_adjmatrix(adj_matrix, inc=1):
     # The above works, but simpler to just use np.pad: (Pads all edges)
     adj_matrix = np.lib.pad(adj_matrix, (0, inc), 'constant')  # constant value, default to 0
     return adj_matrix
+
+
+def force_directed_layout_2d(pos, adj_matrix, iterations):
+    """ Apply two-dimensional force-directed layout to the nodes in pos. """
+    npts = pos.shape[0]
+    # shape = (N, 3), i.e. N nodes with 3-elem position/coordinate vectors.
+    # pos[:, np.newaxis, :] N x N matrix of position-vectors, each column with the same "array of pos vectors"
+    # pos[np.newaxis, :, :] N x N matrix of position-vectors, each row with the same "array of pos vectors"
+    while iterations > 0:
+        iterations -= 1
+        # Coordinate differences, only the first two (x, y) pos
+        # TODO: Use a persistent "r", "er", "dist", "F_r", "F_s", etc datastructures and update in-place.
+        r = pos[:, np.newaxis, :2] - pos[np.newaxis, :, :2]
+        # Calculate scalar distances and normalized node-to-node directionality unit vector
+        dist = (r**2).sum(axis=2)**0.5     # pair-wise distance between all nodes
+        dist[dist == 0] = 1.                # Prevent division-by-zero errors
+        er = r / dist[..., np.newaxis]    # normalized node-node directionality vector
+
+        # Repulsive force:  ke*(q1q2)/r^2
+        # all points push away from each other
+        # F_r = 0.02 / dist[..., np.newaxis]**4 * er  # Direct calculation+assignment
+        F_r = 0.1 / dist[..., np.newaxis]**2 * er  # Direct calculation+assignment
+
+        # Attractive spring force:
+        # connected points pull toward each other with hookean force: F = ks*x,  ks = spring force constant
+        # (Note: pulsed force may help the graph to settle faster)
+        ks = 0.05
+        #ks = 0.05 * 5 ** (np.sin(i/20.) / (i/100.))
+        #ks = 0.05 + 1 * 0.99 ** i  # Exponentially decaying force to a constant value
+        # ks = 0.5 + 1 * 0.999 ** iterations  # Exponentially decaying force to a constant value
+        F_spring = ks * dist[..., np.newaxis] * adj_matrix[:, :, np.newaxis] * er
+        # F_spring = ks * dist[..., np.newaxis]**2 * self.adj_matrix[:, :, np.newaxis] * er
+
+        # Gravity force: F = G * m1m2/r^2 * dre,
+        # where dre is normalized node-node directionality vector and G is gravitational constant
+        # Edit: Make sure gravity and repulsion have different distance dependencies.
+        Gm1m2 = 0.05
+        F_g = Gm1m2 * er / dist[..., np.newaxis] # dist[..., np.newaxis]**2
+
+        # All forces from all particles:
+        F_all = F_spring - F_r + F_g
+        # Make sure points do not exert force on themselves:
+        F_all[np.arange(npts), np.arange(npts)] = 0
+
+        # dv = F/m*dt,  v1 = v0*dv,  dx = v*dt
+        # But we don't have persistent velocities (i.e. start and end with v=0 for every step).
+        # So we just use F*dt^2/m/4 for all particles, and say that dt^2/m/4 is some constant
+        c_dt2m = 0.5 # 0.09   # In units of length/force
+        F_sum = F_all.sum(axis=0)   # Sum all contributions from all other particles
+        # print(F_sum)
+
+        # Make sure no force is "too high":
+        dx = np.clip(F_sum, -3, 3) * c_dt2m
+        pos[:, :2] += dx
+
 
 
 class GraphViewer():
@@ -141,8 +203,40 @@ class GraphViewer():
         # but is it being used to built `mask`, which is essentially an adjacency matrix.
         self.adj_matrix = np.empty((0, 0), dtype=bool)
 
+        self.graph_stream = None
+        self.graph_stream_stepping_gen = None
+        self.sleep_until = None
+        self.render_filename_fmt = "graphviewer_{i}_{time:0.02f}.png"
+        self.render_file_enumeration = 0
+
         # self._timer = app.Timer('auto', connect=self.update, start=True)
-        self._timer = app.Timer('auto', connect=self.visualize_layout, start=True)
+        # self._timer = app.Timer('auto', connect=self.visualize_layout, start=True)
+        self.refresh_rate = 0.05 # default='auto'==1/60
+        self._timer = app.Timer(self.refresh_rate, connect=self.read_stream_and_update, start=True)
+        self._render_timer = app.Timer(2.0, connect=self.render_and_save, start=True, iterations=10)
+        self._render_timer.print_callback_errors = "always"
+        self._render_timer.ignore_callback_errors = False
+        self._app_start_time = system_time()
+        # iterations=20, )
+        # Note: Setting iterations will not stop the app, it will just stop the timer event from triggering.
+
+
+
+    def render(self):
+        return self.canvas.render()
+
+
+    def render_and_save(self, event, fnfmt=None):
+        """ Render canvas and save to file. """
+        if fnfmt is None:
+            fnfmt = self.render_filename_fmt
+        self.render_file_enumeration += 1
+        filename = fnfmt.format(
+            i=self.render_file_enumeration,
+            time=system_time()-self._app_start_time)
+        image = self.render()
+        vispy.io.write_png(filename, image)
+        print("Rendered image saved to file:", os.path.abspath(filename))
 
 
 
@@ -214,10 +308,15 @@ class GraphViewer():
 
     def add_edge(self, source, target, edge_key, edge_attrs, directed=False):
         """ Add a new edge to the graph scene/canvas. """
+        if source is None:
+            source = edge_attrs.pop("source")
+        if target is None:
+            target = edge_attrs.pop("target")
         s_idx = self.nodeidx_by_id[source]
         t_idx = self.nodeidx_by_id[target]
 
         print("Adding edge from %s (%s) to %s (%s):" % (source, s_idx, target, t_idx))
+        print("Node pos:")
         print(self.node_pos)
         points = self.node_pos[[s_idx, t_idx], :]
         print(points)
@@ -229,7 +328,7 @@ class GraphViewer():
         # "scene-node-aware LineVisual, is actually a collection of lines
         # We are using node_pos as pos for edges vertices, and edge_array to define line-connected vertices,
         # so it shouldn't be neccesary to "add" any new lines... hopefully...
-        line = scene.visuals.Line()
+        # line = scene.visuals.Line()
 
         # by source/target ids:
         # self.edge_obj[source][target] = arrow
@@ -271,7 +370,7 @@ class GraphViewer():
             cube.transform.translate = pos
 
         # Also update edge objects
-        # If using line visuals, this is as simple as:
+        # If using line visuals, this is as simple as: (Yes, this works just fine)
         self.edges_line._changed['pos'] = True  # To update edge vertices positions
         # Alternatively, more correctly:
         # self.edges_line.set_data(pos=self.node_pos)
@@ -287,59 +386,115 @@ class GraphViewer():
         #     # Perhaps it is better to use lines instead?
 
 
+    def step_event(self, event_info):
+        return event_info
+
+
+    def change_node(self, node, node_attrs):
+        pass
+
+    def change_edge(self, source, target, edge_key, edge_attrs, directed=None):
+        pass
+
+
+    def parse_graphstreaming_msg(self, msg):
+        return json.loads(msg)
+
+
+    def read_graph_stream(self, stream):
+        """
+        Returns a generator that parses a stream of graph streaming events.
+        The generator will return every time a "st" graph steaming step event is encountered in the stream.
+        """
+        # stream is a file-like object where each next(stream) gives an event
+        # <event>      ::= ( <an> | <cn> | <dn> | <ae> | <ce> | <de> | <cg> | <st> | <cl> ) ( <comment> | <EOL> )
+        event_methods = {
+            "an": self.add_node,
+            "cn": self.change_node,
+            #"dn": self.delete_node,
+            "ae": self.add_edge,
+            "ce": self.change_edge,
+            #"de": self.delete_edge,
+            # "cg": self.change_graph,
+            "st": self.step_event, # set time / clock tick
+        }
+        for msg in stream:
+            msg = msg.strip()
+            if not msg:
+                continue
+            print("Parsing msg:", msg)
+            # msg is a string in the form of:
+            # {"an": {<node id>: {"weight": 1}}}, {"ae": {edge_key: {"source", "target", "weight": 1}}}
+            event = self.parse_graphstreaming_msg(msg)
+            print(" processing event:", event)
+            for event_type, event_info in event.items():
+                method = event_methods[event_type]
+                # res = method(event_info)
+                if event_type == "st":
+                    yield event_info
+                else:
+                    # All other events are a one or more dicts:
+                    if event_type[1] == "n":
+                        # Node events:
+                        for nodeid, attrs in event_info.items():
+                            method(nodeid, attrs)
+                    elif event_type[1] == "e":
+                        for edge_key, attrs in event_info.items():
+                            source = attrs.pop('source')
+                            target = attrs.pop('target')
+                            method(source, target, edge_key, attrs)
+                    else:
+                        raise ValueError("Could not understand %s event: %s", (event_type, event_info))
+
+
+
+    def read_stream_and_update(self, event):
+        """
+        Read stream and update.
+        """
+        # This will fully exhaust the stream before passing control back to the event loop:
+        # if self.graph_stream is not None:
+        #     for step in self.read_graph_stream(self.graph_stream):
+        #         print("(read_stream_and_update) encountered step:", step)
+        #         print("(read_stream_and_update) laying out graph...")
+        #         # self.force_directed_layout_2d()
+        #         self.visualize_layout(None)
+        #         print("(read_stream_and_update) sleeping...")
+        #         time.sleep(step)
+        # alternatively, read stream one step at a time and pass control back to event loop after each step:
+        now = system_time()
+        if self.sleep_until is not None and now < self.sleep_until:
+            self.visualize_layout(None)
+            return
+        if self.graph_stream_stepping_gen is None and self.graph_stream is not None:
+            self.graph_stream_stepping_gen = self.read_graph_stream(self.graph_stream)
+        if self.graph_stream_stepping_gen:
+            try:
+                step = next(self.graph_stream_stepping_gen)
+                print("(read_stream_and_update) sleeping for %s secs" % step)
+                # time.sleep(step)
+                self.sleep_until = now + step
+            except StopIteration:
+                pass
+                # TODO: Is there a better alternative, e.g. just postpone the next call to read_stream?
+        # print("(read_stream_and_update) stream input read (for now..)")
+        # time.sleep(0.1)
+        self.visualize_layout(None)
+
+
+
+
+    def parse_graphstreaming_list(self, messages):
+        """ Parse a list of graph streaming events: """
+        # {event: {identifier: attrs}}
+        for msg in messages:
+            pass
+
 
     def force_directed_layout_2d(self, iterations=100):
         """ Apply force-directed layout in two dimensions (xy plane). """
         # dx = self.node_pos[:2, :] -
-        pos = self.node_pos
-        npts = pos.shape[0]
-        # shape = (N, 3), i.e. N nodes with 3-elem position/coordinate vectors.
-        # pos[:, np.newaxis, :] N x N matrix of position-vectors, each column with the same "array of pos vectors"
-        # pos[np.newaxis, :, :] N x N matrix of position-vectors, each row with the same "array of pos vectors"
-        while iterations > 0:
-            iterations -= 1
-            # Coordinate differences, only the first two (x, y) pos
-            r = pos[:, np.newaxis, :2] - pos[np.newaxis, :, :2]
-            # Calculate scalar distances and normalized node-to-node directionality unit vector
-            dist = (r**2).sum(axis=2)**0.5     # pair-wise distance between all nodes
-            dist[dist == 0] = 1.                # Prevent division-by-zero errors
-            er = r / dist[..., np.newaxis]    # normalized node-node directionality vector
-
-            # Repulsive force:  ke*(q1q2)/r^2
-            # all points push away from each other
-            # F_r = 0.02 / dist[..., np.newaxis]**4 * er  # Direct calculation+assignment
-            F_r = 0.1 / dist[..., np.newaxis]**2 * er  # Direct calculation+assignment
-
-            # Attractive spring force:
-            # connected points pull toward each other with hookean force: F = ks*x,  ks = spring force constant
-            # (Note: pulsed force may help the graph to settle faster)
-            ks = 0.05
-            #ks = 0.05 * 5 ** (np.sin(i/20.) / (i/100.))
-            #ks = 0.05 + 1 * 0.99 ** i  # Exponentially decaying force to a constant value
-            # ks = 0.5 + 1 * 0.999 ** iterations  # Exponentially decaying force to a constant value
-            F_spring = ks * dist[..., np.newaxis] * self.adj_matrix[:, :, np.newaxis] * er
-            # F_spring = ks * dist[..., np.newaxis]**2 * self.adj_matrix[:, :, np.newaxis] * er
-
-            # Gravity force: F = G * m1m2/r^2 * dre,
-            # where dre is normalized node-node directionality vector and G is gravitational constant
-            Gm1m2 = 0.05
-            F_g = Gm1m2 * er / dist[..., np.newaxis] # dist[..., np.newaxis]**2
-
-            # All forces from all particles:
-            F_all = F_spring - F_r # + F_g
-            # Make sure points do not exert force on themselves:
-            F_all[np.arange(npts), np.arange(npts)] = 0
-
-            # dv = F/m*dt,  v1 = v0*dv,  dx = v*dt
-            # But we don't have persistent velocities (i.e. start and end with v=0 for every step).
-            # So we just use F*dt^2/m/4 for all particles, and say that dt^2/m/4 is some constant
-            c_dt2m = 0.5 # 0.09   # In units of length/force
-            F_sum = F_all.sum(axis=0)   # Sum all contributions from all other particles
-            # print(F_sum)
-
-            # Make sure no force is "too high":
-            dx = np.clip(F_sum, -3, 3) * c_dt2m
-            pos[:, :2] += dx
+        force_directed_layout_2d(self.node_pos, self.adj_matrix, iterations)
 
 
     def visualize_layout(self, event):
@@ -399,14 +554,55 @@ class GraphViewer():
 
 if __name__ == '__main__':
     viewer = GraphViewer()
+    # self._timer = app.Timer('auto', connect=self.read_stream_and_update, start=False)
 
-    viewer.add_node(1, {'color': '#ff660033', 'pos': [3, 2, 0.5]})
-    viewer.add_node(4, {'color': '#0000ff88', 'pos': [1, 2, 0]})
-    viewer.add_node(5, {'color': '#00ff44cc'})
+    # viewer.add_node(1, {'color': '#ff660033', 'pos': [3, 2, 0.5]})
+    # viewer.add_node(4, {'color': '#0000ff88', 'pos': [1, 2, 0]})
+    # viewer.add_node(5, {'color': '#00ff44cc'})
+    #
+    # viewer.add_edge(1, 4, 14, {'color': '#00ff0055'})
+    # viewer.add_edge(5, 4, 14, {'color': '#0000ff55'})
 
-    viewer.add_edge(1, 4, 14, {'color': '#00ff0055'})
-    viewer.add_edge(5, 4, 14, {'color': '#0000ff55'})
+    import io
+    # Note: JSON keys must be enclosed in double-quotes; ints or similar are not allowed as keys.
+    # For numeric values, + is not an allowed prefix.
+    stream = io.StringIO("""
+{"an": {"1": {"size": 1,     "pos": [-1, 0, 0]}}}
+{"st": 1.0}
+{"an": {"2": {"x_center": 1, "pos": [1, 0, 0]}}}
+{"an": {"3": {"x_center": 1, "pos": [0, -1, 0]}}}
+{"st": 1.0}
+{"an": {"4": {"x_center": 1, "pos": [0, 1, 0]}}}
+{"an": {"5": {"x_center": 1, "pos": [0, 0, -1]}}}
+{"an": {"6": {"x_center": 1, "pos": [0, 0, 1]}}}
+{"st": 4.0}
 
+{"ae": {"1-2": {"source": "1", "target": "2", "weight": 1}}}
+{"st": 1.0}
+{"ae": {"1-4": {"source": "1", "target": "4", "weight": 1}}}
+{"st": 1.0}
+{"ae": {"1-5": {"source": "1", "target": "5", "weight": 1}}}
+{"ae": {"2-4": {"source": "2", "target": "4", "weight": 1}}}
+{"st": 1.0}
+{"ae": {"5-4": {"source": "5", "target": "4", "weight": 1}}}
+{"st": 1.0}
+{"ae": {"3-4": {"source": "3", "target": "4", "weight": 1}}}
+{"st": 1.0}
+{"ae": {"5-6": {"source": "5", "target": "6", "weight": 1}}}
+{"st": 1.0}
+{"ae": {"5-3": {"source": "5", "target": "3", "weight": 1}}}
+{"ae": {"1-6": {"source": "1", "target": "6", "weight": 1}}}
+    """)
+    viewer.graph_stream = stream
     # if the 'interactive' flag is set, you can interact with the program via an interactive terminal (e.g ipython)
+    # viewer.read_stream_and_update(None)
     if sys.flags.interactive == 0:
         app.run()
+        # viewer.read_graph_stream(viewer.graph_stream)
+        # pass
+        # filename = 'test.png'
+        # print("App run done; saving rendered image to file:", os.path.abspath(filename))
+        # image = viewer.render()
+        # vispy.io.write_png(filename, image)
+        print("Done!")
+
