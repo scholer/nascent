@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
+##    Copyright 2016 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
 ##    This file is part of Nascent.
 ##
@@ -66,8 +66,8 @@ import json
 import numpy as np
 sys.path.insert(1, '/Users/rasmus/Dev/repos-others/vispy')
 if sys.platform.startswith('win'):
-    cstart = systime.clock()
     from time import clock as system_time
+    cstart = system_time.clock()
 else:
     from time import time as system_time
 
@@ -88,6 +88,8 @@ from vispy.visuals.transforms import STTransform  # STTransform(scale, translati
 # MatrixTransform have generic .translate(), .rotate(), .scale() methods, applied to a generic .matrix property.
 # vispy/visuals/transforms/linear.py
 
+from nascent.graph_visualization.graph_layout import force_directed_layout, force_directed_layout_2d
+
 
 def increase_adjmatrix(adj_matrix, inc=1):
     """ Not sure if this is the optimal way to do it, but it works... """
@@ -95,62 +97,8 @@ def increase_adjmatrix(adj_matrix, inc=1):
     # adj_matrix = np.hstack((adj_matrix, np.empty((adj_matrix.shape[0], 1), dtype=bool)))
     # The above works, but simpler to just use np.pad: (Pads all edges)
     adj_matrix = np.lib.pad(adj_matrix, (0, inc), 'constant')  # constant value, default to 0
+    # Alternatively, you could use ndarray.resize((n_edges_before+1,2) to resize in-place
     return adj_matrix
-
-
-def force_directed_layout_2d(pos, adj_matrix, iterations):
-    """ Apply two-dimensional force-directed layout to the nodes in pos. """
-    npts = pos.shape[0]
-    # shape = (N, 3), i.e. N nodes with 3-elem position/coordinate vectors.
-    # pos[:, np.newaxis, :] N x N matrix of position-vectors, each column with the same "array of pos vectors"
-    # pos[np.newaxis, :, :] N x N matrix of position-vectors, each row with the same "array of pos vectors"
-    while iterations > 0:
-        iterations -= 1
-        # Coordinate differences, only the first two (x, y) pos
-        # TODO: Use a persistent "r", "er", "dist", "F_r", "F_s", etc datastructures and update in-place.
-        r = pos[:, np.newaxis, :2] - pos[np.newaxis, :, :2]
-        # Calculate scalar distances and normalized node-to-node directionality unit vector
-        dist = (r**2).sum(axis=2)**0.5     # pair-wise distance between all nodes
-        dist[dist == 0] = 1.                # Prevent division-by-zero errors
-        er = r / dist[..., np.newaxis]    # normalized node-node directionality vector
-
-        # Repulsive force:  ke*(q1q2)/r^2
-        # all points push away from each other
-        # F_r = 0.02 / dist[..., np.newaxis]**4 * er  # Direct calculation+assignment
-        F_r = 0.1 / dist[..., np.newaxis]**2 * er  # Direct calculation+assignment
-
-        # Attractive spring force:
-        # connected points pull toward each other with hookean force: F = ks*x,  ks = spring force constant
-        # (Note: pulsed force may help the graph to settle faster)
-        ks = 0.05
-        #ks = 0.05 * 5 ** (np.sin(i/20.) / (i/100.))
-        #ks = 0.05 + 1 * 0.99 ** i  # Exponentially decaying force to a constant value
-        # ks = 0.5 + 1 * 0.999 ** iterations  # Exponentially decaying force to a constant value
-        F_spring = ks * dist[..., np.newaxis] * adj_matrix[:, :, np.newaxis] * er
-        # F_spring = ks * dist[..., np.newaxis]**2 * self.adj_matrix[:, :, np.newaxis] * er
-
-        # Gravity force: F = G * m1m2/r^2 * dre,
-        # where dre is normalized node-node directionality vector and G is gravitational constant
-        # Edit: Make sure gravity and repulsion have different distance dependencies.
-        Gm1m2 = 0.05
-        F_g = Gm1m2 * er / dist[..., np.newaxis] # dist[..., np.newaxis]**2
-
-        # All forces from all particles:
-        F_all = F_spring - F_r + F_g
-        # Make sure points do not exert force on themselves:
-        F_all[np.arange(npts), np.arange(npts)] = 0
-
-        # dv = F/m*dt,  v1 = v0*dv,  dx = v*dt
-        # But we don't have persistent velocities (i.e. start and end with v=0 for every step).
-        # So we just use F*dt^2/m/4 for all particles, and say that dt^2/m/4 is some constant
-        c_dt2m = 0.5 # 0.09   # In units of length/force
-        F_sum = F_all.sum(axis=0)   # Sum all contributions from all other particles
-        # print(F_sum)
-
-        # Make sure no force is "too high":
-        dx = np.clip(F_sum, -3, 3) * c_dt2m
-        pos[:, :2] += dx
-
 
 
 class GraphViewer():
@@ -202,6 +150,26 @@ class GraphViewer():
         # edge_list is just a list of (idx1, idx2) tuples (more or less), not an actual adjacency matrix,
         # but is it being used to built `mask`, which is essentially an adjacency matrix.
         self.adj_matrix = np.empty((0, 0), dtype=bool)
+
+        # self.layout_method = force_directed_layout
+        self.node_grid_enabled = True   # Set to False if you are not using node_grid.
+        self.node_grid_force = np.array([0])
+        self.node_grid_force = np.array([0.2, 0])
+        # Use node_grid_force = np.array([0.2, 0]) to only apply node_grid forces on x-axis.
+        self.node_grid_force_per_node = None
+        # set node_grid_force_per_node=True if you want to have per-node force constants.
+        # (the primary effect is that node_grid_force will be re-sized automatically when new nodes are added).
+        # If re-assigning self.node_grid_force, make sure to update self.force_params!
+        self.force_params = [
+            # scale, exponent, use_adj_matrix, use_node_grid,  F = scale * dist**exponent
+            [-0.1, -2, False, False],                       # Repulsion force
+            [0.05, 1, True, False],                         # Edge spring force
+            [self.node_grid_force, 1, False, True], # node_grid force
+        ]
+
+        # Node grid: Direct certain nodes towards certain positions.
+        self.node_grid = np.empty_like(self.node_pos)
+        # node_grid_force can be either a scalar, or a per-node N x 2 array (for N nodes, doing )
 
         self.graph_stream = None
         self.graph_stream_stepping_gen = None
@@ -272,6 +240,7 @@ class GraphViewer():
         print(self.node_pos)
         print(pos)
         self.node_pos = np.vstack((self.node_pos, pos))  # Convenience function for concatenate. Not in-place.
+
         cube.transform = STTransform(scale=None, translate=pos)
         # STTransform._translate and ._scale are both vectors of length 4.
         self.nodeidx_by_id[nodeid] = len(self.node_obj_list)
@@ -285,7 +254,9 @@ class GraphViewer():
         # self.edge_attrs[nodeid] = {}    # [source][target] = edge_attrs
         # self.edge_obj[nodeid] = {}     # [source][target] = edge_obj
 
-
+        if self.node_grid_force_per_node:
+            print("Must resize node_grid_force in-place, OR update self.force_params")
+            raise NotImplementedError("node_grid_force_per_node is not implemented.")
 
 
 
@@ -491,10 +462,12 @@ class GraphViewer():
             pass
 
 
-    def force_directed_layout_2d(self, iterations=100):
+    def force_directed_layout_2d(self, iterations=10):
         """ Apply force-directed layout in two dimensions (xy plane). """
         # dx = self.node_pos[:2, :] -
-        force_directed_layout_2d(self.node_pos, self.adj_matrix, iterations)
+        # force_directed_layout(pos, adj_matrix, node_grid=None, iterations=100, dim=None,
+        #                       force_params=None, check_params=False
+        force_directed_layout(self.node_pos, self.adj_matrix, iterations, dim=2)
 
 
     def visualize_layout(self, event):
@@ -567,15 +540,15 @@ if __name__ == '__main__':
     # Note: JSON keys must be enclosed in double-quotes; ints or similar are not allowed as keys.
     # For numeric values, + is not an allowed prefix.
     stream = io.StringIO("""
-{"an": {"1": {"size": 1,     "pos": [-1, 0, 0]}}}
+{"an": {"1": {"size": 1,     "pos": [-1, 0, 0], "color": "red"}}}
 {"st": 1.0}
-{"an": {"2": {"x_center": 1, "pos": [1, 0, 0]}}}
-{"an": {"3": {"x_center": 1, "pos": [0, -1, 0]}}}
+{"an": {"2": {"x_center": 1, "pos": [1, 0, 0], "color": "green"}}}
+{"an": {"3": {"x_center": 1, "pos": [0, -1, 0], "color": "blue"}}}
 {"st": 1.0}
-{"an": {"4": {"x_center": 1, "pos": [0, 1, 0]}}}
-{"an": {"5": {"x_center": 1, "pos": [0, 0, -1]}}}
-{"an": {"6": {"x_center": 1, "pos": [0, 0, 1]}}}
-{"st": 4.0}
+{"an": {"4": {"x_center": 1, "pos": [0, 1, 0], "color": "yellow"}}}
+{"an": {"5": {"x_center": 1, "pos": [0, 0, -1], "color": "cyan"}}}
+{"an": {"6": {"x_center": 1, "pos": [0, 0, 1], "color": "magenta"}}}
+{"st": 3.0}
 
 {"ae": {"1-2": {"source": "1", "target": "2", "weight": 1}}}
 {"st": 1.0}
