@@ -306,17 +306,21 @@ class DM_Simulator(Simulator):
                 tau = systime_max - sysmgr.system_time
                 sysmgr.system_time = systime_max
                 if self.stats_writer:
+                    sysmgr.update_state_times(tau)
                     self.stats_writer.write_stats(tau=tau, reaction_attr=reaction_attr, result=result)
                 print("\n\nSimulation system time reached systime_max = %s s !\n\n" % systime_max)
                 return n_done
 
-            # NEW: Collecting stats *before* executing reaction, but *before* incrementing system_time.
+            # NEW: Collecting stats *before* executing reaction, and *before* incrementing system_time.
             # This way, tau represents the duration of the state which we are collecting for,
             # while sys_time is still marks the logical *beginning* of the state (not the end time).
             if self.stats_writer:
                 # Strictly speaking we don't need to produce stats during the simulation; we can use the dispatcher
                 # to note the domain state changes and then re-create the stats after simulation.
                 self.stats_writer.write_stats(tau=tau)
+
+            # Store accumulate state time:
+            sysmgr.update_state_times(tau)
 
 
             ## find which reaction j should fire:

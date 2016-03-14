@@ -487,7 +487,11 @@ class StatsWriter():
             path = os.path.join(self.reaction_graph_output_directory,
                                 self.reaction_graph_output_fnfmt.format(ext=ext, systime=systime, **kwargs))
             # e.g. nx.write_gexf(g, path) or draw_graph_and_save(g, path)
-            output_funcs[ext](g, path)
+            try:
+                output_funcs[ext](g, path)
+            except Exception as e:
+                print("\nStatsManager: Error saving reaction graph using %s(%s, %s)" % (output_funcs[ext], g, path))
+                print(e)
 
 
 

@@ -26,16 +26,23 @@ Module for analysing reaction graph.
 from __future__ import absolute_import, print_function, division
 import math
 import os
+import io
 from datetime import datetime
 from collections import defaultdict
 import yaml
 import json
-import networkx
-nx = networkx
+# import networkx as nx
 from networkx.classes.digraph import DiGraph
+import numbers
+import logging
+logger = logging.getLogger(__file__)
 
 from .constants import STACKING_INTERACTION, PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION
+from .utils import sequential_number_generator
 
+
+def str_or_numeric(key, value):
+    return isinstance(value, str) or isinstance(value, numbers.Number)
 
 def load_reaction_graph(fn):
     with open(fn) as fp:
@@ -53,13 +60,16 @@ class ReactionGraph(DiGraph):
         #                                      'fontsize': 10.0, # labelfontsize
         #                                      'len': 4.0}
         DiGraph.__init__(self, data, **attr)
-        self.params = params
+        if params is None:
+            params = {}
+        self.params = params  # or "config" ?
         if 'reaction_graph_default_attrs' in params:
             self.graph.update(params['reaction_graph_default_attrs'])
         # File with changes to the reaction graph, e.g. new nodes/edges and node/edge updates:
         self.endstates_by_reaction = {}  # [startstate][(reaction_spec_pair, reaction_attr)] = endstate
         self.endstates_by_reaction[0] = defaultdict(list) # Also adding the "null" node
         self.reverse_reaction_key = {} # get reaction edge key for the opposite direction.
+        self.tau_cum_max = 0
         # self.reverse_reaction[(rx_spec_pair, rx_attr)] = (rev_rx_spec_pair, rev_rx_attr)
         # used to be a dict {edge_key => target} but we can have multiple targets for a single reaction.
         self.reaction_graph_complexes_directory = params.get("reaction_graph_complexes_directory")
@@ -71,20 +81,108 @@ class ReactionGraph(DiGraph):
 
         self.dispatchers = []
         self.reaction_graph_events_file = params.get('reaction_graph_events_file')
+        if self.reaction_graph_events_file is None and self.reaction_graph_complexes_directory is not None:
+            self.reaction_graph_events_file = os.path.join(self.reaction_graph_complexes_directory,
+                                                           "reaction_graph_eventstream.txt")
+
         if self.reaction_graph_events_file:
             #self.reaction_graph_delta_file = open(self.reaction_graph_delta_file, 'a')
             #self.open_files.append(self.reaction_graph_delta_file)
             gs_file_dispatcher = GraphStreamFileDispatcher(self.reaction_graph_events_file)
-            gs_file_dispatcher.writer.write("# New reaction graph initialized at %s" % datetime.now())
+            gs_file_dispatcher.writer.write("# New reaction graph initialized at %s\n" % datetime.now())
+            print("\n\nWriting reaction_graph event stream to file:", self.reaction_graph_events_file)
             self.dispatchers.append(gs_file_dispatcher)
+        else:
+            raise ValueError("self.reaction_graph_events_file not given: ", self.reaction_graph_events_file)
 
 
+    # Same func spec as nx.Graph except added default dHdS:
+    def add_node(self, n, attr_dict=None, dHdS=(0, 0), **attr):
+        """ Add state node n to reaction graph. """
+        assert n not in self.adj   # edge-attrs dict, {src: {tgt1: {edge1_attrs}, ...}}
+        # print("ReactionGraph.add_node(%s, %s, %s, %s)" % (n, attr_dict, dHdS, attr))
+        if attr_dict is None:
+            attr_dict = attr
+        elif attr:
+            attr_dict.update(attr)
+        # First dispatch
+        attr_dict['dH_dS'] = dHdS
+        attr_dict['encounters'] = 1
+        for dispatcher in self.dispatchers:
+            dispatcher.add_node(n, attr_dict)
+        attr_dict['dH_dS_count'] = {dHdS: 1}
+        # MultiGraph, with edges keyed by (reacted_spec_pair, reaction_attr):
+        # reaction_graph.adj[source][target][(reacted_spec_pair, reaction_attr)] = eattr
+        #self.reaction_graph.add_node(target_state, node_attrs)
+        DiGraph.add_node(self, n, attr_dict)
 
 
-    def add_node(self, n, attr_dict=None, **attr):
-        """ Consider using the graph stream package spec? """
-        DiGraph.add_node(self, n, attr_dict, **attr)
+    def change_node(self, n, attr_dict=None, dHdS=None, **attr): #, source_state=None, edge_key=None, edge_attrs=None):
+        """
+        Update a strand state. If arriving to strand state node from a previous complex
+        and you would like to update the dH_dS_count for the strand state (which should both be 0 for the free state),
+        then you can give a complex as well.
+        """
+        # self.node[n]['encounters'] += 1  # could also simply be 'size'?
+        # For now, we keep statistics of the different complex energies that have been calculated
+        # https://treyhunner.com/2015/11/counting-things-in-python/
+        # Using Counter is fast, but doesn't work well when we want to serialize the graph, so using dict:
+        if dHdS is not None:
+            try:
+                self.node[n]['dH_dS_count'][dHdS] += 1
+            except KeyError:
+                self.node[n]['dH_dS_count'][dHdS] = 1
+        if attr_dict is None:
+            attr_dict = attr
+        elif attr:
+            attr_dict.update(attr)
+        self.node[n].update(attr_dict)
+        for dispatcher in self.dispatchers:
+            dispatcher.change_node(n, attr_dict)
 
+
+    #, source_state=None, edge_key=None, edge_attrs=None):
+    def add_edge(self, source, target, attr_dict=None, **attr):
+        """
+        Update a strand state. If arriving to strand state node from a previous complex
+        and you would like to update the dH_dS_count for the strand state (which should both be 0 for the free state),
+        then you can give a complex as well.
+        """
+        # self.node[n]['encounters'] += 1  # could also simply be 'size'?
+        # For now, we keep statistics of the different complex energies that have been calculated
+        # https://treyhunner.com/2015/11/counting-things-in-python/
+        # Using Counter is fast, but doesn't work well when we want to serialize the graph, so using dict:
+        if attr_dict is None:
+            attr_dict = attr
+        elif attr:
+            attr_dict.update(attr)
+        # self.adj[source][target].update(attr_dict)
+        super().add_edge(source, target, attr_dict, **attr)
+        for dispatcher in self.dispatchers:
+            dispatcher.add_edge(None, source, target, attr_dict)
+
+    def change_edge(self, source, target, attr_dict=None, **attr):
+        """
+        Update a strand state. If arriving to strand state node from a previous complex
+        and you would like to update the dH_dS_count for the strand state (which should both be 0 for the free state),
+        then you can give a complex as well.
+        """
+        # self.node[n]['encounters'] += 1  # could also simply be 'size'?
+        # For now, we keep statistics of the different complex energies that have been calculated
+        # https://treyhunner.com/2015/11/counting-things-in-python/
+        # Using Counter is fast, but doesn't work well when we want to serialize the graph, so using dict:
+        if attr_dict is None:
+            attr_dict = attr
+        elif attr:
+            attr_dict.update(attr)
+        self.adj[source][target].update(attr_dict)
+        for dispatcher in self.dispatchers:
+            dispatcher.change_edge(None, source, target, attr_dict)
+
+    def add_time_step(self, step_time):
+        """ Add a step event with time (or other value). """
+        for dispatcher in self.dispatchers:
+            dispatcher.step(step_time)
 
     def close_all_dispatchers(self):
         """ Loop over all dispatchers and close them. """
@@ -93,13 +191,133 @@ class ReactionGraph(DiGraph):
 
 
 
+def node_attr_repr(val):
+    return (val if (isinstance(val, (numbers.Number, bool, tuple)))
+            else str(val))
+
 
 class GraphStreamEventDispatcher():
+    """
+    Class for dispatching events in the Graphstreaming format.
+    """
+    def __init__(self, writer=None):
+        # self.writer = open(path, mode)  # Subject to change for the base class
 
+        if writer is None:
+            writer = io.StringIO()
+        self.writer = writer
+        self.create_sequential_edge_ids = True
+        self.next_sequential_edge_id = 0
+        self.edges_by_edgeid = {}
+        self.edgeid_by_nodes = {}
+        self.is_directed = True
+        # We may not want to include or exclude some node/edge attributes:
+        # Include only these attributes (set to None to include all attributes)
+        # Filter first, then convert value, or other way around?
+        # Order:
+        # - attr_filter_include_keys, attr_filter_exclude_keys
+        # - attr_filter_include_func, attr_filter_exclude_func
+        # - then convert node(s), attrs
+        self.attr_filter_include_keys = None
+        self.attr_filter_include_keys = [
+            # node attrs:
+            'encounters', 'size', 'scale', 'n_strands', 'tau_cum',
+            # edge attrs:
+            'is_forming', 'is_intra', 'is_joining', 'is_splitting',
+            'reaction_str', 'reaction_invocation_count'
+            'dH', 'dS', 'dHdS', 'c_j', 'activity',
+            'traversals', 'weight',
+            'color', 'alpha', 'len', 'length',
+        ]
+        self.attr_filter_include_func = None # str_or_numeric  # passing attr_key, attr_value
+        self.attr_filter_exclude_keys = None
+        self.attr_filter_exclude_func = None
+        self.node_converter = node_attr_repr
+        self.attr_converter = node_attr_repr  # Set to None when done debugging
 
-    def __init__(self, path, mode='a'):
-        self.writer = open(path, mode)  # Subject to change for the base class
+    def get_combined_attr_filter_func(self):
+        """
+        Return a combined filtering function based on attr_filter_(in/ex)clude_(keys/func).
+        Currently NOT optimized, but encapsulating here so we can optimize the current_attr_filter later.
+        """
+        filter_attributes = (
+            self.attr_filter_include_keys, self.attr_filter_exclude_keys,
+            self.attr_filter_include_func, self.attr_filter_exclude_func
+        )
+        if not any(filter_attributes):
+            # No filters in place
+            current_attr_filter = None
+        elif all(att is None for att in
+                 (self.attr_filter_exclude_keys, self.attr_filter_include_func, self.attr_filter_exclude_func)):
+            # Optimization for when only attr_filter_include_keys is defined (typical situation)
+            def current_attr_filter(key, value):
+                return key in self.attr_filter_include_keys
+        else:
+            def current_attr_filter(key, value):
+                return (
+                    (self.attr_filter_include_keys is None or key in self.attr_filter_include_keys)
+                    and (self.attr_filter_exclude_keys is None or key not in self.attr_filter_exclude_keys)
+                    and (self.attr_filter_include_func is None or self.attr_filter_include_func(key, value))
+                    and (self.attr_filter_exclude_func is None or not self.attr_filter_exclude_func(key, value))
+                )
+        return current_attr_filter
 
+    def add_node(self, node, attrs):
+        """ Add a single new node. """
+        # print("GraphStreamEventDispatcher.add_node(%s, %s)" % (node, attrs))
+        self.write('an', node, attrs=attrs)
+
+    def change_node(self, node, attrs):
+        """ Change/update an existing node's attributes. """
+        self.write('cn', node, attrs=attrs)
+
+    def delete_node(self, node):
+        """ Delete an new node. """
+        self.write('dn', node)
+
+    def add_edge(self, edge_id, source, target, attrs):
+        """
+        Q: What's the difference between edge_id and edge_key?
+        A: edge_ids must be unique across the whole graph, while a key must only
+            be unique for a given (source, target) pair (Graph) or tuple (DiGraph).
+           You can have many edges with the same key, and you can even have many
+           edges from the same source/target!
+        Q: But I have a regular Graph/DiGraph and don't need any edge_ids. Is there an easy way to generate
+            edge_ids on the fly?
+        A: Yes, simply set self.create_sequential_edge_ids = True and a unique edge id is created for each new edge.
+        """
+        if self.create_sequential_edge_ids:
+            edge_key, edge_id = edge_id, self.next_sequential_edge_id
+            self.next_sequential_edge_id += 1
+            self.edges_by_edgeid[edge_id] = (source, target, edge_key)
+            self.edgeid_by_nodes[(source, target)] = edge_id
+            if not self.is_directed:
+                self.edgeid_by_nodes[(target, source)] = edge_id
+        self.write('ae', edge_id, source, target, attrs)
+
+    def change_edge(self, edge_id=None, source=None, target=None, attrs=None):
+        """ Change/update an existing edge's attributes. """
+        # Note: The Nascent reaction graph edge key is unique *for a particular reactoin* but
+        # a reaction can have multiple edges (e.g. reaction that merges or splits complexes)!
+        # It might be better to just generate unique/sequential edge ids in ReactionGraph
+        # (perhaps even for nodes as well)
+        # However, my vispy graph viewer is regular DiGraph so I'm not using edge_id for anything.
+        if self.create_sequential_edge_ids:
+            # edge_key, edge_id = edge_id, self.next_sequential_edge_id
+            assert source is not None and target is not None
+            edge_id = self.edgeid_by_nodes[(source, target)]
+        self.write('ce', edge_id, source, target, attrs)
+
+    def delete_edge(self, edge_id=None, source=None, target=None):
+        """ Delete an existing edge. """
+        if edge_id is None:
+            assert source is not None and target is not None
+            edge_id = self.edgeid_by_nodes[(source, target)]
+        self.write('de', edge_id, source, target)
+
+    def step(self, step_time):
+        """ Add a step event with time (or other value). """
+        self.write('st', step_time)
 
     def encode(self, event, identifier, source=None, target=None, attrs=None):
         """
@@ -113,14 +331,19 @@ class GraphStreamEventDispatcher():
         identifier can be either:
             a node id  (for node operations)
             an edge id (for edge operations)
-        Note that this is a little different from the DGS file format:
+            a numeric value (for step events)
+        For edges, we save source and target in the attrs dict.
+        Note that this is a little different from the DGS file format, which explicitly has source and target in ae:
             <event>      ::= ( <an> | <cn> | <dn> | <ae> | <ce> | <de> | <cg> | <st> | <cl> ) ( <comment> | <EOL> )
             <an>         ::= "an" <id> <attributes>
             <cn>         ::= "cn" <id> <attributes>
             <dn>         ::= "dn" <id>
-            <ae>         ::= "ae" <id> <id> ( <direction> )? <id> <attributes>
+            <ae>         ::= "ae" <id> <id> ( <direction> )? <id> <attributes>  # ae e2 n1 > n2 weight:40
             <ce>         ::= "ce" <id> <attributes>
             <de>         ::= "de" <id>
+            <cg>         ::= "cg" <attributes>
+            <st>         ::= "st" <real>
+            <cl>         ::= "cl"
         More info:
             https://github.com/panisson/pygephi_graphstreaming/blob/master/pygephi/client.py
             http://graphstream-project.org/doc/Advanced-Concepts/The-DGS-File-Format/
@@ -128,17 +351,47 @@ class GraphStreamEventDispatcher():
             http://igraph.org/python/doc/igraph.remote.gephi-module.html
 
         """
+        # Order:
+        # - attr_filter_include_keys, attr_filter_exclude_keys
+        # - attr_filter_include_func, attr_filter_exclude_func
+        # - then convert node(s), attrs
         if attrs is None:
             attrs = {}
-        if source:
-            attrs['source'] = source
-        if target:
-            attrs['target'] = target
-        return json.dumps({event: {identifier: attrs}})
+        else:
+            # attrs = attrs.copy()
+            # Filter/conversion order:
+            # - attr_filter_include_keys, attr_filter_exclude_keys
+            # - attr_filter_include_func, attr_filter_exclude_func
+            # - then convert node(s), attrs
+            attr_filter_func = self.get_combined_attr_filter_func()
+            if attr_filter_func:
+                attrs = {k: v for k, v in attrs.items() if attr_filter_func(k, v)}
+        if self.attr_converter:
+            attrs = {k: self.attr_converter(v) for k, v in attrs.items()}
+
+        if self.node_converter is None:
+            if source:
+                attrs['source'] = source
+            if target:
+                attrs['target'] = target
+        else:
+            if source is None and target is None:
+                if event[1] == "n": # Node event, identifier is a node:
+                    identifier = self.node_converter(identifier)
+            else:
+                if source:
+                    attrs['source'] = self.node_converter(source)
+                if target:
+                    attrs['target'] = self.node_converter(target)
+
+        return json.dumps({event: {identifier: attrs}}) + '\n'
 
 
-    def write(self, event, identifier, source, target, attrs):
+    # Or should we call this method `send()` ?
+    def write(self, event, identifier, source=None, target=None, attrs=None):
         """ Write event to default writer using default encoder. """
+        # print("GraphStreamEventDispatcher.write(%s, %s, %s, %s, %s)" % (
+        #     event, identifier, source, target, attrs))
         self.writer.write(self.encode(event, identifier, source, target, attrs))
 
 
@@ -150,8 +403,9 @@ class GraphStreamEventDispatcher():
 
 class GraphStreamFileDispatcher(GraphStreamEventDispatcher):
 
-    def __init__(self, path, mode='a'):
-        self.writer = open(path, mode)
+    def __init__(self, path, mode='a', **kwargs):
+        writer = open(path, mode)
+        super().__init__(writer, **kwargs)
 
 
 

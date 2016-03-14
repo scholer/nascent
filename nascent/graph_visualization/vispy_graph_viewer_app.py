@@ -129,6 +129,10 @@ class GraphViewer():
         self.node_obj_list = []     # [idx] = Cube
         # self.node_attrs = {}        # [nodeid] = node_attrs
         self.node_attrs_list = []   # [idx] = node_attrs
+
+        self.state_time_max = 0 # Is used to normalize observed state partition functions (cummulated state time)
+        # self.state_times = []  # edit: get dynamically using [attr.get(tau_cum) for attr in self.node_attrs_list]
+
         # Edges:
         # (edge pos is given by source/target nodes)
         self.edge_idx = {}      # [source][target] = edge_idx
@@ -160,6 +164,7 @@ class GraphViewer():
         # Or do we want a separate self.edges_weights data structure?
         # self.edges_weights = np.empty_like(self.adj_matrix)
 
+        ### Layout parameters and forces: ###
         # self.layout_method = force_directed_layout
         self.node_grid_enabled = config.get("node_grid_enabled", True)   # Set to False if you are not using node_grid.
         self.node_grid_force = config.get("node_grid_force", np.array([1.], dtype=float))  # Disable node_grid_forces.
@@ -185,12 +190,36 @@ class GraphViewer():
         self.node_grid = np.empty_like(self.node_pos)
         # node_grid_force can be either a scalar, or a per-node N x 2 array (for N nodes, doing )
 
+        ### Visual representation of objects: ###
+        self.edges_line_groups = {
+            # group_name: {key_value1: [list-of-edge-lines], key_value2: [...], ...}
+            'is_forming': {True: [], False: []}, # group by is_forming; should be either True or False
+        }
+        ## TODO: Implement different line groups, e.g. "forming" vs "breaking" reactions.
+        # Key-funcs, returning a value to group by key func.
+        self.edges_line_group_key_funcs = {
+            # group_name: group-by-key-func
+            "is_forming": lambda source, target, edge_attr: edge_attr.get('is_forming')
+        }
+        # If key_func returns None, do not add a line_group line for this edge.
+        # Otherwise, add line to the line group.
+        # By example, in add_edge:
+        for group_name, keyfunc in self.edges_line_group_key_funcs.items():
+            group_by_value = keyfunc(source, target, edge_attr)
+            if group_by_value is None: continue
+            edge_line_group = self.edges_line_groups[group_name].setdefault(group_by_value, {})
+
+        # Per-edge lines:
+        self.per_edge_lines = []
+
+        ### Streaming: ###
         self.graph_stream = None
         self.graph_stream_stepping_gen = None
         self.sleep_until = None
+
+        ### Rendering: ###
         self.render_filename_fmt = config.get('render_filename_fmt', "graphviewer_{i}_{time:0.02f}.png")
         self.render_file_enumeration = 0
-
 
         ### Timers: ###
         self._app_start_time = system_time()
@@ -486,6 +515,9 @@ class GraphViewer():
             pass
         if 'marker_color' in changed_attrs:
             pass
+        if 'tau_cum' in changed_attrs:
+            if changed_attrs['tau_cum'] > self.tau_cum_max:
+                self.state_time_max = changed_attrs['tau_cum']
 
 
     def change_edge(self, source, target, edge_key, edge_attrs, directed=None):
@@ -520,6 +552,7 @@ class GraphViewer():
         Returns a generator that parses a stream of graph streaming events.
         The generator will return every time a "st" graph steaming step event is encountered in the stream.
         """
+        # TODO: Move to separate graph-stream interpreter class/function.
         # stream is a file-like object where each next(stream) gives an event
         # <event>      ::= ( <an> | <cn> | <dn> | <ae> | <ce> | <de> | <cg> | <st> | <cl> ) ( <comment> | <EOL> )
         event_methods = {
@@ -534,7 +567,7 @@ class GraphViewer():
         }
         for msg in stream:
             msg = msg.strip()
-            if not msg:
+            if not msg or msg[0] == "#":
                 continue
             print("Parsing msg:", msg)
             # msg is a string in the form of:

@@ -107,7 +107,7 @@ class ComponentMgr(GraphManager):
         # complexes are assigned sequential complex-unique IDs upon instantiation, no need to keep track of order here.
         # Since we remove obsolete (degraded) complexes in arbitrary order, we don't want a regular list.
         self.complexes = set()
-        self.state_counts = Counter(strand.name for strand in strands)
+        self.state_counter = Counter(strand.name for strand in strands)
         self.removed_complexes = [] # But it might be interesting to keep track of deletion order.
         self.strands = strands
         self.strands_by_name = defaultdict(list)
@@ -213,9 +213,11 @@ class ComponentMgr(GraphManager):
             0: Intra-strand hybridization.
             1: Intra-complex hybridization; no change.
             2: Inter-complex hybridization; merge two complexes into one.
-            3: Complex+strand hybridization; add strand to complex.
-            4: Inter-strand hybridization; create new complex
+            3: Complex+strand hybridization; add a strand to a complex.
+            4: Inter-strand hybridization; create new complex from two strands
         """
+        ## TODO: Add an easier "joining_or_splitting" key specifying the outcome (boolean value)
+        ## TODO: Add "bound_strands" (counterpart to "free_strands") to result dict
         # printd("%s.hybridize(%s, %s) invoked..." % (type(self).__name__, domain1, domain2))
         if self.hyb_dehyb_file:
             print("domain1, domain2 = (domains_by_duid[%s], domains_by_duid[%s])" % (domain1.duid, domain2.duid),
