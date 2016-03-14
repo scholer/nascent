@@ -71,7 +71,7 @@ def strands_from_stranddefs_lines(lines, sep2=",", n_clones_default=1):
             dom_names = [domain_name.strip() for domain_name in line[1].split(sep2)]
             dom_seqs = [domain_seq.strip() for domain_seq in line[2].split(sep2)]
             if len(dom_names) != len(dom_seqs):
-                print("Warning: dom_names (%s) != dom_seqs (%s) for line %s" % \
+                print("Warning: len(dom_names) (%s) != len(dom_seqs) (%s) for line %s" % \
                       (len(dom_names), len(dom_seqs), i))
             domains = [Domain(dom_name, strand=None, seq=dom_seq)
                        for dom_name, dom_seq in zip(dom_names, dom_seqs)]

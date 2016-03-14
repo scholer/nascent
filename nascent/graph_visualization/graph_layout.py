@@ -89,10 +89,10 @@ def force_directed_layout(pos, adj_matrix, node_grid=None, iterations=100, dim=N
         pos = pos[:, dim[0]:dim[1]]
         if node_grid is not None:
             node_grid = node_grid[:, dim[0]:dim[1]]
-    if do_grid_calculation is None:
+    if node_grid is None:
+        do_grid_calculation = False
+    elif do_grid_calculation is None:
         do_grid_calculation = any(p[3] for p in force_params)
-    if do_grid_calculation:
-        assert node_grid is not None
 
     npts = pos.shape[0]  # number of nodes/points
     r = np.empty((npts, npts, pos.shape[1]), dtype='float32')
@@ -362,6 +362,23 @@ if __name__ == '__main__':
     print(test_grid_k)
     print("pos:")
     print(test_pos)
+
+    # Test node_grid with per-coordinate axis force constant:
+    test_pos = test_pos_org.copy()
+    test_grid_k = np.array([0.1, 10])  # scale force by 0.1 on x-axis, 0.5 on y-axis
+    test_force_params = [
+        (-0.1, -2, False, False),
+        (0.05, 1, True, False),
+        (test_grid_k, 1, False, True),    # Use node_grid force
+    ]
+    force_directed_layout(test_pos, test_adj_matrix, node_grid=test_node_grid, dim=2,
+                          force_params=test_force_params)
+    print("\nDone force_directed_layout(test_pos, test_adj_matrix, force_params=test_force_params)")
+    print("test_grid_k:")
+    print(test_grid_k)
+    print("pos:")
+    print(test_pos)
+
 
     # Test node_grid with 1-element array as force constant:
     test_pos = test_pos_org.copy()

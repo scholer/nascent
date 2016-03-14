@@ -58,7 +58,7 @@ Reactions: (this could be a separate object, but for now system state and reacti
 from __future__ import absolute_import, print_function, division
 import os
 #import random
-from collections import defaultdict
+from collections import defaultdict, Counter
 #import math
 #from math import exp #, log as ln
 #from datetime import datetime
@@ -107,6 +107,7 @@ class ComponentMgr(GraphManager):
         # complexes are assigned sequential complex-unique IDs upon instantiation, no need to keep track of order here.
         # Since we remove obsolete (degraded) complexes in arbitrary order, we don't want a regular list.
         self.complexes = set()
+        self.state_counts = Counter(strand.name for strand in strands)
         self.removed_complexes = [] # But it might be interesting to keep track of deletion order.
         self.strands = strands
         self.strands_by_name = defaultdict(list)
