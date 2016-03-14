@@ -90,7 +90,7 @@ class ReactionGraph(DiGraph):
             #self.open_files.append(self.reaction_graph_delta_file)
             gs_file_dispatcher = GraphStreamFileDispatcher(self.reaction_graph_events_file)
             gs_file_dispatcher.writer.write("# New reaction graph initialized at %s\n" % datetime.now())
-            print("\n\nWriting reaction_graph event stream to file:", self.reaction_graph_events_file)
+            print("\n\nWriting reaction_graph event stream to file: %s\n" % self.reaction_graph_events_file)
             self.dispatchers.append(gs_file_dispatcher)
         else:
             raise ValueError("self.reaction_graph_events_file not given: ", self.reaction_graph_events_file)

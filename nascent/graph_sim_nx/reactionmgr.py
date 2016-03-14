@@ -2659,7 +2659,9 @@ class ReactionMgr(ComponentMgr):
             assert existing_edge_attrs['reaction_spec_pair'] == edge_attrs['reaction_spec_pair']
             assert existing_edge_attrs['edge_key'] == edge_attrs['edge_key']
             existing_edge_attrs['traversals'] += 1
-            existing_edge_attrs['weight'] += 0.1/edge_attrs['reaction_invocation_count']   # Should make weight logarithmic with traversals
+            existing_edge_attrs['weight'] += 0.1/edge_attrs['reaction_invocation_count'] # weight log vs traversals
+            edge_attrs['traversals'] = existing_edge_attrs['traversals']
+            edge_attrs['weight'] = existing_edge_attrs['weight']
             existing_edge_attrs['throttle_factor'] = edge_attrs['throttle_factor'] # = throttle_factor
             existing_edge_attrs['c_j_throttled'] = edge_attrs['c_j_throttled'] # = c_j
             existing_edge_attrs['label'] = edge_attrs['label'] # = edge_label_fmt.format(**edge_attrs)

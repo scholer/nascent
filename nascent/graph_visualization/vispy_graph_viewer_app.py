@@ -63,11 +63,12 @@ import sys
 import os
 import time
 import json
+import numbers
 import numpy as np
 sys.path.insert(1, '/Users/rasmus/Dev/repos-others/vispy')
 if sys.platform.startswith('win'):
     from time import clock as system_time
-    cstart = system_time.clock()
+    cstart = system_time()
 else:
     from time import time as system_time
 
@@ -130,6 +131,8 @@ class GraphViewer():
         # self.node_attrs = {}        # [nodeid] = node_attrs
         self.node_attrs_list = []   # [idx] = node_attrs
 
+        self.step_sleep_scalefactor = config.get('step_sleep_scalefactor', 0)
+
         self.state_time_max = 0 # Is used to normalize observed state partition functions (cummulated state time)
         # self.state_times = []  # edit: get dynamically using [attr.get(tau_cum) for attr in self.node_attrs_list]
 
@@ -179,10 +182,13 @@ class GraphViewer():
 
         self.force_params = [
             # scale, exponent, use_adj_matrix, use_node_grid,  F = scale * dist**exponent
-            [-0.1, -2, False, False],                   # Repulsion force
-            [0.05, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
+            # [-0.1, -3, False, False],                   # Repulsion force
+            [-0.6, -3, False, False],                   # Repulsion force
+            [0.5, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
+            # [0.1, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
             # [self.edges_weights, 1, True, False],       # Per-edge spring force (if boolean adj_matrix)
             # [self.node_grid_force, 1, False, True],     # node_grid force
+            # [np.array([1.]), 1, False, True],     # node_grid force
         ]
         print("force_params:", self.force_params, sep='\n')
 
@@ -204,10 +210,10 @@ class GraphViewer():
         # If key_func returns None, do not add a line_group line for this edge.
         # Otherwise, add line to the line group.
         # By example, in add_edge:
-        for group_name, keyfunc in self.edges_line_group_key_funcs.items():
-            group_by_value = keyfunc(source, target, edge_attr)
-            if group_by_value is None: continue
-            edge_line_group = self.edges_line_groups[group_name].setdefault(group_by_value, {})
+        # for group_name, keyfunc in self.edges_line_group_key_funcs.items():
+        #     group_by_value = keyfunc(source, target, edge_attr)
+        #     if group_by_value is None: continue
+        #     edge_line_group = self.edges_line_groups[group_name].setdefault(group_by_value, {})
 
         # Per-edge lines:
         self.per_edge_lines = []
@@ -286,7 +292,7 @@ class GraphViewer():
 
         try:
             color = Color(node_attrs['color'])
-        except ValueError as e:
+        except (KeyError, ValueError) as e:
             print("Could not extract node color from node attr:", e)
             color = Color("#3f51b5")
         scale = node_attrs.get('shape', node_attrs.get('size', 1)**(1/3))
@@ -305,8 +311,10 @@ class GraphViewer():
         if 'pos' in node_attrs:
             pos = np.array(node_attrs['pos'], dtype=float)
         else:
-            pos = np.zeros((1, 3))   # Or, perhaps, np.random.rand(1, 3)?
-            pos[:2] += np.random.rand(1, 2) * new_node_idx**0.5
+            pos = np.zeros((3,))   # Or, perhaps, np.random.rand(1, 3)?
+            # pos[:2] += np.random.rand(1, 2) * new_node_idx**0.5
+            # Center the new node around new_node_idx (in x/y plane)
+            pos[:2] += np.random.normal(new_node_idx**0.5, scale=(1+new_node_idx)**0.5, size=(2,))
 
         # print(pos)
         # self.node_pos = np.vstack((self.node_pos, pos))  # Convenience function for concatenate. Not in-place.
@@ -322,7 +330,7 @@ class GraphViewer():
         cube.transform = STTransform(scale=None, translate=pos)
         # STTransform._translate and ._scale are both vectors of length 4.
         if scale != 1:
-            cube.scale = scale
+            cube.transform.scale = scale
         self.nodeidx_by_id[nodeid] = len(self.node_obj_list)
         self.node_obj_list.append(cube)
         self.node_attrs_list.append(node_attrs)
@@ -499,7 +507,7 @@ class GraphViewer():
         old_node_attrs = self.node_attrs_list[nodeidx]
         cube = self.node_obj_list[nodeidx]
         changed_attrs = {}
-        for k, new_value in node_attrs:
+        for k, new_value in node_attrs.items():
             if k not in old_node_attrs or new_value != old_node_attrs[k]:
                 changed_attrs[k] = new_value
                 # if k in ('color', 'scale', 'size'):
@@ -516,7 +524,7 @@ class GraphViewer():
         if 'marker_color' in changed_attrs:
             pass
         if 'tau_cum' in changed_attrs:
-            if changed_attrs['tau_cum'] > self.tau_cum_max:
+            if changed_attrs['tau_cum'] > self.state_time_max:
                 self.state_time_max = changed_attrs['tau_cum']
 
 
@@ -555,6 +563,8 @@ class GraphViewer():
         # TODO: Move to separate graph-stream interpreter class/function.
         # stream is a file-like object where each next(stream) gives an event
         # <event>      ::= ( <an> | <cn> | <dn> | <ae> | <ce> | <de> | <cg> | <st> | <cl> ) ( <comment> | <EOL> )
+        # Argh, JSON sucks: You cannot use integers as keys (but they can be values) - make sure to
+        # convert all nodes to str before adding them!
         event_methods = {
             "an": self.add_node,
             "cn": self.change_node,
@@ -578,17 +588,21 @@ class GraphViewer():
                 method = event_methods[event_type]
                 # res = method(event_info)
                 if event_type == "st":
-                    yield event_info
+                    # Typically, event info will be a float, but it may also be a single elem dict: {time: {}}
+                    if isinstance(event_info, numbers.Number):
+                        yield event_info
+                    else:
+                        yield float(next(iter(event_info.keys())))
                 else:
                     # All other events are a one or more dicts:
                     if event_type[1] == "n":
                         # Node events:
                         for nodeid, attrs in event_info.items():
-                            method(nodeid, attrs)
+                            method(str(nodeid), attrs)  # nodeid will always be a str (for JSON)
                     elif event_type[1] == "e":
                         for edge_key, attrs in event_info.items():
-                            source = attrs.pop('source')
-                            target = attrs.pop('target')
+                            source = str(attrs.pop('source'))  # so make sure source, target are also strs
+                            target = str(attrs.pop('target'))
                             method(source, target, edge_key, attrs)
                     else:
                         raise ValueError("Could not understand %s event: %s", (event_type, event_info))
@@ -610,25 +624,28 @@ class GraphViewer():
         #         time.sleep(step)
         # alternatively, read stream one step at a time and pass control back to event loop after each step:
         now = system_time()
+        events_read = False
         if self.sleep_until is not None and now < self.sleep_until:
             ## TODO: Consider having a separate timer running visualize_layout
             self.visualize_layout(None)
-            return
+            return None
         if self.graph_stream_stepping_gen is None and self.graph_stream is not None:
             self.graph_stream_stepping_gen = self.read_graph_stream(self.graph_stream)
         if self.graph_stream_stepping_gen:
             try:
                 step = next(self.graph_stream_stepping_gen)
-                print("(read_stream_and_update) sleeping for %s secs" % step)
-                # time.sleep(step)
-                self.sleep_until = now + step
+                events_read = True
+                # time.sleep(step
+                if self.step_sleep_scalefactor:
+                    print("(read_stream_and_update) sleeping for %s secs" % step*self.step_sleep_scalefactor)
+                    self.sleep_until = now + step*self.step_sleep_scalefactor
             except StopIteration:
                 pass
                 # TODO: Is there a better alternative, e.g. just postpone the next call to read_stream?
         # print("(read_stream_and_update) stream input read (for now..)")
         # time.sleep(0.1)
         self.visualize_layout(None)
-
+        return events_read
 
 
 
@@ -747,7 +764,8 @@ if __name__ == '__main__':
 {"ae": {"5-3": {"source": "5", "target": "3", "weight": 1}}}
 {"ae": {"1-6": {"source": "1", "target": "6", "weight": 1}}}
     """)
-    viewer.graph_stream = test_stream
+    # viewer.graph_stream = test_stream
+    viewer.graph_stream = open("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/2016-03-14 140940/complexes/reaction_graph_eventstream.txt")
     # print("node_grid_force before resizing:", viewer.node_grid_force, sep='\n')
     # viewer.node_grid_force.resize((2,), refcheck=False)
     # print("node_grid_force after resizing:", viewer.node_grid_force, sep='\n')
@@ -755,6 +773,7 @@ if __name__ == '__main__':
     # print("node_grid_force after assignment:", viewer.node_grid_force, sep='\n')
     # if the 'interactive' flag is set, you can interact with the program via an interactive terminal (e.g ipython)
     # viewer.read_stream_and_update(None)
+
     if sys.flags.interactive == 0:
         app.run()
         # viewer.read_graph_stream(viewer.graph_stream)
@@ -765,10 +784,15 @@ if __name__ == '__main__':
         # vispy.io.write_png(filename, image)
         print("Done app.run() !")
     else:
+        events_read = True
+        n_steps = 0
+        while events_read is not False:
+            events_read = viewer.read_stream_and_update(None)
+            n_steps += 1
         viewer.read_stream_and_update(None)
         viewer.read_stream_and_update(None)
         viewer.read_stream_and_update(None)
-        viewer.read_stream_and_update(None)
+        print("\n\nStream manually exhausted, %s steps encountered.\n" % n_steps)
 
     print("Final node_pos:", viewer.node_pos, sep='\n')
     print("viewer.node_grid:", viewer.node_grid, sep='\n')
