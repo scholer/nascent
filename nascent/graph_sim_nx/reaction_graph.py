@@ -83,7 +83,7 @@ class ReactionGraph(DiGraph):
         self.reaction_graph_events_file = params.get('reaction_graph_events_file')
         if self.reaction_graph_events_file is None and self.reaction_graph_complexes_directory is not None:
             self.reaction_graph_events_file = os.path.join(self.reaction_graph_complexes_directory,
-                                                           "reaction_graph_eventstream.txt")
+                                                           "reaction_graph_eventstream.json")
 
         if self.reaction_graph_events_file:
             #self.reaction_graph_delta_file = open(self.reaction_graph_delta_file, 'a')
@@ -192,7 +192,7 @@ class ReactionGraph(DiGraph):
 
 
 def node_attr_repr(val):
-    return (val if (isinstance(val, (numbers.Number, bool, tuple)))
+    return (val if (isinstance(val, (numbers.Number, bool, tuple, list)))
             else str(val))
 
 
@@ -218,17 +218,23 @@ class GraphStreamEventDispatcher():
         # - attr_filter_include_keys, attr_filter_exclude_keys
         # - attr_filter_include_func, attr_filter_exclude_func
         # - then convert node(s), attrs
+        # If a change_node/edge event does not have any attributes left after filtering,
+        # it may be reasonable not to emit the event:
+        self.emit_empty_change_events = False
         self.attr_filter_include_keys = None
-        self.attr_filter_include_keys = [
+        self.attr_filter_include_keys = {
             # node attrs:
-            'encounters', 'size', 'scale', 'n_strands', 'tau_cum',
+            'pos', 'offset_relative_to', 'node_pos',
+            'size', 'scale', 'n_strands',
+            # 'tau_cum', 'encounters', 'count',  # Will yield a change_node event for every reaction
+            'dG_first', 'dG_std', 'x', 'y', 'z',
             # edge attrs:
             'is_forming', 'is_intra', 'is_joining', 'is_splitting',
             'reaction_str', 'reaction_invocation_count'
             'dH', 'dS', 'dHdS', 'c_j', 'activity',
             'traversals', 'weight',
             'color', 'alpha', 'len', 'length',
-        ]
+        }
         self.attr_filter_include_func = None # str_or_numeric  # passing attr_key, attr_value
         self.attr_filter_exclude_keys = None
         self.attr_filter_exclude_func = None
@@ -369,6 +375,9 @@ class GraphStreamEventDispatcher():
         if self.attr_converter:
             attrs = {k: self.attr_converter(v) for k, v in attrs.items()}
 
+        if not self.emit_empty_change_events and event[0] == "c" and not attrs:
+            return None
+
         if self.node_converter is None:
             if source:
                 attrs['source'] = source
@@ -383,7 +392,6 @@ class GraphStreamEventDispatcher():
                     attrs['source'] = self.node_converter(source)
                 if target:
                     attrs['target'] = self.node_converter(target)
-
         return json.dumps({event: {identifier: attrs}}) + '\n'
 
 
@@ -392,7 +400,11 @@ class GraphStreamEventDispatcher():
         """ Write event to default writer using default encoder. """
         # print("GraphStreamEventDispatcher.write(%s, %s, %s, %s, %s)" % (
         #     event, identifier, source, target, attrs))
-        self.writer.write(self.encode(event, identifier, source, target, attrs))
+        data = self.encode(event, identifier, source, target, attrs)
+        if data:
+            self.writer.write(data)
+            return 1
+        return 0
 
 
     def close(self):

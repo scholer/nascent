@@ -119,7 +119,14 @@ def main():
         # runstats['system_time_end'] = runstats['tau'].cumsum()
         # for name, data in DataFrameGroupBy is same as DataFrameGroupBy.group.items()
         for strand, s_trace in runstats.groupby(['strand_uid'], sort=False):
+
             s_state_traces = s_trace.groupby(['complex_state'], sort=False)
+            c_state_sums = s_state_traces.sum()
+            # c_state_sums.sort_values(['tau']) # Sort by multiple columns ['tau', ...] or just a single column 'tau'
+            print("20 most prevalent states for strand %s:" % strand)
+            print(c_state_sums.sort_values('tau', ascending=False)[['tau']].head(20)) # Single column string also OK
+
+            # Plot trace for each cstate:
             for cstate, s_state in s_state_traces:
                 s_state['s_state_time_cum'] = s_state['tau'].cumsum()
                 s_state['s_state_partition'] = s_state['s_state_time_cum']/s_state['system_time_end']
@@ -151,6 +158,7 @@ def main():
     print("Extra copy of plot:", plotfilename_with_runidxs)
     shutil.copy2(plotfilename, plotfilename_with_runidxs)
     webbrowser.open('file://' + plotfilename_with_runidxs)
+
 
 
 

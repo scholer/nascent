@@ -110,31 +110,47 @@ class GraphViewer():
             config = kwargs
         else:
             config.update(kwargs)
+        self.n_events_processed = 0
+        self.n_steps_processed = 0
         self.config = config
         # setup initial width, height
         # app.Canvas.__init__(self, title='Nascent 3D Graph Viewer', keys='interactive', size=(1200, 800))
         self.canvas = SceneCanvas(title='Nascent 3D Graph Viewer', keys='interactive',
-                                  size=(1200, 1200), show=True)
+                                  size=(1400, 1000), show=True)
         self.main_view = self.canvas.central_widget.add_view()
         self.scene = self.main_view.scene
         self.main_view.bgcolor = config.get('bgcolor', '#efefef')
-        self.main_view.camera = config.get('camera', 'turntable')
+        camera_type = config.get('camera', 'turntable')
+        self.main_view.camera = camera_type
+        # 'arcball, 'turntable', 'panzoom', 'fly',
+        # 'panzoom' is great for 2D projections, but not 3D. 'turntable' is easy to use but you cannot re-center.
+        # 'arcball' is advanced and the most flexible, but hard to zoom and a bit confusing.
+        # 'fly' is ...
         self.main_view.camera.up = config.get('camera.up', '+z')  # scene.TurntableCamera(elevation=30, azimuth=30, up='+z')
-        self.main_view.camera.fov = config.get('camera.fov', 60)   # default=0 (for turntable) gives orthogonal projection
-        self.main_view.padding = config.get('view.padding', 100)
+        self.main_view.camera.fov = config.get('camera.fov', 40)   # default=0 (for turntable) gives orthogonal projection
+        self.main_view.padding = config.get('view.padding', 0)
+        if camera_type == 'turntable':
+            # if 'camera.azimuth' in config:
+            self.main_view.camera.azimuth = config.get('camera.azimuth', 90)
+            # if 'camera.elevation' in config:
+            self.main_view.camera.elevation = config.get('camera.elevation', 45)
+            # if 'camera.distance' in config or True:
+            self.main_view.camera.distance = config.get('camera.distance', 10)
+
+
         # Index by nodeid or sequential as list/array?
-        self.nodeidx_by_id = {} # [nodeid] = idx ?
-        # For now just using a dict:
+        self.nodeidx_by_id = {} # [nodeid] = idx
+        self.nodeid_list = []
+        # nodeid_list == [nodeid for idx, nodeid in sorted([v, k for k, v in self.nodeidx_by_id.items()])]
+        # nodeidx_by_id == {nodeid: idx for idx, nodeid in enumerate(self.nodeid_list)}
+
         self.node_pos = np.zeros((0, 3), dtype=float) # [idx] = (x, y, z) - each node/Cube object has its own transform
         # self.node_obj = {}          # node object by nodeid
         self.node_obj_list = []     # [idx] = Cube
         # self.node_attrs = {}        # [nodeid] = node_attrs
         self.node_attrs_list = []   # [idx] = node_attrs
-
-        self.step_sleep_scalefactor = config.get('step_sleep_scalefactor', 0)
-
-        self.state_time_max = 0 # Is used to normalize observed state partition functions (cummulated state time)
-        # self.state_times = []  # edit: get dynamically using [attr.get(tau_cum) for attr in self.node_attrs_list]
+        self.node_labels_list = []  # [idx] = label
+        self.enable_node_labels = config.get('enable_node_labels', True)
 
         # Edges:
         # (edge pos is given by source/target nodes)
@@ -147,7 +163,8 @@ class GraphViewer():
         # edge_array: N x 2 numpy array, edge_array[N] = [i, j] connecting edge i with edge j.
         self.edge_array = np.empty((0, 2), dtype=np.uint32)
         # self.edges_pos = np.zeros((0,))  # Nope, use node_pos as edges pos.
-        self.edges_line = scene.Line(pos=self.node_pos, connect=self.edge_array, color='blue', parent=self.scene)
+        self.edges_line = scene.Line(pos=self.node_pos, connect=self.edge_array, parent=self.scene,
+                                     color='blue', width=4, method='gl')  # method='agg' or 'gl' (default)
         # Also: color, width, method='gl'/'agg', antialias=False/True
         # Regarding vispy LineVisual:
         # Does not *have* to be a contiguous line, can be a collection of discrete lines. Use 'connect' to control:
@@ -167,9 +184,30 @@ class GraphViewer():
         # Or do we want a separate self.edges_weights data structure?
         # self.edges_weights = np.empty_like(self.adj_matrix)
 
-        ### Layout parameters and forces: ###
+
+        ### LAYOUT parameters and forces: ###
+
+        # If you do not like the original node positions, you can translate them when adding nodes:
+        # node_pos_transform_input = (scale, translate) # e.g. ([0.5, 2, 0.1], [-4, 0, 0])):
+        self.node_pos_transform_input = config.get("node_pos_transform_input", ([0.5, 2, 0.2], [-2, -1, 0]))
+
+        self.force_directed_dimensions = 3   # 2 to only apply forces in xy plane
+        self.force_directed_iterations_per_call = 2
+        self.do_grid_calculation = True  # Set to None to detect automatically.
+
+        # Avoid re-creating a lot of numpy arrays all the time;
+        # instead, reuse old ones and clear cache when the number of nodes changes:
+        self.cache = {}
+
+
+        # Node grid: Direct certain nodes towards certain positions.
+        self.node_grid = np.empty_like(self.node_pos)
+        self.pos_is_default_grid_pos = True # True = If no 'grid_pos' in node_attrs, use pos as grid_pos.
+
+
         # self.layout_method = force_directed_layout
         self.node_grid_enabled = config.get("node_grid_enabled", True)   # Set to False if you are not using node_grid.
+        # node_grid_force can be either a scalar, or a per-node N x 2 array (for N nodes, doing ):
         self.node_grid_force = config.get("node_grid_force", np.array([1.], dtype=float))  # Disable node_grid_forces.
         # self.node_grid_force = np.array([1.])  # Use the same node_grid force scalar constant in all directions
         # self.node_grid_force = np.array([0.1, 1.0]) # Apply different forces in x and y:
@@ -182,21 +220,32 @@ class GraphViewer():
 
         self.force_params = [
             # scale, exponent, use_adj_matrix, use_node_grid,  F = scale * dist**exponent
-            # [-0.1, -3, False, False],                   # Repulsion force
-            [-0.6, -3, False, False],                   # Repulsion force
+            ## Repulsion forces:
+            # [-0.1, -2, False, False],     # Repulsion force
+            # [-0.6, -3, False, False],     # Repulsion force
+            [-0.2, -2, False, False],       # Repulsion force
+            ## Spring forces (edges)
             [0.5, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
             # [0.1, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
             # [self.edges_weights, 1, True, False],       # Per-edge spring force (if boolean adj_matrix)
+            ## Node grid pos forces:
             # [self.node_grid_force, 1, False, True],     # node_grid force
             # [np.array([1.]), 1, False, True],     # node_grid force
+            # [np.array([1., 0, 0]), 1, False, True],     # node_grid force in x-direction only..
+            # [np.array([0.1, 0, 0.4]), 1, False, True],     # node_grid force in x and z directions..
+            [np.array([0.02, 0, 2.5]), 1, False, True],     # node_grid force in x and z directions..
         ]
         print("force_params:", self.force_params, sep='\n')
 
-        # Node grid: Direct certain nodes towards certain positions.
-        self.node_grid = np.empty_like(self.node_pos)
-        # node_grid_force can be either a scalar, or a per-node N x 2 array (for N nodes, doing )
 
-        ### Visual representation of objects: ###
+
+        ### VISUAL representation of objects: ###
+
+        # Node things:
+        self.state_time_max = 0 # Is used to normalize observed state partition functions (cummulated state time)
+        # self.state_times = []  # edit: get dynamically using [attr.get(tau_cum) for attr in self.node_attrs_list]
+
+        ## Edge visuals:
         self.edges_line_groups = {
             # group_name: {key_value1: [list-of-edge-lines], key_value2: [...], ...}
             'is_forming': {True: [], False: []}, # group by is_forming; should be either True or False
@@ -218,10 +267,20 @@ class GraphViewer():
         # Per-edge lines:
         self.per_edge_lines = []
 
+
+        ### VISUAL ENVIRONMENT: ###
+        self.scene_draw_ground = True
+        self.scene_ground_obj = None
+        if self.scene_draw_ground:
+            self.draw_ground()
+
+
         ### Streaming: ###
         self.graph_stream = None
         self.graph_stream_stepping_gen = None
         self.sleep_until = None
+        self.step_sleep_scalefactor = config.get('step_sleep_scalefactor', 0.01)
+        self.step_sleep_minimum_cutoff = 1e-1 # If step is < 1e-3 secs, then do not sleep...
 
         ### Rendering: ###
         self.render_filename_fmt = config.get('render_filename_fmt', "graphviewer_{i}_{time:0.02f}.png")
@@ -231,7 +290,7 @@ class GraphViewer():
         self._app_start_time = system_time()
         # self._timer = app.Timer('auto', connect=self.update, start=True)
         # self._timer = app.Timer('auto', connect=self.visualize_layout, start=True)
-        self.refresh_rate = 0.05 # default='auto'==1/60
+        self.refresh_rate = 1/1000 # 0.05 # default='auto'==1/60
         self._timer = app.Timer(self.refresh_rate, connect=self.read_stream_and_update, start=True)
         print("Timer type:", type(self._timer))
         # print("Timer.events.ignore_callback_error:", self._timer.events.ignore_callback_errors)  # Doesn't work, bug.
@@ -245,6 +304,16 @@ class GraphViewer():
         # iterations=20, )
         # Note: Setting iterations will not stop the app, it will just stop the timer event from triggering.
 
+
+    def draw_ground(self):
+        """ Draw a ground underneath the graph. """
+        size = self.config.get('scene_ground_size', (10, 14, 0.01))
+        color = self.config.get('scene_ground_color', 'grey')
+        scale = self.config.get('scene_ground_scale')
+        translate = self.config.get('scene_ground_translate', [0., 0., -4])
+        cube = scene.visuals.Cube(size=size, color=color, edge_color="black", parent=self.scene)
+        cube.transform = STTransform(scale=scale, translate=translate)
+        self.scene_ground_obj = cube
 
 
     def render(self):
@@ -289,34 +358,40 @@ class GraphViewer():
         if self.node_grid_enabled:
             assert len(self.node_pos) == len(self.node_grid)
         new_node_idx = len(self.node_obj_list)
+        self.nodeidx_by_id[nodeid] = new_node_idx
+        self.nodeid_list.append(nodeid)
+        self.node_attrs_list.append(node_attrs)
 
         try:
             color = Color(node_attrs['color'])
         except (KeyError, ValueError) as e:
             print("Could not extract node color from node attr:", e)
             color = Color("#3f51b5")
-        scale = node_attrs.get('shape', node_attrs.get('size', 1)**(1/3))
 
 
-        # scene.visuals: Cube, Sphere, Plane, Tube, Arrow, Volume,
-        # Scene visuals use objects loaded from vispy.visuals
-        # Has both 'Box' and Cube.
-        # Both inherits from vispy.visuals.visual.CompoundVisual
-        # Box has height/depth/width segments and planes  (perhaps the only difference is Box has sub-divisions)
-        # * examples/basics/visuals/box.py  vs  examples/basics/visuals/cube.py and examples/basics/scene/cube.py
-        # For Cube, size=float gives a cube, size=[w, d, h] (x, y, z) gives a cuboid.
-        cube = scene.visuals.Cube(size=(0.14142, 0.1, 0.05), color=color, edge_color="black", parent=self.scene)
-
-
-        if 'pos' in node_attrs:
-            pos = np.array(node_attrs['pos'], dtype=float)
+        if "pos" in node_attrs:
+            pos = np.array(node_attrs["pos"], dtype=float)
+            if self.node_pos_transform_input:
+                pos_scale, pos_translate = self.node_pos_transform_input
+                if pos_scale and pos_scale != 1:
+                    pos *= pos_scale
+                if pos_translate and pos_translate != 0:
+                    pos += pos_translate
         else:
-            pos = np.zeros((3,))   # Or, perhaps, np.random.rand(1, 3)?
-            # pos[:2] += np.random.rand(1, 2) * new_node_idx**0.5
-            # Center the new node around new_node_idx (in x/y plane)
+            # Center the new node around new_node_idx (in x/y plane):
+            pos = np.zeros((3,))
             pos[:2] += np.random.normal(new_node_idx**0.5, scale=(1+new_node_idx)**0.5, size=(2,))
+        if "offset_relative_to" in node_attrs:
+            # [(0, None), (random.random(), reaction_spec_source_states_list), (0, None)]
+            offset = [offset +
+                      (self.node_pos[[self.nodeidx_by_id[str(node)] for node in node_list], i].mean()
+                       if node_list is not None else 0)
+                      for i, (offset, node_list) in enumerate(node_attrs["offset_relative_to"])]
+            print("Offsetting new node %s pos %s by %s" % (nodeid, pos, offset))
+            pos[:len(offset)] += offset
+            print(" - New node pos after offset: %s" % pos)
 
-        # print(pos)
+        ## Expand data structures and add node pos: ##
         # self.node_pos = np.vstack((self.node_pos, pos))  # Convenience function for concatenate. Not in-place.
         # new_pos_size = (self.node_pos.shape[0]+1, self.node_pos.shape[1])
         self.increment_node_pos(increment=1)  # Increment node_pos and node_grid arrays by 1
@@ -327,13 +402,50 @@ class GraphViewer():
         # Use self.node_pos.resize(new_pos_size) to resize in-place..
         # Use np.lib.pad(self.node_pos, padding) to get same effect as np.vstack
 
-        cube.transform = STTransform(scale=None, translate=pos)
+        ## Translate node cube visual object: ##
+        if 'scale' in node_attrs:
+            scale = node_attrs['scale']
+        elif 'size' in node_attrs:
+            print("Note: Using size for scale as (%s)^0.3" % node_attrs['size'])
+            scale = node_attrs['size']**(0.33)
+        else:
+            scale = None
+        if scale is not None:
+            # print("Scaling node cube visual by %s" % scale)
+            # time.sleep(4)
+            if isinstance(scale, numbers.Number):
+                scale = np.array([scale, scale, scale], dtype='float32')
+
+
+        ### Add node visual object representation: ###
+        # scene.visuals: Cube, Sphere, Plane, Tube, Arrow, Volume,
+        # Scene visuals use objects loaded from vispy.visuals
+        # Has both 'Box' and Cube.
+        # Both inherits from vispy.visuals.visual.CompoundVisual
+        # Box has height/depth/width segments and planes  (perhaps the only difference is Box has sub-divisions)
+        # * examples/basics/visuals/box.py  vs  examples/basics/visuals/cube.py and examples/basics/scene/cube.py
+        # For Cube, size=float gives a cube, size=[w, d, h] (x, y, z) gives a cuboid.
+        cube_base_size = (0.14142, 0.1, 0.05)
+        # cube_base_size = (0.14142/2, 0.1/2, 0.05/2)
+        # cube_base_size = (0.05, 0.04, 0.01)  # too small..
+        cube = scene.visuals.Cube(size=cube_base_size, color=color, edge_color="black", parent=self.scene)
+        cube.transform = STTransform(scale=scale, translate=pos)
         # STTransform._translate and ._scale are both vectors of length 4.
-        if scale != 1:
-            cube.transform.scale = scale
-        self.nodeidx_by_id[nodeid] = len(self.node_obj_list)
+
         self.node_obj_list.append(cube)
-        self.node_attrs_list.append(node_attrs)
+        if True or self.enable_node_labels:
+            # node_label = scene.Label(nodeid, rotation=0, color='black')
+            # node_label.stretch = (0.1, 1)
+            # scene.Label is intended for 2D display, so maybe use a TextVisual? (from vispy.visuals.text)
+            # from vispy.visuals.text.text import TextVisual
+            # from vispy.visuals import TextVisual  # Also here
+            # node_label = TextVisual()
+            # or maybe use the scene-enabled version?
+            node_label = scene.Text(nodeid, pos=pos, parent=self.scene, font_size=72, anchor_y='bottom')
+            self.node_labels_list.append(node_label)
+            # defaults: text=None, color='black', bold=False, italic=False, face='OpenSans', font_size=12,
+            #           pos=[0, 0, 0], rotation=0., anchor_x='center', anchor_y='center', font_manager=None
+            # move around using text.pos property
 
         ## Prepare edge list:
         # self.adj_matrix = increase_adjmatrix(self.adj_matrix) # Done by self.increment_node_pos
@@ -342,9 +454,17 @@ class GraphViewer():
         # self.edge_attrs[nodeid] = {}    # [source][target] = edge_attrs
         # self.edge_obj[nodeid] = {}     # [source][target] = edge_obj
 
-
-        if 'grid_pos' in node_attrs:
-            grid_pos = node_attrs['grid_pos']
+        grid_pos = node_attrs.get('grid_pos')
+        if grid_pos is None:
+            if self.pos_is_default_grid_pos:
+                grid_pos = pos  # pos has already been transformed by node_pos_transform_input if needed
+        elif self.node_pos_transform_input:
+            pos_scale, pos_translate = self.node_pos_transform_input
+            if pos_scale and pos_scale != 1:
+                grid_pos *= pos_scale
+            if pos_translate and pos_translate != 0:
+                grid_pos += pos_translate
+        if grid_pos is not None:
             self.node_grid[new_node_idx, :len(grid_pos)] = grid_pos
 
 
@@ -371,6 +491,7 @@ class GraphViewer():
         because then we can easily resize/extend node_pos and node_grid in-place.
         """
         # new_n_nodes = len(self.node_pos) + increment
+        self.cache.clear()
         new_pos_size = (self.node_pos.shape[0]+increment, self.node_pos.shape[1])
         try:
             self.node_pos.resize(new_pos_size)
@@ -477,8 +598,14 @@ class GraphViewer():
 
     def update_node_objs_pos(self):
         """ Update pos for all node/Cube objects to match the values in self.node_pos. """
-        for pos, cube in zip(self.node_pos, self.node_obj_list):
+        for pos, cube, text in zip(self.node_pos, self.node_obj_list, self.node_labels_list):
+            ## TODO: See if you can do something similar to the edge lines, where they all
+            ## just share the same positions = self.node_pos.
             cube.transform.translate = pos
+            text.pos = pos
+        # if self.enable_node_labels:
+        #     for text in self.node_labels_list:
+
 
         # Also update edge objects
         # If using line visuals, this is as simple as: (Yes, this works just fine)
@@ -579,12 +706,13 @@ class GraphViewer():
             msg = msg.strip()
             if not msg or msg[0] == "#":
                 continue
-            print("Parsing msg:", msg)
+            # print("Parsing msg:", msg)
             # msg is a string in the form of:
             # {"an": {<node id>: {"weight": 1}}}, {"ae": {edge_key: {"source", "target", "weight": 1}}}
             event = self.parse_graphstreaming_msg(msg)
-            print(" processing event:", event)
+            # print(" processing event:", event)
             for event_type, event_info in event.items():
+                self.n_events_processed += 1
                 method = event_methods[event_type]
                 # res = method(event_info)
                 if event_type == "st":
@@ -606,12 +734,17 @@ class GraphViewer():
                             method(source, target, edge_key, attrs)
                     else:
                         raise ValueError("Could not understand %s event: %s", (event_type, event_info))
-
+        print("%s stream exhausted..." % stream)
+        np.set_printoptions(precision=3) # linewidth=160, suppress=True,
+        print("   Final node_pos (transposed):", self.node_pos.transpose(), sep='\n')
+        print("   viewer.node_grid (transposed):", self.node_grid.transpose(), sep='\n')
+        print("   node_pos - node_grid (transposed):", (self.node_pos - viewer.node_grid).transpose(), sep='\n')
+        print("   nodeid_list for reference:", self.nodeid_list, sep='\n')
 
 
     def read_stream_and_update(self, event):
         """
-        Read stream and update.
+        Read stream and update, intended to be called as a callback by an event timer.
         """
         # This will fully exhaust the stream before passing control back to the event loop:
         # if self.graph_stream is not None:
@@ -634,10 +767,14 @@ class GraphViewer():
         if self.graph_stream_stepping_gen:
             try:
                 step = next(self.graph_stream_stepping_gen)
+                self.n_steps_processed += 1
                 events_read = True
                 # time.sleep(step
-                if self.step_sleep_scalefactor:
-                    print("(read_stream_and_update) sleeping for %s secs" % step*self.step_sleep_scalefactor)
+                if self.step_sleep_scalefactor and step > self.step_sleep_minimum_cutoff:
+                    print("%s events in %s steps - step=%0.03f s, sleeping for %0.03g s" %
+                          (self.n_events_processed, self.n_steps_processed,
+                           step, step*self.step_sleep_scalefactor),
+                          end='\r')
                     self.sleep_until = now + step*self.step_sleep_scalefactor
             except StopIteration:
                 pass
@@ -656,29 +793,218 @@ class GraphViewer():
             pass
 
 
-    def force_directed_layout(self, iterations=10, dim=2):
-        """ Apply force-directed layout in two dimensions (xy plane). """
-        # dx = self.node_pos[:2, :] -
-        # force_directed_layout(pos, adj_matrix, node_grid=None, iterations=100, dim=None,
-        #                       force_params=None, check_params=False
-        # print("force_params:", self.force_params, sep='\n')
-        # print("node_grid:", self.node_grid, sep='\n')
-        force_directed_layout(self.node_pos, self.adj_matrix,
-                              node_grid=self.node_grid if self.node_grid_enabled else None,
-                              iterations=iterations, dim=dim, force_params=self.force_params)
-
 
     def visualize_layout(self, event):
         """ Apply a single round of force-directed layout and update visuals. """
-        self.force_directed_layout(1)
+        if self.force_params:
+            self.force_directed_layout() # iterations=10, dim=self.force_directed_dimensions)
         self.update_node_objs_pos()
         # time.sleep(0.1)
+
+    #
+    # def force_directed_layout(self, iterations=10, dim=2):
+    #     """ Apply force-directed layout in two dimensions (xy plane). """
+    #     # dx = self.node_pos[:2, :] -
+    #     # force_directed_layout(pos, adj_matrix, node_grid=None, iterations=100, dim=None,
+    #     #                       force_params=None, check_params=False
+    #     # print("force_params:", self.force_params, sep='\n')
+    #     # print("node_grid:", self.node_grid, sep='\n')
+    #     force_directed_layout(self.node_pos, self.adj_matrix,
+    #                           node_grid=self.node_grid if self.node_grid_enabled else None,
+    #                           iterations=iterations, dim=dim, force_params=self.force_params)
+
+
+
+    def force_directed_layout(self, check_params=False):
+        """
+        Apply two-dimensional force-directed layout to the nodes in pos.
+            :pos:   Node positions, as N x 3 array for N nodes. *Will be updated in-place*.
+            :adj_matrix: is the weighted adjacency matrix specifying edge-connections between nodes;
+                    Can be directed (although that may produce unstable layouts): adj_matrix[src, tgt] = weight
+            :node_grid: per-node "preferred" positions. Can be used to have certain nodes attract to one area
+                    and other nodes attract to another area.
+            :iterations: The number of iterations to do before returning.
+            :dim:   The dimensions of pos to use. E.g. if you only want to adjust
+                    xy-coordinates of nodes positions, use dim=slice(0, 2)
+            :force_params: A list of "generalized force parameters" descring the forces in play.
+            :check_params: Will check the input, and e.g. convert a dictionary-like force_params to the required tuple.
+            :do_grid_calculation: Can be set to False to force-disable node_grid calculations.
+                    default=None will enable grid-calculation if specified by any force_params.
+
+        The algorithm uses generalized force parameters, i.e. a list of forces (k, a, use_adj_matrix, use_grid).
+        Each entry in :force_params: applied as:
+            if use_grid:
+                F = k * grid_dist**a * erg
+            else:
+                F = k * dist**a * (adj_matrix if use_adj_matrix) * er
+
+        Where <er> is a normalized node-to-node (unit) vector (i.e. of length 1).
+        and  <erg> is a normalized node-to-grid vector pointing towards the grid position given by node_grid.
+
+        Example: To get an "electrostatic repulsion", you could use
+            (k=0.1, )
+        You can, of course, use per-node forcce scaaling ("k" constants).
+        E.g. if you want the per-node "grid matrix" to only apply force in the x-direction, you can use:
+            k_grid = np.zeros_like(pos)
+            k_grid[:,0] = 0.3
+
+        """
+        pos = self.node_pos
+        adj_matrix = self.adj_matrix
+        node_grid = self.node_grid_enabled and self.node_grid
+        force_params = self.force_params
+        dim = self.force_directed_dimensions
+
+        iterations = self.force_directed_iterations_per_call
+        do_grid_calculation = self.do_grid_calculation
+
+        # if force_params is None:
+        #     force_params = [
+        #         (-0.1, -2, False, False),    # Repulsion, F = k / dist**2 == k * dist**(-2)
+        #         (0.05,  1, True, False),     # Spring force, F = k * dist
+        #         (0.05, -1, False, False),   # "Gravity" (but long range, F=Gmm/r, not F=Gmm/r^2)
+        #     ]
+        if check_params:
+            if any(isinstance(p, dict) for p in force_params):
+                force_params = [(p['k'], p['a'], p['use_adj_matrix'], p['use_grid']) if isinstance(p, dict) else p
+                                for p in force_params]
+        if dim is None:
+            dim = pos.shape[1]
+        elif isinstance(dim, int):
+            pos = pos[:, :dim]
+            if node_grid is not None:
+                node_grid = node_grid[:, :dim]
+        elif isinstance(dim, tuple) and len(dim) == 2:
+            pos = pos[:, dim[0]:dim[1]]
+            if node_grid is not None:
+                node_grid = node_grid[:, dim[0]:dim[1]]
+        else:
+            pos = pos[:, dim[0]:dim[1]]
+            if node_grid is not None:
+                node_grid = node_grid[:, dim[0]:dim[1]]
+        if node_grid is None:
+            do_grid_calculation = False
+        elif do_grid_calculation is None:
+            do_grid_calculation = any(p[3] for p in force_params)
+            self.do_grid_calculation = do_grid_calculation
+
+        npts = pos.shape[0]  # number of nodes/points
+        if 'r' in self.cache:
+            r = self.cache['r']
+        else:
+            r = np.empty((npts, npts, pos.shape[1]), dtype='float32')
+        if 'er' in self.cache:
+            er = self.cache['er']
+        else:
+            er = np.empty_like(r)
+        if 'dist' in self.cache:
+            dist = self.cache['dist']
+        else:
+            dist = np.empty((npts, npts), dtype='float32')
+        if 'F' in self.cache:
+            F = self.cache['F']
+        else:
+            F = np.empty((len(force_params), npts, pos.shape[1]))
+        if 'F_sum' in self.cache:
+            F_sum = self.cache['F_sum']
+        else:
+            F_sum = np.empty_like(pos)
+
+        # Grid stuff:
+        # TODO: Make a short-circuit while loop that doesn't check "if use_grid" for every iteration!
+        if do_grid_calculation:
+            rg = np.empty_like(pos)
+            erg = np.empty_like(rg)
+            grid_dist = np.empty_like(rg.shape[0])
+
+
+        while iterations > 0:
+            iterations -= 1
+            # Coordinate differences, only the first two (x, y) coordinates:
+            # TODO: Use a persistent "r", "er", "dist", "F_r", "F_s", etc datastructures and update in-place.
+            r[:] = pos[:, np.newaxis, :] - pos[np.newaxis, :, :]
+            # Calculate scalar distances and normalized node-to-node directionality unit vector
+            dist = (r**2).sum(axis=2)**0.5     # pair-wise distance between all nodes
+            dist[dist == 0] = 1.                # Prevent division-by-zero errors
+            er[:] = r / dist[..., np.newaxis]    # normalized node-node directionality vector
+            if do_grid_calculation:
+                rg[:] = node_grid - pos
+                # Calculate scalar distances and normalized node-to-node directionality unit vector
+                grid_dist = (rg**2).sum(axis=1)**0.5     # pair-wise distance between all nodes
+                grid_dist[grid_dist == 0] = 1.                # Prevent division-by-zero errors
+                erg[:] = rg / grid_dist[..., np.newaxis]    # normalized node-node directionality vector
+
+
+            # # Repulsive force:  ke*(q1q2)/r^2
+            # # all points push away from each other
+            # # F_r = 0.02 / dist[..., np.newaxis]**4 * er  # Direct calculation+assignment
+            # k_r = -0.1
+            # F_r = k_r / dist[..., np.newaxis]**2 * er  # Direct calculation+assignment
+            #
+            # # Attractive spring force:
+            # # connected points pull toward each other with hookean force: F = ks*x,  ks = spring force constant
+            # # (Note: pulsed force may help the graph to settle faster)
+            # ks = 0.05
+            # #ks = 0.05 * 5 ** (np.sin(i/20.) / (i/100.))
+            # #ks = 0.05 + 1 * 0.99 ** i  # Exponentially decaying force to a constant value
+            # # ks = 0.5 + 1 * 0.999 ** iterations  # Exponentially decaying force to a constant value
+            # F_spring = ks * dist[..., np.newaxis] * adj_matrix[:, :, np.newaxis] * er
+            # # F_spring = ks * dist[..., np.newaxis]**2 * self.adj_matrix[:, :, np.newaxis] * er
+            #
+            # # Gravity force: F = G * m1m2/r^2 * dre,
+            # # where dre is normalized node-node directionality vector and G is gravitational constant
+            # # Edit: Make sure gravity and repulsion have different distance dependencies.
+            # Gm1m2 = 0.05
+            # F_g = Gm1m2 * er / dist[..., np.newaxis] # dist[..., np.newaxis]**2
+            #
+            for i, (k, a, use_edges, use_grid) in enumerate(force_params):
+                # Should we sum here or later? I.e. should we have F[i,:,:] be a the "total force" from all
+                # nodes on each node, or should we keep the details and have F[i,:,:,:] ?
+                if use_grid:
+                    F[i, :, :] = k * grid_dist[..., np.newaxis]**a * erg
+                elif use_edges:
+                    F[i, :, :] = k * (dist[..., np.newaxis]**a * adj_matrix[:, :, np.newaxis] * er).sum(axis=0)
+                    # if a == 1 and k == ks:
+                    #     assert np.isclose(F[i, :, :], F_spring.sum(axis=0), rtol=1e-4).all()
+                    # else:
+                    #     print("a == %s and k == %s" % (a, k))
+                else:
+                    F[i, :, :] = k * (dist[..., np.newaxis]**a * er).sum(axis=0)
+                    # if a == -2 and k == k_r:
+                    #     assert np.isclose(F[i, :, :], F_r.sum(axis=0), rtol=1e-4).all()
+                    # else:
+                    #     print("a == %s and k == %s" % (a, k))
+
+
+
+
+            # # All forces from all particles:
+            # F_all = F_spring + F_r + F_g
+            # # Make sure points do not exert force on themselves:
+            # F_all[np.arange(npts), np.arange(npts)] = 0
+
+            # dv = F/m*dt,  v1 = v0*dv,  dx = v*dt
+            # But we don't have persistent velocities (i.e. start and end with v=0 for every step).
+            # So we just use F*dt^2/m/4 for all particles, and say that dt^2/m/4 is some constant
+            c_dt2m = 0.01 # 0.09   # In units of length/force
+            # F_all_sum = F_all.sum(axis=0)   # Sum all contributions from all other particles
+            # print(F_sum)
+            F_sum = F.sum(axis=0)
+            # assert F_all_sum.shape == F_sum.shape
+            # if force_params == [
+            #     (-0.1, -2, False, False),    # Repulsion, F = k / dist**2 == k * dist**(-2)
+            #     ( 0.05, 1, True, False),     # Spring force, F = k * dist
+            # ]:
+            #     assert np.isclose(F_sum, F.sum(axis=0), rtol=1e-4).all()
+
+            # Make sure no force is "too high":
+            dx = np.clip(F_sum, -3, 3) * c_dt2m
+            pos[:, :] += dx
+
 
 
     ## OTHER THINGS:
     # visibility can be changed with .visibility property
-
-
 
 
     # From the "galaxy" and "molecular_viewer" examples:
@@ -765,7 +1091,16 @@ if __name__ == '__main__':
 {"ae": {"1-6": {"source": "1", "target": "6", "weight": 1}}}
     """)
     # viewer.graph_stream = test_stream
-    viewer.graph_stream = open("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/2016-03-14 140940/complexes/reaction_graph_eventstream.txt")
+
+    # viewer.graph_stream = open("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/2016-03-14 140940/complexes/reaction_graph_eventstream.txt")
+    # viewer.graph_stream = open("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/2016-03-14 155917/complexes/reaction_graph_eventstream.txt")
+    run = "2016-03-14 161538"
+    run = "2016-03-14 182118"
+    run = "2016-03-14 184805"
+    run = "2016-03-14 192212"
+    run = "2016-03-14 193519"
+    viewer.graph_stream = open(("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/"
+                                "%s/complexes/reaction_graph_eventstream.json" % run))
     # print("node_grid_force before resizing:", viewer.node_grid_force, sep='\n')
     # viewer.node_grid_force.resize((2,), refcheck=False)
     # print("node_grid_force after resizing:", viewer.node_grid_force, sep='\n')
@@ -774,7 +1109,7 @@ if __name__ == '__main__':
     # if the 'interactive' flag is set, you can interact with the program via an interactive terminal (e.g ipython)
     # viewer.read_stream_and_update(None)
 
-    if sys.flags.interactive == 0:
+    if sys.flags.interactive == 0: #and False:
         app.run()
         # viewer.read_graph_stream(viewer.graph_stream)
         # pass
@@ -784,16 +1119,20 @@ if __name__ == '__main__':
         # vispy.io.write_png(filename, image)
         print("Done app.run() !")
     else:
-        events_read = True
+        test_events_read = True # and False
         n_steps = 0
-        while events_read is not False:
-            events_read = viewer.read_stream_and_update(None)
+        while test_events_read is not False:
+            test_events_read = viewer.read_stream_and_update(None)
             n_steps += 1
+        else:
+            print("\n\nStream manually exhausted, %s steps encountered.\n" % n_steps)
         viewer.read_stream_and_update(None)
         viewer.read_stream_and_update(None)
         viewer.read_stream_and_update(None)
-        print("\n\nStream manually exhausted, %s steps encountered.\n" % n_steps)
+        viewer.read_stream_and_update(None)
+        viewer.read_stream_and_update(None)
 
     print("Final node_pos:", viewer.node_pos, sep='\n')
     print("viewer.node_grid:", viewer.node_grid, sep='\n')
     print("node_pos - node_grid:", viewer.node_pos - viewer.node_grid, sep='\n')
+    print("nodeid_list for reference:", viewer.nodeid_list, sep='\n')

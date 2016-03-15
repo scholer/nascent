@@ -208,7 +208,7 @@ def main():
               # Use a reaction throttle cache, decrementing the throttle when reaction is triggered, rather than
               # calculating throttle factor in calculate_c_j using a custom exponential decreasing with Nric.
               "reaction_throttle_use_cache": True, # True: Throttle is decreased in post_reaction_processing.
-              "reaction_throttle_factor_base": 0.995, # 1.00, #0.99, # 1.00, # True: Throttle is decreased in post_reaction_processing.
+              "reaction_throttle_factor_base": 0.98, # 1.00, #0.99, # 1.00, # True: Throttle is decreased in post_reaction_processing.
               "reaction_throttle_per_complex": False, # True: Have per-reaction throttles for each complex.
               "reaction_throttle_offset": 0,
               "reaction_throttle_reset_on_temperature_change": True,
