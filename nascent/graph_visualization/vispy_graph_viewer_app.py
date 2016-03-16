@@ -89,7 +89,8 @@ from vispy.visuals.transforms import STTransform  # STTransform(scale, translati
 # MatrixTransform have generic .translate(), .rotate(), .scale() methods, applied to a generic .matrix property.
 # vispy/visuals/transforms/linear.py
 
-from nascent.graph_visualization.graph_layout import force_directed_layout, force_directed_layout_2d
+from nascent.graph_visualization.graph_layout import (
+    force_directed_layout, force_directed_layout2, force_directed_layout_2d)
 
 
 def increase_adjmatrix(adj_matrix, inc=1):
@@ -112,6 +113,9 @@ class GraphViewer():
             config.update(kwargs)
         self.n_events_processed = 0
         self.n_steps_processed = 0
+        self.n_layout_iterations_count = 0
+        # continuous_iterations: True=Keep track of iterations between calls to layout; False=Reset it for every call.
+        self.continuous_iterations = True
         self.config = config
         # setup initial width, height
         # app.Canvas.__init__(self, title='Nascent 3D Graph Viewer', keys='interactive', size=(1200, 800))
@@ -126,8 +130,9 @@ class GraphViewer():
         # 'panzoom' is great for 2D projections, but not 3D. 'turntable' is easy to use but you cannot re-center.
         # 'arcball' is advanced and the most flexible, but hard to zoom and a bit confusing.
         # 'fly' is ...
-        self.main_view.camera.up = config.get('camera.up', '+z')  # scene.TurntableCamera(elevation=30, azimuth=30, up='+z')
-        self.main_view.camera.fov = config.get('camera.fov', 40)   # default=0 (for turntable) gives orthogonal projection
+        # scene.TurntableCamera(elevation=30, azimuth=30, up='+z')
+        self.main_view.camera.up = config.get('camera.up', '+z')
+        self.main_view.camera.fov = config.get('camera.fov', 40) # default=0 (for turntable) = orthogonal projection
         self.main_view.padding = config.get('view.padding', 0)
         if camera_type == 'turntable':
             # if 'camera.azimuth' in config:
@@ -163,8 +168,9 @@ class GraphViewer():
         # edge_array: N x 2 numpy array, edge_array[N] = [i, j] connecting edge i with edge j.
         self.edge_array = np.empty((0, 2), dtype=np.uint32)
         # self.edges_pos = np.zeros((0,))  # Nope, use node_pos as edges pos.
+        ## TODO: BUG: Setting width also affects cubes (and ground): !!
         self.edges_line = scene.Line(pos=self.node_pos, connect=self.edge_array, parent=self.scene,
-                                     color='blue', width=4, method='gl')  # method='agg' or 'gl' (default)
+                                     color='blue', width=1, method='gl')  # method='agg' or 'gl' (default)
         # Also: color, width, method='gl'/'agg', antialias=False/True
         # Regarding vispy LineVisual:
         # Does not *have* to be a contiguous line, can be a collection of discrete lines. Use 'connect' to control:
@@ -194,6 +200,11 @@ class GraphViewer():
         self.force_directed_dimensions = 3   # 2 to only apply forces in xy plane
         self.force_directed_iterations_per_call = 2
         self.do_grid_calculation = True  # Set to None to detect automatically.
+        self.force_dx_factor = 0.02 # How much to move each node for a given force.
+        # Typical motion simulations uses dv = F/m*dt,  v1 = v0*dv,  dx = v*dt
+        # But we don't have persistent velocities (i.e. start and end with v=0 for every step).
+        # So we just use F*dt^2/m/4 for all particles (where force_dx_factor = dt^2/m/4)
+
 
         # Avoid re-creating a lot of numpy arrays all the time;
         # instead, reuse old ones and clear cache when the number of nodes changes:
@@ -207,33 +218,70 @@ class GraphViewer():
 
         # self.layout_method = force_directed_layout
         self.node_grid_enabled = config.get("node_grid_enabled", True)   # Set to False if you are not using node_grid.
-        # node_grid_force can be either a scalar, or a per-node N x 2 array (for N nodes, doing ):
-        self.node_grid_force = config.get("node_grid_force", np.array([1.], dtype=float))  # Disable node_grid_forces.
-        # self.node_grid_force = np.array([1.])  # Use the same node_grid force scalar constant in all directions
-        # self.node_grid_force = np.array([0.1, 1.0]) # Apply different forces in x and y:
-        # Use node_grid_force = np.array([0.2, 0.]) to only apply node_grid forces on x-axis.
+        # node_grid_force_k can be either a scalar, or a per-node N x 2 array (for N nodes, doing ):
+        # Make sure grid_k matches self.force_directed_dimensions!
+        grid_k = config.get("node_grid_force_k")  # Disable node_grid_forces.
+        if grid_k is None:
+            grid_k = np.array([1.], dtype=float) # isotropic scaling
+            grid_k = np.array([0.02, 0, 2.5]) # high in z, little in x, none in y.
+        if len(grid_k) > self.force_directed_dimensions:
+            grid_k = grid_k[:self.force_directed_dimensions]
+        self.node_grid_force_k = grid_k
+
+        # self.node_grid_force_k = np.array([1.])  # Use the same node_grid force scalar constant in all directions
+        # self.node_grid_force_k = np.array([0.1, 1.0]) # Apply different forces in x and y:
+        # Use node_grid_force_k = np.array([0.2, 0.]) to only apply node_grid forces on x-axis.
         self.node_grid_force_per_node = config.get("node_grid_force_per_node")
         # set node_grid_force_per_node=True if you want to have per-node force constants.
-        # (the primary effect is that node_grid_force will be re-sized automatically when new nodes are added).
-        # If re-assigning self.node_grid_force, make sure to update self.force_params!
+        # (the primary effect is that node_grid_force_k will be re-sized automatically when new nodes are added).
+        # If re-assigning self.node_grid_force_k, make sure to update self.force_params!
         # TODO: Consider making force_params a dict to make it easier to update, and pass force_params.values()
 
+        ## OLD FORCE PARAMS: (for the record)
+        # self.force_params = [
+        #     # scale, exponent, use_adj_matrix, use_node_grid,  F = scale * dist**exponent
+        #     ## Repulsion forces:
+        #     # [-0.1, -2, False, False],     # Repulsion force
+        #     # [-0.6, -3, False, False],     # Repulsion force
+        #     [-0.2, -2, False, False],       # Repulsion force
+        #     ## Spring forces (edges)
+        #     [0.5, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
+        #     # [0.1, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
+        #     # [self.edges_weights, 1, True, False],       # Per-edge spring force (if boolean adj_matrix)
+        #     ## Node grid pos forces:
+        #     # [self.node_grid_force_k, 1, False, True],     # node_grid force
+        #     # [np.array([1.]), 1, False, True],     # node_grid force
+        #     # [np.array([1., 0, 0]), 1, False, True],     # node_grid force in x-direction only..
+        #     # [np.array([0.1, 0, 0.4]), 1, False, True],     # node_grid force in x and z directions..
+        #     [grid_k, 1, False, True],     # node_grid force in x and z directions..
+        # ]
+        # New-style force_params with support for fluctuations
+        # dist_enum: 1=node-node, 2=node-grid, 0=do-not-use-distances
+        # mask_enum: 0=no-mask, 1=adj_matrix
+        # fluctuations: (additive, scaling) functions or None to not add fluctuations.
+        # As always, negative k = repulsive forces: F = k * d^a
+        # Nice fluctuation distributions:
+        additive = lambda shape, dim, i: 0.3*np.random.normal(size=(shape[0], dim))
+        scale1 = lambda shape, dim, i: np.random.exponential(size=(shape[0], dim))
+        # decaying scaling fluctuations: (towards 1)
+        sdecay = lambda shape, dim, i: 1 + (0.9999**i * np.random.exponential(size=(shape[0], dim)))
+        scale5 = lambda shape, dim, i: 5*np.random.exponential(size=(shape[0], dim))
         self.force_params = [
-            # scale, exponent, use_adj_matrix, use_node_grid,  F = scale * dist**exponent
-            ## Repulsion forces:
-            # [-0.1, -2, False, False],     # Repulsion force
-            # [-0.6, -3, False, False],     # Repulsion force
-            [-0.2, -2, False, False],       # Repulsion force
-            ## Spring forces (edges)
-            [0.5, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
-            # [0.1, 1, True, False],       # scalar edge spring force, use floating point adj_matrix for edge weight
-            # [self.edges_weights, 1, True, False],       # Per-edge spring force (if boolean adj_matrix)
-            ## Node grid pos forces:
-            # [self.node_grid_force, 1, False, True],     # node_grid force
-            # [np.array([1.]), 1, False, True],     # node_grid force
-            # [np.array([1., 0, 0]), 1, False, True],     # node_grid force in x-direction only..
-            # [np.array([0.1, 0, 0.4]), 1, False, True],     # node_grid force in x and z directions..
-            [np.array([0.02, 0, 2.5]), 1, False, True],     # node_grid force in x and z directions..
+            # k,  a, dist, mask, fluctuations
+            # Repulsive forces, e.g. electrostatic F = k / dist**2 == k * dist**(-2)
+            [-0.20, -2, 1, 0, None],
+            # [-0.20, -2, 1, 0, (None, sdecay)], # Scaled by randomly-fluctuating values
+            # Attractive edge forces, e.g. spring force F = k * dist
+            [0.500, +1, 1, 1, None],
+            # [0.010, -1, 1, 0, None], # "Gravity" (but longer range, F=Gmm/r, not F=Gmm/r^2)
+            # Grid forces:
+            # [grid_k, 1, 2, 0, None], # node_grid force in x and z directions..
+            [grid_k, 1, 2, 0, (None, scale5)], # node_grid force in x and z directions..
+            # [grid_k, 1, 2, 0, (additive, None)], # node_grid force in x and z directions..
+            # [grid_k, 1, 2, 0, (additive, scale)], # node_grid force in x and z directions..
+            # Adding a randomly-fluctuating scaling factor to the grid forces produces a
+            # really nice effect where nodees "look unhappy/unsettled" if they are far from their
+            # preferred grid location.
         ]
         print("force_params:", self.force_params, sep='\n')
 
@@ -292,9 +340,9 @@ class GraphViewer():
         # self._timer = app.Timer('auto', connect=self.visualize_layout, start=True)
         self.refresh_rate = 1/1000 # 0.05 # default='auto'==1/60
         self._timer = app.Timer(self.refresh_rate, connect=self.read_stream_and_update, start=True)
-        print("Timer type:", type(self._timer))
+        # print("Timer type:", type(self._timer))
         # print("Timer.events.ignore_callback_error:", self._timer.events.ignore_callback_errors)  # Doesn't work, bug.
-        print("Timer.events.ignore_callback_error:", self._timer.events._ignore_callback_errors)
+        # print("Timer.events.ignore_callback_error:", self._timer.events._ignore_callback_errors)
         # Render timer: Renders the canvas and saves to file in 2 seconds interval:
         self._render_timer = app.Timer(2.0, connect=self.render_and_save, start=False, iterations=10)
         # app.Timer.events is an EmitterGroup(EventEmitter) with three event emitters: start, stop and timeout.
@@ -513,15 +561,15 @@ class GraphViewer():
         #     self.node_pos = np.lib.pad(self.node_pos, ((0, increment), (0, 0)), mode='constant')
 
         if self.node_grid_force_per_node:
-            print("Must resize node_grid_force in-place, OR update self.force_params")
-            if len(self.node_grid_force.shape) == 1:
+            print("Must resize node_grid_force_k in-place, OR update self.force_params")
+            if len(self.node_grid_force_k.shape) == 1:
                 # A single scaler for each node, applied evenly in all directions
                 pass
-            elif len(self.node_grid_force.shape) == 2:
-                self.node_grid_force.resize(new_pos_size)
+            elif len(self.node_grid_force_k.shape) == 2:
+                self.node_grid_force_k.resize(new_pos_size)
             else:
-                raise NotImplementedError("node_grid_force_per_node is not implemented for node_grid_force of shape %s."
-                                          % self.node_grid_force.shape)
+                raise NotImplementedError("node_grid_force_per_node is not implemented for node_grid_force_k of shape %s."
+                                          % self.node_grid_force_k.shape)
 
         # Don't try to resize adj_matrix in-place; you would have to move a lot of data to keep the edges
         # between the right nodes.
@@ -625,6 +673,7 @@ class GraphViewer():
 
 
     def step_event(self, event_info):
+        """ Parse/process a single step event. """
         return event_info
 
 
@@ -679,6 +728,7 @@ class GraphViewer():
 
 
     def parse_graphstreaming_msg(self, msg):
+        """ Parse a single graphstreaming message (i.e. a JSON-formaated str). """
         return json.loads(msg)
 
 
@@ -786,11 +836,11 @@ class GraphViewer():
 
 
 
-    def parse_graphstreaming_list(self, messages):
-        """ Parse a list of graph streaming events: """
-        # {event: {identifier: attrs}}
-        for msg in messages:
-            pass
+    # def parse_graphstreaming_list(self, messages):
+    #     """ Parse a list of graph streaming events: """
+    #     # {event: {identifier: attrs}}
+    #     for msg in messages:
+    #         pass
 
 
 
@@ -798,20 +848,72 @@ class GraphViewer():
         """ Apply a single round of force-directed layout and update visuals. """
         if self.force_params:
             self.force_directed_layout() # iterations=10, dim=self.force_directed_dimensions)
+            # self.force_directed_layout_external()
         self.update_node_objs_pos()
         # time.sleep(0.1)
 
     #
     # def force_directed_layout(self, iterations=10, dim=2):
     #     """ Apply force-directed layout in two dimensions (xy plane). """
-    #     # dx = self.node_pos[:2, :] -
-    #     # force_directed_layout(pos, adj_matrix, node_grid=None, iterations=100, dim=None,
-    #     #                       force_params=None, check_params=False
-    #     # print("force_params:", self.force_params, sep='\n')
-    #     # print("node_grid:", self.node_grid, sep='\n')
-    #     force_directed_layout(self.node_pos, self.adj_matrix,
-    #                           node_grid=self.node_grid if self.node_grid_enabled else None,
-    #                           iterations=iterations, dim=dim, force_params=self.force_params)
+
+
+    def force_directed_layout_external(self, iterations=20, dim=3):
+        """
+        Use external force_directed_layout algorithm.
+        """
+        # dx = self.node_pos[:2, :] -
+        # force_directed_layout(pos, adj_matrix, node_grid=None, iterations=100, dim=None,
+        #                       force_params=None, check_params=False
+        # print("force_params:", self.force_params, sep='\n')
+        # print("node_grid:", self.node_grid, sep='\n')
+        ## New-style force-params, has dist_enum, mask_enum, fluctuations_enum
+        ## instead of
+        additive = lambda shape, dim, i: 0.2*np.random.normal(size=(shape[0], dim))
+        scale = lambda shape, dim, i: np.random.exponential(size=(shape[0], dim))
+        force_params0 = [
+            #  k,  a, dist, mask, fluctuations
+            (-0.1, -2, 1, 0, None), # Repulsion, F = k / dist**2 == k * dist**(-2)
+            (0.10, +1, 1, 1, None), # Spring force, F = k * dist
+            # (0.10, +1, 2, 0, None), # grid force (2=node-grid-dist, 0=no-mask, None=no-fluctuation)
+            ([.1, 0., 1.], +1, 2, 0, None), # grid force (2=node-grid-dist, 0=no-mask, None=no-fluctuation)
+        ]
+        # with random scaled fluctuations: (additive, scale)
+        force_params1 = [
+            #  k,  a, dist, mask, fluctuations
+            # Repulsion, F = k / dist**2 == k * dist**(-2)
+            (-0.1, -2, 1, 0, (None, scale)),
+            # Spring force, F = k * dist
+            (0.10, +1, 1, 1, (None, scale)),
+            # grid force (2:node-grid-dist, 0:no-mask, None:no-fluctuation)
+            # (0.10, +1, 2, 0, None),
+            ([.1, 0., 1.], +1, 2, 0, (None, scale)), # grid force (2=node-grid-dist, 0=no-mask, None=no-fluctuation)
+        ]
+        # with randomly added fluctuations: (additive, scale)
+        force_params2 = [
+            #  k,  a, dist, mask, fluctuations
+            # Repulsion, F = k / dist**2 == k * dist**(-2)
+            (-0.1, -2, 1, 0, (additive, None)),
+            # Spring force, F = k * dist
+            (0.10, +1, 1, 1, (additive, None)),
+            # grid force (2:node-grid-dist, 0:no-mask, None:no-fluctuation)
+            # (0.10, +1, 2, 0, None),
+            ([.1, 0., 1.], +1, 2, 0, (additive, None)), # grid force (2=node-grid-dist, 0=no-mask, None=no-fluctuation)
+        ]
+        # with randomly added fluctuations: (additive, scale)
+        force_params3 = [
+            #  k,  a, dist, mask, fluctuations
+            # Repulsion, F = k / dist**2 == k * dist**(-2)
+            (-0.1, -2, 1, 0, (additive, scale)),
+            # Spring force, F = k * dist
+            (0.10, +1, 1, 1, (additive, scale)),
+            # grid force (2:node-grid-dist, 0:no-mask, None:no-fluctuation)
+            # (0.10, +1, 2, 0, None),
+            ([.1, 0., 1.], +1, 2, 0, (additive, scale)), # grid force (2=node-grid-dist, 0=no-mask, None=no-fluctuation)
+        ]
+        force_params = force_params3
+        force_directed_layout2(self.node_pos, self.adj_matrix,
+                               node_grid=self.node_grid if self.node_grid_enabled else None,
+                               iterations=iterations, dim=dim, force_params=force_params)
 
 
 
@@ -855,15 +957,8 @@ class GraphViewer():
         force_params = self.force_params
         dim = self.force_directed_dimensions
 
-        iterations = self.force_directed_iterations_per_call
         do_grid_calculation = self.do_grid_calculation
 
-        # if force_params is None:
-        #     force_params = [
-        #         (-0.1, -2, False, False),    # Repulsion, F = k / dist**2 == k * dist**(-2)
-        #         (0.05,  1, True, False),     # Spring force, F = k * dist
-        #         (0.05, -1, False, False),   # "Gravity" (but long range, F=Gmm/r, not F=Gmm/r^2)
-        #     ]
         if check_params:
             if any(isinstance(p, dict) for p in force_params):
                 force_params = [(p['k'], p['a'], p['use_adj_matrix'], p['use_grid']) if isinstance(p, dict) else p
@@ -871,7 +966,8 @@ class GraphViewer():
         if dim is None:
             dim = pos.shape[1]
         elif isinstance(dim, int):
-            pos = pos[:, :dim]
+            if dim < pos.shape[1]:
+                pos = pos[:, :dim]
             if node_grid is not None:
                 node_grid = node_grid[:, :dim]
         elif isinstance(dim, tuple) and len(dim) == 2:
@@ -879,9 +975,9 @@ class GraphViewer():
             if node_grid is not None:
                 node_grid = node_grid[:, dim[0]:dim[1]]
         else:
-            pos = pos[:, dim[0]:dim[1]]
+            pos = pos[:, dim]
             if node_grid is not None:
-                node_grid = node_grid[:, dim[0]:dim[1]]
+                node_grid = node_grid[:, dim]
         if node_grid is None:
             do_grid_calculation = False
         elif do_grid_calculation is None:
@@ -910,20 +1006,23 @@ class GraphViewer():
         else:
             F_sum = np.empty_like(pos)
 
-        # Grid stuff:
-        # TODO: Make a short-circuit while loop that doesn't check "if use_grid" for every iteration!
         if do_grid_calculation:
+            # Initialize data structures for grid-force calculations:
             rg = np.empty_like(pos)
             erg = np.empty_like(rg)
             grid_dist = np.empty_like(rg.shape[0])
 
-
-        while iterations > 0:
-            iterations -= 1
-            # Coordinate differences, only the first two (x, y) coordinates:
-            # TODO: Use a persistent "r", "er", "dist", "F_r", "F_s", etc datastructures and update in-place.
+        if self.continuous_iterations:
+            it = self.n_layout_iterations_count
+            it_end_at = self.force_directed_iterations_per_call + self.n_layout_iterations_count
+        else:
+            it = 0
+            it_end_at = self.force_directed_iterations_per_call
+        while it < it_end_at:
+            it += 1
+            # Coordinate differences:
             r[:] = pos[:, np.newaxis, :] - pos[np.newaxis, :, :]
-            # Calculate scalar distances and normalized node-to-node directionality unit vector
+            # Calculate node-node distances and normalized node-to-node directionality unit vector
             dist = (r**2).sum(axis=2)**0.5     # pair-wise distance between all nodes
             dist[dist == 0] = 1.                # Prevent division-by-zero errors
             er[:] = r / dist[..., np.newaxis]    # normalized node-node directionality vector
@@ -934,73 +1033,36 @@ class GraphViewer():
                 grid_dist[grid_dist == 0] = 1.                # Prevent division-by-zero errors
                 erg[:] = rg / grid_dist[..., np.newaxis]    # normalized node-node directionality vector
 
-
-            # # Repulsive force:  ke*(q1q2)/r^2
-            # # all points push away from each other
-            # # F_r = 0.02 / dist[..., np.newaxis]**4 * er  # Direct calculation+assignment
-            # k_r = -0.1
-            # F_r = k_r / dist[..., np.newaxis]**2 * er  # Direct calculation+assignment
-            #
-            # # Attractive spring force:
-            # # connected points pull toward each other with hookean force: F = ks*x,  ks = spring force constant
-            # # (Note: pulsed force may help the graph to settle faster)
-            # ks = 0.05
-            # #ks = 0.05 * 5 ** (np.sin(i/20.) / (i/100.))
-            # #ks = 0.05 + 1 * 0.99 ** i  # Exponentially decaying force to a constant value
-            # # ks = 0.5 + 1 * 0.999 ** iterations  # Exponentially decaying force to a constant value
-            # F_spring = ks * dist[..., np.newaxis] * adj_matrix[:, :, np.newaxis] * er
-            # # F_spring = ks * dist[..., np.newaxis]**2 * self.adj_matrix[:, :, np.newaxis] * er
-            #
-            # # Gravity force: F = G * m1m2/r^2 * dre,
-            # # where dre is normalized node-node directionality vector and G is gravitational constant
-            # # Edit: Make sure gravity and repulsion have different distance dependencies.
-            # Gm1m2 = 0.05
-            # F_g = Gm1m2 * er / dist[..., np.newaxis] # dist[..., np.newaxis]**2
-            #
-            for i, (k, a, use_edges, use_grid) in enumerate(force_params):
-                # Should we sum here or later? I.e. should we have F[i,:,:] be a the "total force" from all
-                # nodes on each node, or should we keep the details and have F[i,:,:,:] ?
-                if use_grid:
-                    F[i, :, :] = k * grid_dist[..., np.newaxis]**a * erg
-                elif use_edges:
-                    F[i, :, :] = k * (dist[..., np.newaxis]**a * adj_matrix[:, :, np.newaxis] * er).sum(axis=0)
-                    # if a == 1 and k == ks:
-                    #     assert np.isclose(F[i, :, :], F_spring.sum(axis=0), rtol=1e-4).all()
-                    # else:
-                    #     print("a == %s and k == %s" % (a, k))
+            # New-style force_params with fluctuations support:
+            for Fidx, (k, a, dist_enum, mask_enum, fluctuations) in enumerate(force_params):
+                # F[<type>, <node>, <force vector>]
+                if dist_enum == 0:
+                    # Do not use any distance dependence, only e.g. thermal fluctuations:
+                    F[Fidx, :, :] = k
+                elif dist_enum == 2:
+                    # Use grid: grid_dist and erg unit vector
+                    F[Fidx, :, :] = k * grid_dist[..., np.newaxis]**a * erg
                 else:
-                    F[i, :, :] = k * (dist[..., np.newaxis]**a * er).sum(axis=0)
-                    # if a == -2 and k == k_r:
-                    #     assert np.isclose(F[i, :, :], F_r.sum(axis=0), rtol=1e-4).all()
-                    # else:
-                    #     print("a == %s and k == %s" % (a, k))
+                    # Use node-node distances (default): dist and er unit vector
+                    if mask_enum == 1:
+                        # Use adj_matrix mask:
+                        F[Fidx, :, :] = k * (dist[..., np.newaxis]**a * adj_matrix[:, :, np.newaxis] * er).sum(axis=0)
+                    else:
+                        # No mask (default):
+                        F[Fidx, :, :] = k * (dist[..., np.newaxis]**a * er).sum(axis=0)
+                if fluctuations:
+                    # F = fluc_scale * (k dist^a + fluc_additive)
+                    additive, scaling = fluctuations
+                    if additive:
+                        F[Fidx, :, :] += additive(pos.shape, dim, it)
+                    if scaling:
+                        F[Fidx, :, :] *= scaling(pos.shape, dim, it)
 
 
-
-
-            # # All forces from all particles:
-            # F_all = F_spring + F_r + F_g
-            # # Make sure points do not exert force on themselves:
-            # F_all[np.arange(npts), np.arange(npts)] = 0
-
-            # dv = F/m*dt,  v1 = v0*dv,  dx = v*dt
-            # But we don't have persistent velocities (i.e. start and end with v=0 for every step).
-            # So we just use F*dt^2/m/4 for all particles, and say that dt^2/m/4 is some constant
-            c_dt2m = 0.01 # 0.09   # In units of length/force
-            # F_all_sum = F_all.sum(axis=0)   # Sum all contributions from all other particles
-            # print(F_sum)
-            F_sum = F.sum(axis=0)
-            # assert F_all_sum.shape == F_sum.shape
-            # if force_params == [
-            #     (-0.1, -2, False, False),    # Repulsion, F = k / dist**2 == k * dist**(-2)
-            #     ( 0.05, 1, True, False),     # Spring force, F = k * dist
-            # ]:
-            #     assert np.isclose(F_sum, F.sum(axis=0), rtol=1e-4).all()
-
-            # Make sure no force is "too high":
-            dx = np.clip(F_sum, -3, 3) * c_dt2m
+            # Calculate displacement, making sure forces are not excessively high:
+            dx = np.clip(F.sum(axis=0), -3, 3) * self.force_dx_factor
             pos[:, :] += dx
-
+        self.n_layout_iterations_count += self.force_directed_iterations_per_call
 
 
     ## OTHER THINGS:
@@ -1049,8 +1111,7 @@ class GraphViewer():
 
 
 
-if __name__ == '__main__':
-    viewer = GraphViewer()
+def run_tests():
     # self._timer = app.Timer('auto', connect=self.read_stream_and_update, start=False)
 
     # viewer.add_node(1, {'color': '#ff660033', 'pos': [3, 2, 0.5]})
@@ -1090,24 +1151,49 @@ if __name__ == '__main__':
 {"ae": {"5-3": {"source": "5", "target": "3", "weight": 1}}}
 {"ae": {"1-6": {"source": "1", "target": "6", "weight": 1}}}
     """)
-    # viewer.graph_stream = test_stream
+    # graph_stream = test_stream
 
-    # viewer.graph_stream = open("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/2016-03-14 140940/complexes/reaction_graph_eventstream.txt")
-    # viewer.graph_stream = open("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/2016-03-14 155917/complexes/reaction_graph_eventstream.txt")
     run = "2016-03-14 161538"
     run = "2016-03-14 182118"
     run = "2016-03-14 184805"
     run = "2016-03-14 192212"
     run = "2016-03-14 193519"
-    viewer.graph_stream = open(("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/"
-                                "%s/complexes/reaction_graph_eventstream.json" % run))
-    # print("node_grid_force before resizing:", viewer.node_grid_force, sep='\n')
-    # viewer.node_grid_force.resize((2,), refcheck=False)
-    # print("node_grid_force after resizing:", viewer.node_grid_force, sep='\n')
-    # viewer.node_grid_force[:] = [0.5, 0.8] # Only apply node_grid force in the x-direction (on x-coordinates).
-    # print("node_grid_force after assignment:", viewer.node_grid_force, sep='\n')
+    graph_stream = open(("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/"
+                         "%s/complexes/reaction_graph_eventstream.json" % run))
+    ## How long does it take to read the whole file and decode it, line by line?
+    t_start = system_time()
+    print("Test-reading and parsing whole file stream, line by line....")
+    n_read = 0
+    for i, line in enumerate(graph_stream):
+        msg = line.strip()
+        if msg and msg[0] != "#":
+            # viewer.parse_graphstreaming_msg(line)
+            data = json.loads(msg)
+            n_read += 1
+            print(data)
+        print("%s lines read and parsed..." % (i+1), end='\r')
+    t_end = system_time()
+    print("\n %s lines read and parsed line by line in %s seconds..." % (n_read, t_end-t_start))
+    ## Takes only 0.06 seconds to read 6000 lines..
+    ## if we did that at 60 reads per second it would be 100 seconds..
+    answer = input("Press any key to continue...")
+    if answer in ('q', 'n'):
+        sys.exit()
+
+    graph_stream.seek(0)
+
+
+    # print("node_grid_force_k before resizing:", viewer.node_grid_force_k, sep='\n')
+    # viewer.node_grid_force_k.resize((2,), refcheck=False)
+    # print("node_grid_force_k after resizing:", viewer.node_grid_force_k, sep='\n')
+    # viewer.node_grid_force_k[:] = [0.5, 0.8] # Only apply node_grid force in the x-direction (on x-coordinates).
+    # print("node_grid_force_k after assignment:", viewer.node_grid_force_k, sep='\n')
     # if the 'interactive' flag is set, you can interact with the program via an interactive terminal (e.g ipython)
     # viewer.read_stream_and_update(None)
+
+
+    viewer = GraphViewer()
+    viewer.graph_stream = graph_stream
 
     if sys.flags.interactive == 0: #and False:
         app.run()
@@ -1136,3 +1222,8 @@ if __name__ == '__main__':
     print("viewer.node_grid:", viewer.node_grid, sep='\n')
     print("node_pos - node_grid:", viewer.node_pos - viewer.node_grid, sep='\n')
     print("nodeid_list for reference:", viewer.nodeid_list, sep='\n')
+
+
+if __name__ == '__main__':
+    run_tests()
+
