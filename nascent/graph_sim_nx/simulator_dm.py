@@ -219,6 +219,7 @@ class DM_Simulator(Simulator):
               % (n_done, sysmgr.temperature, sysmgr.system_time))
 
         ## Post-simulation stuff:
+        self.reactionmgr.reaction_graph.close_all_dispatchers()
         self.reactionmgr.save_reaction_graph(fnpostfix="_endsim")
         self.stats_writer.write_post_simulation_stats(fnpostfix="_endsim")
         self.stats_writer.save_reaction_graph()

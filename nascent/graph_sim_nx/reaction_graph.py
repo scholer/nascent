@@ -65,8 +65,10 @@ class ReactionGraph(DiGraph):
         self.params = params  # or "config" ?
         if 'reaction_graph_default_attrs' in params:
             self.graph.update(params['reaction_graph_default_attrs'])
-        # File with changes to the reaction graph, e.g. new nodes/edges and node/edge updates:
-        self.endstates_by_reaction = {}  # [startstate][(reaction_spec_pair, reaction_attr)] = endstate
+
+        # A reaction can have multiple end-state when a complex is being split up:
+        # (edge_attrs should be the same for edges belonging to the same reaction for intracomplex reactions
+        self.endstates_by_reaction = {}  # [startstate][(reaction_spec_pair, reaction_attr)] = [list of endstates]
         self.endstates_by_reaction[0] = defaultdict(list) # Also adding the "null" node
         self.reverse_reaction_key = {} # get reaction edge key for the opposite direction.
         self.tau_cum_max = 0
@@ -80,6 +82,7 @@ class ReactionGraph(DiGraph):
             assert os.path.isdir(self.reaction_graph_complexes_directory)
 
         self.dispatchers = []
+        # File with changes to the reaction graph, e.g. new nodes/edges and node/edge updates:
         self.reaction_graph_events_file = params.get('reaction_graph_events_file')
         if self.reaction_graph_events_file is None and self.reaction_graph_complexes_directory is not None:
             self.reaction_graph_events_file = os.path.join(self.reaction_graph_complexes_directory,
@@ -106,11 +109,11 @@ class ReactionGraph(DiGraph):
         elif attr:
             attr_dict.update(attr)
         # First dispatch
-        attr_dict['dH_dS'] = dHdS
+        attr_dict['dHdS'] = dHdS
         attr_dict['encounters'] = 1
         for dispatcher in self.dispatchers:
             dispatcher.add_node(n, attr_dict)
-        attr_dict['dH_dS_count'] = {dHdS: 1}
+        attr_dict['dHdS_count'] = {dHdS: 1}
         # MultiGraph, with edges keyed by (reacted_spec_pair, reaction_attr):
         # reaction_graph.adj[source][target][(reacted_spec_pair, reaction_attr)] = eattr
         #self.reaction_graph.add_node(target_state, node_attrs)
@@ -129,9 +132,9 @@ class ReactionGraph(DiGraph):
         # Using Counter is fast, but doesn't work well when we want to serialize the graph, so using dict:
         if dHdS is not None:
             try:
-                self.node[n]['dH_dS_count'][dHdS] += 1
+                self.node[n]['dHdS_count'][dHdS] += 1
             except KeyError:
-                self.node[n]['dH_dS_count'][dHdS] = 1
+                self.node[n]['dHdS_count'][dHdS] = 1
         if attr_dict is None:
             attr_dict = attr
         elif attr:
@@ -145,7 +148,7 @@ class ReactionGraph(DiGraph):
     def add_edge(self, source, target, attr_dict=None, **attr):
         """
         Update a strand state. If arriving to strand state node from a previous complex
-        and you would like to update the dH_dS_count for the strand state (which should both be 0 for the free state),
+        and you would like to update the dHdS_count for the strand state (which should both be 0 for the free state),
         then you can give a complex as well.
         """
         # self.node[n]['encounters'] += 1  # could also simply be 'size'?
@@ -164,7 +167,7 @@ class ReactionGraph(DiGraph):
     def change_edge(self, source, target, attr_dict=None, **attr):
         """
         Update a strand state. If arriving to strand state node from a previous complex
-        and you would like to update the dH_dS_count for the strand state (which should both be 0 for the free state),
+        and you would like to update the dHdS_count for the strand state (which should both be 0 for the free state),
         then you can give a complex as well.
         """
         # self.node[n]['encounters'] += 1  # could also simply be 'size'?
@@ -184,10 +187,12 @@ class ReactionGraph(DiGraph):
         for dispatcher in self.dispatchers:
             dispatcher.step(step_time)
 
-    def close_all_dispatchers(self):
+    def close_all_dispatchers(self, clear=True):
         """ Loop over all dispatchers and close them. """
         for dispatcher in self.dispatchers:
             dispatcher.close()
+        if clear:
+            self.dispatchers.clear() # pylint: disable=E1101
 
 
 
@@ -433,7 +438,7 @@ def graph_state_partitions(g, T, update=False, unit='R'):
     :update:    If True, will update graph nodes with result.
     :unit:      The units of dH and dS. Currently only units of R*K and R are supported.
     """
-    dHdS = {node: nattr.get('dH_dS_first', (0.0, 0.0)) for node, nattr in g.node.items()}
+    dHdS = {node: nattr.get('dHdS_first', (0.0, 0.0)) for node, nattr in g.node.items()}
     dG = {node: dH - T*dS for node, (dH, dS) in dHdS.items()}
     # Universe entropy, dS_uni = dS_surroundings + dS_system, in units of R:
     dSuni_R = {node: dS-dH/T for node, (dH, dS) in dHdS.items()}

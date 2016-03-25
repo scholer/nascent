@@ -413,10 +413,10 @@ class StatsWriter():
                 "%s" % len(cmplx.strands), "%s" % len(list(cmplx.domains())),
                 "%s" % len(cmplx.hybridized_pairs), "%s" % len(list(cmplx.stacked_pairs)),
                 "%0.04f" % cmplx.energy_total_dHdS[0], "%0.04f" % cmplx.energy_total_dHdS[1],
-                "%0.02f" % cmplx.energies_dHdS[0]['volume'], "%0.03f" % cmplx.energies_dHdS[1]['volume'],
-                "%0.02f" % cmplx.energies_dHdS[0]['shape'], "%0.03f" % cmplx.energies_dHdS[1]['shape'],
-                "%0.02f" % cmplx.energies_dHdS[0]['hybridization'], "%0.03f" % cmplx.energies_dHdS[1]['hybridization'],
-                "%0.02f" % cmplx.energies_dHdS[0]['stacking'], "%0.03f" % cmplx.energies_dHdS[1]['stacking'],
+                "%0.02f" % cmplx.energies_dHdS['volume'][0],        "%0.03f" % cmplx.energies_dHdS['volume'][1],
+                "%0.02f" % cmplx.energies_dHdS['shape'][0],         "%0.03f" % cmplx.energies_dHdS['shape'][1],
+                "%0.02f" % cmplx.energies_dHdS['hybridization'][0], "%0.03f" % cmplx.energies_dHdS['hybridization'][1],
+                "%0.02f" % cmplx.energies_dHdS['stacking'][0],      "%0.03f" % cmplx.energies_dHdS['stacking'][1],
             ))
             self.stats_complex_state_file.write(line+"\n")
 
@@ -478,7 +478,7 @@ class StatsWriter():
         systime = self.sysmgr.system_time
         output_funcs = {method: getattr(nx, "write_"+method)
                         for method in ("yaml", "edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek")}
-        output_funcs['png'] = draw_graph_and_save
+        # output_funcs['png'] = draw_graph_and_save  # save reaction graph to png using e.g. graphviz
         if not os.path.exists(self.reaction_graph_output_directory):
             os.makedirs(self.reaction_graph_output_directory)
         if not os.path.isdir(self.reaction_graph_output_directory):
@@ -490,8 +490,8 @@ class StatsWriter():
             try:
                 output_funcs[ext](g, path)
             except Exception as e:
-                print("\nStatsManager: Error saving reaction graph using %s(%s, %s)" % (output_funcs[ext], g, path))
-                print(e)
+                print("\nStatsManager: Error saving reaction graph using %r(%r, %r)" % (output_funcs[ext], g, path))
+                print(" - exception type and msg:", type(e), e)
 
 
 

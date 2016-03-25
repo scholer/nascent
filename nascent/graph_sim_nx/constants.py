@@ -25,6 +25,7 @@ Package-wide constants and enumerations.
 
 from __future__ import absolute_import, print_function, division
 from math import pi
+from collections import namedtuple
 
 
 PHOSPHATEBACKBONE_INTERACTION = 'b'     # 1, b, pb, p, backbone,
@@ -56,6 +57,15 @@ interactions_dict = {}
 for i, interaction in enumerate(interactions):
     interactions_dict[i] = interaction
     interactions_dict[interaction] = interaction
+
+## ReactionAttrs:
+ReactionAttrs = namedtuple('ReactionAttrs', ['reaction_type', 'is_forming', 'is_intra'])
+RA_HYB_INTRA = ReactionAttrs(HYBRIDIZATION_INTERACTION, True, True)
+RA_HYB_INTER = ReactionAttrs(HYBRIDIZATION_INTERACTION, True, False)
+RA_DEHYB_INTRA = ReactionAttrs(HYBRIDIZATION_INTERACTION, False, True)
+RA_STACK_INTRA = ReactionAttrs(STACKING_INTERACTION, True, True)
+RA_STACK_INTER = ReactionAttrs(STACKING_INTERACTION, True, False)
+RA_STACK_INTRA = ReactionAttrs(STACKING_INTERACTION, False, True)
 
 
 

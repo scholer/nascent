@@ -16,7 +16,7 @@
 ##    You should have received a copy of the GNU Affero General Public License
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-# pylint: disable=C0103
+# pylint: disable=C0103,W0142
 
 """
 
@@ -47,7 +47,7 @@ import networkx as nx
 from pprint import pprint
 from functools import wraps
 import pdb
-# import numpy as np
+import numpy as np
 
 # Relative imports
 from .connected_multigraph import ConnectedMultiGraph
@@ -132,13 +132,15 @@ class Complex(nx.MultiDiGraph):
     Note: We are currently relying on Complex being a *directed* MultiDiGraph
     for e.g. stacking_edges() where we rely on stacking interactions being
     *from* the 5' upstream domain *to* the 3' downstream domain and guaranteed to not be the other way around.
-    (Although I'm also maintaining the independent self.stacked_pairs which has the same content..)
+    This is only needed because complex is a domain-level graph and would not be needed for a DomainEnd-level graph.
+    (I'm also maintaining the independent self.stacked_pairs which has the same content..)
+    TODO: Consolidate use of graph vs stacked_pairs/etc for storing interaction information!
 
     It might be a lot simpler to have a DomainEnd graph as the basis...
 
     Discussion: How to generate proper state fingerprints?
     """
-    def __init__(self, data=None, strands=None, origin="o", reaction_deque_size=5): #, reaction_spec_pair=None):
+    def __init__(self, data=None, strands=None, origin="o", reaction_deque_size=1000): #, reaction_spec_pair=None):
         self.cuid = next(make_sequential_id)
         self.uuid = next(sequential_uuid_gen)   # Universally unique id; mostly used for debugging.
         super(Complex, self).__init__(data=data, cuid=self.cuid)
@@ -177,6 +179,43 @@ class Complex(nx.MultiDiGraph):
         # self.hybridized_domains = set() # set of frozenset({dom1, dom2}) sets, specifying which domains are hybridized.
         self.hybridized_pairs = set() # set of domain pairs: frozenset({dom1, dom2})
         self.stacked_pairs = set()    # set of domain two-tuples. (5p-domain, 3p-domain)
+
+        ### Complex energy: ###
+        # Includes: Volume energies (for every bi-molecular reaction), Shape/Loop energy and of course,
+        # stacking- and hybridization energies. For each, we have both dH and dS.
+        # self.energies_dHdS = {'volume': [0, 0], 'shape': [0, 0],
+        #                       'stacking': [0, 0], 'hybridization': [0, 0]}
+        # Enthalpies in self.energies_dHdS[0], entropies in self.energies_dHdS[1]
+        # self.energies_dHdS = [{'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0},
+        #                       {'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0}]
+        # Ordered by contribution then enthalpy/entropy:
+        self.energies_dHdS = {'volume': [0., 0.], 'shape': [0., 0.], 'stacking': [0., 0.], 'hybridization': [0., 0.]}
+        # Sum with:[sum(vals) for vals in zip(*cmplx.energies_dHdS.values())]
+
+        self.energy_total_dHdS = [0, 0]
+        # energies_dHdS = np.array([(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)],
+        #     dtype=[('volume', float), ('shape', float), ('stacking', float), ('hybridization', float)])
+        # Edit: numpy's "structured array" is almost useless. Use ndarray if you want speed.
+        # energies_dHdS = np.ndarray((4,2))  # energies_dHdS[<contribution_idx>, <dH or dS>]
+
+        ## Per-interaction energies:
+        # self.volume_energies = {}  # strand: (dH=0, dS) # Edit: Just asserting that dS_vol * n_strands = dS_vol_total
+        # self.volume_energy = # better to just use energies_dHdS['volume'] ?
+        ## TODO: Consolidate whether you are using the complex graph to store interactions or per-interaction-type dicts
+        ## Note: You have a global domainend system graph which you could also use to store energies...
+        self.hybridization_energies = {} # frozenset({dom1, dom2}): (dH, dS)   # Same as self.hybridized_pairs
+        self.stacking_energies = {} # frozenset((h1end3p, h2end5p), (h1end3p, h2end5p)): (dH, dS) # self.stacked_pairs
+        self.loop_energies = {} # loopid: (dH, dS)
+        self.energy_contributions = {'hybridization': self.hybridization_energies,
+                                     'stacking': self.stacking_energies,
+                                     'shape': self.loop_energies,
+                                     # 'volume': self.volume_energies,
+                                    }
+        # Note: Above energy contributions keys are instances, not fingerprints. Do not use in reaction graph.
+
+        ## TODO: Use numpy arrays (or recarrays) for storing energies to make calculations easier.
+
+
         ## TODO: Is the above sufficiently unique? Consider replacing with a DomainEnd approach below:
         # self.stacked_domain_end_pairs = set()
         # self.hybridized_domain_ends = set()  # Could probably just be hybridized_domains
@@ -196,11 +235,11 @@ class Complex(nx.MultiDiGraph):
         self._historic_strands = []
         self._historic_fingerprints = [0]
         # edit: deque are not good for arbitrary access, using a list
-        self.reaction_deque = deque([0], maxlen=reaction_deque_size)
+        self.reaction_deque = deque(maxlen=reaction_deque_size) # deque with... (reaction_pair, reaction_attr)?
         #self.reaction_deque = [0]    # deque(maxlen=reaction_deque_size)
         # self.reaction_deque_size = reaction_deque_size
         self.reaction_invocation_count = Counter()  # maps reaction_key => Number of times that reaction has occured.
-        self.reaction_throttle_cache = {}
+        self.reaction_throttle_cache = {} # For per-complex throttling
         self.previous_reaction_attrs = {}
         self.N_strand_changes = 0
         self.icid_radius = 5
@@ -274,19 +313,6 @@ class Complex(nx.MultiDiGraph):
         self.helix_bundles = []
         self.helix_bundle_by_helix_idx = {}  # helix_idx:
 
-        ### Complex energy: ###
-        # Includes: Volume energies (for every bi-molecular reaction), Shape/Loop energy and of course,
-        # stacking- and hybridization energies. For each, we have both dH and dS.
-        # self.energies_dHdS = {'volume': [0, 0], 'shape': [0, 0],
-        #                       'stacking': [0, 0], 'hybridization': [0, 0]}
-        # Enthalpies in self.energies_dHdS[0], entropies in self.energies_dHdS[1]
-        self.energies_dHdS = [{'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0},
-                              {'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0}]
-        self.energy_total_dHdS = [0, 0]
-        # energies_dHdS = np.array([(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)],
-        #     dtype=[('volume', float), ('shape', float), ('stacking', float), ('hybridization', float)])
-        # Edit: numpy's "structured array" is almost useless. Use ndarray if you want speed.
-
 
         ### Keeping track of loops: ###
         # Dict with loops. Keyed by LoopID ? Maybe a set instead?
@@ -353,6 +379,20 @@ class Complex(nx.MultiDiGraph):
         # (^^ Note: I'm not yet sure whether stacking interactions are part of the main complex graph...)
         # Note that stacking is directional.
         # Also, "5p_domain" is the domain at the 5' end of the interface, which is STACKING USING ITS 3' END.
+
+    @property
+    def volume_energy(self):
+        # return (self.energies_dHdS[0]['volume'], self.energies_dHdS[1]['volume'])
+        return self.energies_dHdS['volume']
+
+    @property
+    def volume_entropy(self):
+        # return self.energies_dHdS[1]['volume']
+        return self.energies_dHdS['volume'][1]
+
+    @volume_entropy.setter
+    def volume_entropy(self, entropy):
+        self.energies_dHdS['volume'][1] = entropy
 
 
     # def add_domain(self, domain, update_graph=False):
@@ -474,11 +514,14 @@ class Complex(nx.MultiDiGraph):
 
 
     # @state_should_change
-    def remove_strands(self, strands, update_graph=False, update_edge_pairs=True):
+    def remove_strands(self, strands, update_graph=False, update_edge_pairs=True, update_energies=True):
         """ Strands must be a set. """
         # printd("%r: Removing strands %s..." % (self, strands))
         # # self.history.append("remove_strands: Removing strands %s (update_graph=%s)" % (strands, update_graph))
-        all_removed_hybridization_pairs, all_removed_stacking_pairs = set(), set()
+        # all_removed_hybridization_pairs, all_removed_stacking_pairs = set(), set()
+        removed_hybridization_energy, removed_stacking_energy = {}, {}
+        removed_volume_energy, removed_loops, removed_loop_energy = {}, {}, {}
+        ## TODO: Loop removal not implemented
         for strand in strands:
             self.strands_by_name[strand.name].remove(strand)
             self.strand_species_counter[strand.name] -= 1
@@ -498,23 +541,40 @@ class Complex(nx.MultiDiGraph):
                     obsolete_stacking_pairs = {pair for pair in self.stacked_pairs if domain in pair}
                     self.hybridized_pairs -= obsolete_hybridization_pairs
                     self.stacked_pairs -= obsolete_stacking_pairs
-                    all_removed_hybridization_pairs |= obsolete_hybridization_pairs
-                    all_removed_stacking_pairs |= obsolete_stacking_pairs
+                    # all_removed_hybridization_pairs |= obsolete_hybridization_pairs
+                    # all_removed_stacking_pairs |= obsolete_stacking_pairs
+                    for pair in obsolete_hybridization_pairs:
+                        removed_hybridization_energy = self.hybridization_energies[pair]
+                        del self.hybridization_energies[pair]
+                    for pair in obsolete_stacking_pairs:
+                        removed_stacking_energy = self.stacking_energies[pair]
+                        del self.stacking_energies[pair]
             if update_graph:
                 # strand is also a (linear) graph of domains:
                 self.remove_nodes_from(strand)
                 # self.ends5p3p_graph.remove_nodes_from(strand.ends5p3p_graph)
                 # self.strand_graph.remove_node(strand)
+            # removed_volume_energy[strand] = self.volume_energies[strand]
+            # del self.volume_energies[strand]
+        # Edit: A complex cannot know the volume energy in general, but it can guess using:
+        self.volume_entropy = self.volume_entropy*((len(self.strands)-len(strands)-1)/(len(self.strands)-1))
         if not isinstance(strands, set):
             strands = set(strands)
         self.strands -= strands
         self._historic_strands.append(sorted(self.strands, key=lambda s: (s.name, s.suid)))
         self.N_strand_changes += 1
-        return all_removed_hybridization_pairs, all_removed_stacking_pairs
+
+        ## TODO: Remove loops (and calculate energy)
+        # return all_removed_hybridization_pairs, all_removed_stacking_pairs
+        return removed_hybridization_energy, removed_stacking_energy, removed_loop_energy, removed_loops
 
 
     # @state_should_change
-    def add_hybridization_edge(self, domain_pair):
+    def add_hybridization_edge(self, domain_pair, hyb_energy=None):
+        """
+        Add a hybridization edge to the graph.
+        If hyb_energy is provided, also add an entry to hybridization_energies.
+        """
         # self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
         domain1, domain2 = domain_pair
         self.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION, direction=DIRECTION_SYMMETRIC)
@@ -528,6 +588,8 @@ class Complex(nx.MultiDiGraph):
         #     self._hybridization_fingerprint = hash(hybridized_domain_name_pairs)
         self._hybridization_fingerprint = None
         self._state_fingerprint = None
+        if hyb_energy:
+            self.hybridization_energies[frozenset(domain_pair)] = hyb_energy
 
     # @state_should_change
     def remove_hybridization_edge(self, domain_pair):
@@ -539,9 +601,14 @@ class Complex(nx.MultiDiGraph):
         self.hybridized_pairs.remove(frozenset(domain_pair))
         self._hybridization_fingerprint = None
         self._state_fingerprint = None
+        if not isinstance(domain_pair, frozenset):
+            domain_pair = frozenset(domain_pair)
+        if domain_pair in self.hybridization_energies:
+            del self.hybridization_energies[domain_pair]
+
 
     # @state_should_change
-    def add_stacking_edge(self, stacking_pair):
+    def add_stacking_edge(self, stacking_pair, stacking_energy=None):
         """
         Stacking pair must be tuple ((h1end3p, h2end5p), (h2end3p, h1end5p))
         or frozenset((h1end3p, h2end5p), (h2end3p, h1end5p)).
@@ -557,6 +624,9 @@ class Complex(nx.MultiDiGraph):
         self.stacked_pairs.add((h2end3p.domain, h2end5p.domain))
         self._stacking_fingerprint = None
         self._state_fingerprint = None
+        if stacking_energy:
+            self.stacking_energies[frozenset(stacking_pair)] = stacking_energy
+
 
     # @state_should_change
     def remove_stacking_edge(self, stacking_pair):
@@ -573,8 +643,14 @@ class Complex(nx.MultiDiGraph):
         self.stacked_pairs.remove((h2end3p.domain, h2end5p.domain))
         self._stacking_fingerprint = None
         self._state_fingerprint = None
+        if not isinstance(stacking_pair, frozenset):
+            stacking_pair = frozenset(stacking_pair)
+        if stacking_pair in self.stacking_energies:
+            del self.stacking_energies[stacking_pair]
 
-    def update_complex_energy(self, dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume):
+
+    def update_complex_energy(self, dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume,
+                              reaction_attr, reacted_pair):
         # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
         # use result['case'] to determine if the volume energy of the complex is changed.
         # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
@@ -603,19 +679,76 @@ class Complex(nx.MultiDiGraph):
         #     # IntER-strand/complex reaction; Two strands/complexes coming together or splitting up.
         #     cmplx.energies_dHdS[1]['volume'] += dS_volume
         if dH_hyb:
-            self.energies_dHdS[0]['hybridization'] += dH_hyb
-            self.energies_dHdS[1]['hybridization'] += dS_hyb
+            assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
+            # We group energies_dHdS first by enthalpy/entropy, then by contribution type
+            # because then it's easier to summarize total enthalpy/entropy.
+            # self.energies_dHdS[0]['hybridization'] += dH_hyb
+            # self.energies_dHdS[1]['hybridization'] += dS_hyb
+            self.energies_dHdS['hybridization'][0] += dH_hyb
+            self.energies_dHdS['hybridization'][1] += dS_hyb
+            if reacted_pair:
+                if reaction_attr.is_forming:
+                    self.hybridization_energies[reacted_pair] = (dH_hyb, dS_hyb)
+                else:
+                    del self.hybridization_energies[reacted_pair]
         if dH_stack:
-            self.energies_dHdS[0]['stacking'] += dH_stack
-            self.energies_dHdS[1]['stacking'] += dS_stack
+            assert reaction_attr.reaction_type is STACKING_INTERACTION
+            self.energies_dHdS['stacking'][0] += dH_stack
+            self.energies_dHdS['stacking'][1] += dS_stack
+            if reacted_pair:
+                if reaction_attr.is_forming:
+                    self.stacking_energies[reacted_pair] = (dH_stack, dS_stack)
+                else:
+                    del self.stacking_energies[reacted_pair]
         if dS_shape:
-            self.energies_dHdS[1]['shape'] += dS_shape
+            assert reaction_attr.is_intra is True
+            self.energies_dHdS['shape'][1] += dS_shape
+            # Need to update contributions from all loops... better to just keep them separate...
         if dS_volume:
-            self.energies_dHdS[1]['volume'] += dS_volume
+            assert reaction_attr.is_intra is False or reaction_attr.is_forming is False
+            self.energies_dHdS['volume'][1] += dS_volume
+            assert (int(self.energies_dHdS['volume'][1] / dS_volume * (1 if reaction_attr.is_forming else -1))
+                    == len(self.strands)-1)
 
         ## TODO: Use a more appropriate rounding, not just integer. Using tuple to indicate immutable.
-        self.energy_total_dHdS = tuple([int(sum(d.values())) for d in self.energies_dHdS])
+        # self.energy_total_dHdS = tuple([int(sum(d.values())) for d in self.energies_dHdS])
+        self.energy_total_dHdS = tuple([int(sum(vals)) for vals in zip(*self.energies_dHdS.values())]) # (dH, dS)
 
+
+    def recalculate_complex_energy(self, volume_entropy, dS_shape=None):
+        """
+        Re-calculate complex energy based on all individual energy contributions
+        (hybridizations, stackings, loops and volume entropies)
+        param :volume_entropy: is the entropy gained when *releasing* two components (should be positive).
+        """
+        # energy_contributions['hybridization'] = {domain_pair: [dH, dS], ...}
+        for contrib_key, entries in self.energy_contributions.items():
+            if contrib_key == 'shape':
+                # we currently do not track loops (TODO). Instead, we calculate shape entropy using reaction dS_shape:
+                if dS_shape:
+                    self.energies_dHdS[contrib_key][1] += dS_shape
+            else:
+                self.energies_dHdS[contrib_key] = [sum(vals) for vals in zip(*entries.values())] if entries else [0, 0]
+        # energies_dHdS = {'hybridization': [dH, dS], 'stacking': [dH, dS], ...}
+        self.volume_entropy = -volume_entropy * (len(self.strands) - 1)
+        self.energy_total_dHdS = [int(sum(vals)) for vals in zip(*self.energies_dHdS.values())]
+
+
+    def check_complex(self, volume_entropy):
+        """
+        Check that complex is correct. Mostly for debugging.
+        param :volume_entropy: is the entropy gained when *releasing* two components (should be positive).
+        """
+        # energy_contributions['hybridization'] = {domain_pair: [dH, dS], ...}
+        for contrib_key, entries in self.energy_contributions.items():
+            # e.g. contribution = 'hybridization', dHdS_vals = {frozenset((d1, d2)): (dH, dS)}
+            if contrib_key == 'shape': # we currently do not track loops (TODO)
+                continue
+            assert all(np.isclose(self.energies_dHdS[contrib_key], ([sum(vals) for vals in zip(*entries.values())] if entries else [0, 0])))
+        # energies_dHdS = {'hybridization': [dH, dS], 'stacking': [dH, dS], ...}
+        # Check volume entropy:
+        assert np.isclose(self.volume_entropy, -volume_entropy*(len(self.strands)-1))
+        assert all(np.isclose(self.energy_total_dHdS, [int(sum(vals)) for vals in zip(*self.energies_dHdS.values())]))
 
 
     def state_fingerprint(self):
@@ -922,7 +1055,10 @@ class Complex(nx.MultiDiGraph):
             ## but we would need to probe result['case'] in order to know whether to reset
             ## strands/backbone fingerprint.
             self.reset_state_fingerprint()
-        assert reaction_spec_pair != self.reaction_deque[-1] != None
+        try:
+            assert reaction_spec_pair != self.reaction_deque[-1] != None
+        except IndexError:
+            pass
         state_fingerprint = self.state_fingerprint()
         assert state_fingerprint != self._historic_fingerprints[-1] != None
         if expected_state_fingerprint is not None:
@@ -963,7 +1099,7 @@ class Complex(nx.MultiDiGraph):
         #     self.reaction_deque.append(reaction_spec_pair)
         #     return self.reaction_deque[highest_idx:]
         # else:
-        #     self.reaction_deque.append(reaction_spec_pair)
+        self.reaction_deque.append((reaction_spec_pair, reaction_attr))
         #     return None
         return state_fingerprint, None
 

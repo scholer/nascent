@@ -117,6 +117,7 @@ class GraphViewer():
         # continuous_iterations: True=Keep track of iterations between calls to layout; False=Reset it for every call.
         self.continuous_iterations = True
         self.config = config
+        self.auto_center_view_factor = 1.0  # Set to False or None to disable view centering..
         # setup initial width, height
         # app.Canvas.__init__(self, title='Nascent 3D Graph Viewer', keys='interactive', size=(1200, 800))
         self.canvas = SceneCanvas(title='Nascent 3D Graph Viewer', keys='interactive',
@@ -132,7 +133,7 @@ class GraphViewer():
         # 'fly' is ...
         # scene.TurntableCamera(elevation=30, azimuth=30, up='+z')
         self.main_view.camera.up = config.get('camera.up', '+z')
-        self.main_view.camera.fov = config.get('camera.fov', 40) # default=0 (for turntable) = orthogonal projection
+        self.main_view.camera.fov = config.get('camera.fov', 30) # default=0 (for turntable) = orthogonal projection
         self.main_view.padding = config.get('view.padding', 0)
         if camera_type == 'turntable':
             # if 'camera.azimuth' in config:
@@ -198,7 +199,18 @@ class GraphViewer():
         self.node_pos_transform_input = config.get("node_pos_transform_input", ([0.5, 2, 0.2], [-2, -1, 0]))
 
         self.force_directed_dimensions = 3   # 2 to only apply forces in xy plane
-        self.force_directed_iterations_per_call = 2
+
+        # number of force iterations:
+        self.force_directed_iterations_per_call = 3 # default
+        self.force_directed_iterations_per_callback = 3 # when called as part of the regular event loop
+        self.force_directed_iterations_per_step_cont = 0  # a step was processed, but we did not break
+        self.force_directed_iterations_per_step_break = 0 # Every time we break out of the stream
+        self.force_directed_iterations_per_msg = 0  # 1 msg can have multiple event types (but usually just one)
+        self.force_directed_iterations_per_event_type = 0  # 1 msg can have multiple event types (but usually just one)
+        # event_type includes steps, node/edge changes, which are typically not relevant to layout:
+        self.force_directed_iterations_per_added_node = 10  # 1 msg can have multiple event types (but usually just one)
+        self.force_directed_iterations_per_added_edge = 5  # 1 msg can have multiple event types (but usually just one)
+
         self.do_grid_calculation = True  # Set to None to detect automatically.
         self.force_dx_factor = 0.02 # How much to move each node for a given force.
         # Typical motion simulations uses dv = F/m*dt,  v1 = v0*dv,  dx = v*dt
@@ -266,6 +278,9 @@ class GraphViewer():
         # decaying scaling fluctuations: (towards 1)
         sdecay = lambda shape, dim, i: 1 + (0.9999**i * np.random.exponential(size=(shape[0], dim)))
         scale5 = lambda shape, dim, i: 5*np.random.exponential(size=(shape[0], dim))
+        randunit1 = lambda shape, dim, i: 2*np.random.uniform(size=(shape[0], dim))
+        randunit0 = lambda shape, dim, i: np.random.uniform(low=-0.5, high=0.5, size=(shape[0], dim))
+
         self.force_params = [
             # k,  a, dist, mask, fluctuations
             # Repulsive forces, e.g. electrostatic F = k / dist**2 == k * dist**(-2)
@@ -276,7 +291,8 @@ class GraphViewer():
             # [0.010, -1, 1, 0, None], # "Gravity" (but longer range, F=Gmm/r, not F=Gmm/r^2)
             # Grid forces:
             # [grid_k, 1, 2, 0, None], # node_grid force in x and z directions..
-            [grid_k, 1, 2, 0, (None, scale5)], # node_grid force in x and z directions..
+            # [grid_k, 1, 2, 0, (None, scale5)], # node_grid force in x and z directions..
+            [grid_k, 1, 2, 0, (None, randunit1)], # node_grid force in x and z directions..
             # [grid_k, 1, 2, 0, (additive, None)], # node_grid force in x and z directions..
             # [grid_k, 1, 2, 0, (additive, scale)], # node_grid force in x and z directions..
             # Adding a randomly-fluctuating scaling factor to the grid forces produces a
@@ -329,6 +345,8 @@ class GraphViewer():
         self.sleep_until = None
         self.step_sleep_scalefactor = config.get('step_sleep_scalefactor', 0.01)
         self.step_sleep_minimum_cutoff = 1e-1 # If step is < 1e-3 secs, then do not sleep...
+        self.stream_collect_steps_until = 10  # Avoid repeated steps, only continue when step sum > N seconds.
+        self.stream_collected_step_sum = 0
 
         ### Rendering: ###
         self.render_filename_fmt = config.get('render_filename_fmt', "graphviewer_{i}_{time:0.02f}.png")
@@ -346,11 +364,42 @@ class GraphViewer():
         # Render timer: Renders the canvas and saves to file in 2 seconds interval:
         self._render_timer = app.Timer(2.0, connect=self.render_and_save, start=False, iterations=10)
         # app.Timer.events is an EmitterGroup(EventEmitter) with three event emitters: start, stop and timeout.
-        for timer in (self._timer, self._render_timer):
+
+        if self.auto_center_view_factor:
+            self._auto_center_view_timer = app.Timer(0.2, connect=self.center_view, start=True)
+
+        for timer in (self._timer, self._render_timer, self._auto_center_view_timer):
             timer.events.print_callback_errors = "always"
             timer.events.ignore_callback_errors = False
         # iterations=20, )
         # Note: Setting iterations will not stop the app, it will just stop the timer event from triggering.
+
+
+
+    def center_view(self, event, center_on=None, animate=True):
+        """
+        Center view on the specified position. If no position is given,
+        center on the mean of all nodes.
+        """
+        # Note: translate is a 4-vector.
+        if center_on is None:
+            center_on = self.node_pos.mean(axis=0) # x,y,z mean for all nodes
+        # if len(center_on) != 4:
+        #     center_on.resize((4,))
+        if animate and self.auto_center_view_factor:
+            r = center_on - self.main_view.camera.center # self.main_view.transform.translate
+            print("\n\n\ncenter_view: Currently %s from center_on %s" % (r, center_on))
+            if True or r.sum() > 0.1:
+                dx = self.auto_center_view_factor*r
+                # self.main_view.transform.translate += dx
+                self.main_view.camera.center += dx
+                print("\ncenter_view: Moving main_view by %s to %s" % (
+                    center_on, self.main_view.camera.center))
+            # self.main_view.transform.translate += (
+            #     self.auto_center_view_factor * (center_on - self.main_view.transform.translate))
+        else:
+            print("\ncenter_view: Centering directly on %s" % center_on)
+            self.main_view.camera.center = center_on
 
 
     def draw_ground(self):
@@ -674,7 +723,10 @@ class GraphViewer():
 
     def step_event(self, event_info):
         """ Parse/process a single step event. """
-        return event_info
+        if isinstance(event_info, numbers.Number):
+            return event_info
+        else:
+            return float(next(iter(event_info.keys())))
 
 
     def change_node(self, node, node_attrs):
@@ -767,28 +819,35 @@ class GraphViewer():
                 # res = method(event_info)
                 if event_type == "st":
                     # Typically, event info will be a float, but it may also be a single elem dict: {time: {}}
-                    if isinstance(event_info, numbers.Number):
-                        yield event_info
-                    else:
-                        yield float(next(iter(event_info.keys())))
+                    step_time = self.step_event(event_info)
+                    yield step_time
                 else:
                     # All other events are a one or more dicts:
                     if event_type[1] == "n":
                         # Node events:
                         for nodeid, attrs in event_info.items():
                             method(str(nodeid), attrs)  # nodeid will always be a str (for JSON)
+                            if self.force_directed_iterations_per_added_node:
+                                self.force_directed_layout(self.force_directed_iterations_per_added_node)
                     elif event_type[1] == "e":
                         for edge_key, attrs in event_info.items():
                             source = str(attrs.pop('source'))  # so make sure source, target are also strs
                             target = str(attrs.pop('target'))
                             method(source, target, edge_key, attrs)
+                            if self.force_directed_iterations_per_added_edge:
+                                self.force_directed_layout(self.force_directed_iterations_per_added_edge)
                     else:
                         raise ValueError("Could not understand %s event: %s", (event_type, event_info))
+            if self.force_directed_iterations_per_event_type:
+                self.force_directed_layout(self.force_directed_iterations_per_event_type)
+        if self.force_directed_iterations_per_msg:
+            self.force_directed_layout(self.force_directed_iterations_per_msg)
+
         print("%s stream exhausted..." % stream)
         np.set_printoptions(precision=3) # linewidth=160, suppress=True,
         print("   Final node_pos (transposed):", self.node_pos.transpose(), sep='\n')
         print("   viewer.node_grid (transposed):", self.node_grid.transpose(), sep='\n')
-        print("   node_pos - node_grid (transposed):", (self.node_pos - viewer.node_grid).transpose(), sep='\n')
+        print("   node_pos - node_grid (transposed):", (self.node_pos - self.node_grid).transpose(), sep='\n')
         print("   nodeid_list for reference:", self.nodeid_list, sep='\n')
 
 
@@ -796,16 +855,7 @@ class GraphViewer():
         """
         Read stream and update, intended to be called as a callback by an event timer.
         """
-        # This will fully exhaust the stream before passing control back to the event loop:
-        # if self.graph_stream is not None:
-        #     for step in self.read_graph_stream(self.graph_stream):
-        #         print("(read_stream_and_update) encountered step:", step)
-        #         print("(read_stream_and_update) laying out graph...")
-        #         # self.force_directed_layout_2d()
-        #         self.visualize_layout(None)
-        #         print("(read_stream_and_update) sleeping...")
-        #         time.sleep(step)
-        # alternatively, read stream one step at a time and pass control back to event loop after each step:
+        # Read stream one step at a time and pass control back to event loop after each step:
         now = system_time()
         events_read = False
         if self.sleep_until is not None and now < self.sleep_until:
@@ -815,20 +865,40 @@ class GraphViewer():
         if self.graph_stream_stepping_gen is None and self.graph_stream is not None:
             self.graph_stream_stepping_gen = self.read_graph_stream(self.graph_stream)
         if self.graph_stream_stepping_gen:
-            try:
-                step = next(self.graph_stream_stepping_gen)
+            # self.stream_collect_steps_until = 10  # Avoid repeated steps, only continue when step sum > N seconds.
+            # self.stream_collected_step_sum = 0
+            # try:
+            #     step = next(self.graph_stream_stepping_gen)
+            for step in self.graph_stream_stepping_gen:
                 self.n_steps_processed += 1
                 events_read = True
-                # time.sleep(step
-                if self.step_sleep_scalefactor and step > self.step_sleep_minimum_cutoff:
-                    print("%s events in %s steps - step=%0.03f s, sleeping for %0.03g s" %
-                          (self.n_events_processed, self.n_steps_processed,
-                           step, step*self.step_sleep_scalefactor),
-                          end='\r')
-                    self.sleep_until = now + step*self.step_sleep_scalefactor
-            except StopIteration:
-                pass
-                # TODO: Is there a better alternative, e.g. just postpone the next call to read_stream?
+                # time.sleep(step)
+                self.stream_collected_step_sum += step
+                if (not self.stream_collect_steps_until or
+                    self.stream_collected_step_sum > self.stream_collect_steps_until):
+                    # Break out of for loop..
+                    self.stream_collected_step_sum = 0
+                    if self.step_sleep_scalefactor and step > self.step_sleep_minimum_cutoff:
+                        print("%s events in %s steps - step=%0.03f s, sleeping for %0.03g s" %
+                              (self.n_events_processed, self.n_steps_processed,
+                               step, step*self.step_sleep_scalefactor),
+                              end='\r')
+                        self.sleep_until = now + step*self.step_sleep_scalefactor
+                    if self.force_directed_iterations_per_step_break:
+                        self.force_directed_layout(self.force_directed_iterations_per_step_break)
+                    break
+                # continue to next event:
+                if self.force_directed_iterations_per_step_cont:
+                    # Make sure we do a bit of graph layout before reading the next step...
+                    # (Or maybe do this unconditionally in self.read_graph_stream's generator?)
+                    self.force_directed_layout(self.force_directed_iterations_per_step_cont)
+            # except StopIteration:
+            #     pass
+            else:
+                # Did not break out of for loop
+                if events_read:
+                    print("for step in self.graph_stream_stepping_gen completed (with events read)!")
+                # pass
         # print("(read_stream_and_update) stream input read (for now..)")
         # time.sleep(0.1)
         self.visualize_layout(None)
@@ -846,8 +916,8 @@ class GraphViewer():
 
     def visualize_layout(self, event):
         """ Apply a single round of force-directed layout and update visuals. """
-        if self.force_params:
-            self.force_directed_layout() # iterations=10, dim=self.force_directed_dimensions)
+        if self.force_params and self.force_directed_iterations_per_callback:
+            self.force_directed_layout(self.force_directed_iterations_per_callback)
             # self.force_directed_layout_external()
         self.update_node_objs_pos()
         # time.sleep(0.1)
@@ -917,7 +987,7 @@ class GraphViewer():
 
 
 
-    def force_directed_layout(self, check_params=False):
+    def force_directed_layout(self, iterations=None, check_params=False):
         """
         Apply two-dimensional force-directed layout to the nodes in pos.
             :pos:   Node positions, as N x 3 array for N nodes. *Will be updated in-place*.
@@ -951,11 +1021,15 @@ class GraphViewer():
             k_grid[:,0] = 0.3
 
         """
+        if self.force_params is None:
+            return
         pos = self.node_pos
         adj_matrix = self.adj_matrix
         node_grid = self.node_grid_enabled and self.node_grid
         force_params = self.force_params
         dim = self.force_directed_dimensions
+        if iterations is None:
+            iterations = self.force_directed_iterations_per_call
 
         do_grid_calculation = self.do_grid_calculation
 
@@ -1014,10 +1088,10 @@ class GraphViewer():
 
         if self.continuous_iterations:
             it = self.n_layout_iterations_count
-            it_end_at = self.force_directed_iterations_per_call + self.n_layout_iterations_count
+            it_end_at = iterations + self.n_layout_iterations_count
         else:
             it = 0
-            it_end_at = self.force_directed_iterations_per_call
+            it_end_at = iterations
         while it < it_end_at:
             it += 1
             # Coordinate differences:
@@ -1161,26 +1235,25 @@ def run_tests():
     graph_stream = open(("/Users/rasmus/Dev/nascent/examples/single_duplex/simdata/fourway_junction_1/"
                          "%s/complexes/reaction_graph_eventstream.json" % run))
     ## How long does it take to read the whole file and decode it, line by line?
-    t_start = system_time()
-    print("Test-reading and parsing whole file stream, line by line....")
-    n_read = 0
-    for i, line in enumerate(graph_stream):
-        msg = line.strip()
-        if msg and msg[0] != "#":
-            # viewer.parse_graphstreaming_msg(line)
-            data = json.loads(msg)
-            n_read += 1
-            print(data)
-        print("%s lines read and parsed..." % (i+1), end='\r')
-    t_end = system_time()
-    print("\n %s lines read and parsed line by line in %s seconds..." % (n_read, t_end-t_start))
-    ## Takes only 0.06 seconds to read 6000 lines..
-    ## if we did that at 60 reads per second it would be 100 seconds..
-    answer = input("Press any key to continue...")
-    if answer in ('q', 'n'):
-        sys.exit()
-
-    graph_stream.seek(0)
+    # t_start = system_time()
+    # print("Test-reading and parsing whole file stream, line by line....")
+    # n_read = 0
+    # for i, line in enumerate(graph_stream):
+    #     msg = line.strip()
+    #     if msg and msg[0] != "#":
+    #         # viewer.parse_graphstreaming_msg(line)
+    #         data = json.loads(msg)
+    #         n_read += 1
+    #         print(data)
+    #     print("%s lines read and parsed..." % (i+1), end='\r')
+    # t_end = system_time()
+    # print("\n %s lines read and parsed line by line in %s seconds..." % (n_read, t_end-t_start))
+    # ## Takes only 0.06 seconds to read 6000 lines..
+    # ## if we did that at 60 reads per second it would be 100 seconds..
+    # answer = input("Press any key to continue...")
+    # if answer in ('q', 'n'):
+    #     sys.exit()
+    # graph_stream.seek(0)
 
 
     # print("node_grid_force_k before resizing:", viewer.node_grid_force_k, sep='\n')

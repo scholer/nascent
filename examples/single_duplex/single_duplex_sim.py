@@ -226,7 +226,7 @@ def main():
               "reaction_graph_output_directory": os.path.join(statsfolder, "reaction_graph"), #
               "reaction_graph_output_fnfmt": "reaction_graph_{systime:0.04f}.{ext}", #
               # Supported output format: "yaml", "edgelist", "adjlist", "multiline_adjlist", "gexf", "pajek", "png"
-              "reaction_graph_output_formats": ["png", "yaml"], # Should be a sequence of output formats
+              "reaction_graph_output_formats": ["yaml"], # "png", # Should be a sequence of output formats
               "reaction_graph_save_when_updated": True,   # Save reaction graph during run to see evolution
               # How far back to look when looking for reaction microcycles:
               "reaction_microcycles_slice_size": 5,
@@ -322,9 +322,9 @@ def main():
                 simulator.stats_writer.monitored_strands = [input_oligos[0]]
                 # simulator.simulate(T=332, n_steps_max=200000, systime_max=2000)
                 # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
-                simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
+                # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
                 # simulator.simulate(T=330, n_steps_max=4000, systime_max=200)
-                # simulator.simulate(T=330, n_steps_max=1000, systime_max=200)
+                simulator.simulate(T=330, n_steps_max=1000, systime_max=200)
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 
