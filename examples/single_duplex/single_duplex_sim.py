@@ -324,7 +324,8 @@ def main():
                 # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
                 # simulator.simulate(T=330, n_steps_max=4000, systime_max=200)
-                simulator.simulate(T=330, n_steps_max=1000, systime_max=200)
+                simulator.simulate(T=330, n_steps_max=2000, systime_max=200)
+                # simulator.simulate(T=330, n_steps_max=1000, systime_max=200)
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 

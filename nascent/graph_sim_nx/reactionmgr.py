@@ -2057,8 +2057,8 @@ class ReactionMgr(ComponentMgr):
                 actual_dHdS = cmplx.energy_total_dHdS
                 # if actual_dHdS != expected_dHdS:
                 if not all(np.isclose(actual_dHdS, expected_dHdS)):
-                    print("Complex %s energy %s does not equal expected energy %s from reaction_graph" %
-                          (cmplx, actual_dHdS, expected_dHdS))
+                    print("Complex %s (%s) energy %s does not equal expected energy %s from reaction_graph" %
+                          (cmplx, cmplx._state_fingerprint, actual_dHdS, expected_dHdS))
                     print("Contributions:")
                     print(" - Expected: %s" % expected_dHdS_contributions)
                     print(" - Current : %s" % cmplx.energies_dHdS)
@@ -2115,11 +2115,12 @@ class ReactionMgr(ComponentMgr):
                                           {'reaction_str': "(no edge attrs)", 'dH': '?', 'dS': '?'})
                             # TODO: Rename dHdS for states to HS to make it easier to distinguish
                             # reaction energies from complex state energies.
-                            print("  -(%s %s)-> %s %s" % (
-                                edge_attrs['reaction_str'], (edge_attrs['dH'], edge_attrs['dS']),
+                            print("  -(%s, %0.02f %0.05f)-> %s %s" % (
+                                edge_attrs['reaction_str'], edge_attrs['dH'], edge_attrs['dS'],
                                 target, tgt_attrs.get('dHdS')))
                     # Done printing reaction cycle info...
-                    print("Resetting complex %s energy to %s." % (cmplx, expected_dHdS))
+                    pdb.set_trace()
+                    print("Resetting complex %s@%s energy to %s." % (cmplx, cmplx._state_fingerprint, expected_dHdS))
                     cmplx.energies_dHdS = expected_dHdS_contributions
                     cmplx.energy_total_dHdS = expected_dHdS
                 # end if actual_dHdS != expected_dHdS
@@ -2205,12 +2206,13 @@ class ReactionMgr(ComponentMgr):
                 assert count == 1
                 self.reaction_graph.add_node(
                     target_state,
-                    dHdS=tuple(cmplx.energy_total_dHdS),
-                    dHdS_contributions=cmplx.energies_dHdS,
+                    dHdS=tuple(cmplx.energy_total_dHdS), # total complex enthalpy and entropy.
+                    dHdS_contributions=cmplx.energies_dHdS.copy(), # hyb, stack, loops and volume sub-totals
+                    dG_std=dG_std,
                     n_strands=n_strands,
                     size=sqrt(n_strands),
-                    pos=pos,
-                    offset_relative_to=offset_relative_to,
+                    pos=pos, # initial node position (and also default grid coordinate if not provided)
+                    offset_relative_to=offset_relative_to, # offset initial position relative to existing nodes
                     encounters=1,
                     count=count
                     # x=x, y=y, z=z
