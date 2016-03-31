@@ -84,6 +84,7 @@ from .debug import printd, pprintd
 from nascent.energymodels.biopython import DNA_NN4_R, hybridization_dH_dS
 from .utils import (sequential_number_generator, sequential_uuid_gen)
 from .reaction_graph import reaction_to_str
+from .reaction_utils import get_reaction_spec_pair
 
 
 
@@ -98,7 +99,7 @@ class ComponentMgr(GraphManager):
     loops and intra-complex activity calculation, etc.
     """
 
-    def __init__(self, strands, params, volume=None, domain_pairs=None):
+    def __init__(self, strands, params, volume, domain_pairs=None):
         # super(ComponentMgr, self).__init__(strands=strands)
         GraphManager.__init__(self, strands=strands)
         self.params = params
@@ -194,6 +195,9 @@ class ComponentMgr(GraphManager):
         self.cache['domain_hybridization_energy'] = self.domain_dHdS = {} # indexed simply as Sᵢ or {S₁, S₂} ?
 
         self.cache['reaction_loop_effects'] = self.reaction_loop_effects = {}
+        self.cache['loop_breakage_effects'] = {}
+        # Results from GraphMgr.loop_breakage_effects() ..in reaction_loop_effects or separate cache?
+
         # Loop delegations are stored in Complex.
         # Activities and c_j caches, indexed by {d₁.F, d₂.F} or {(h1e3p.F, h2e5p.F), (h2e3p.F, h1e5p.F)}
         self.cache['intracomplex_activity'] = {}
@@ -234,6 +238,13 @@ class ComponentMgr(GraphManager):
     def n_fully_hybridized_strands(self):
         """ Count the number of hybridized strands. """
         return sum(1 for strand in self.strands if strand.is_fully_hybridized())
+
+
+    def loop_breakage_effects_cached(self, elem1, elem2, reaction_spec_pair, reaction_attr):
+        if reaction_spec_pair not in self.cache['loop_breakage_effects']:
+            self.cache['loop_breakage_effects'][reaction_spec_pair] = self.loop_breakage_effects(
+                elem1, elem2, reaction_attr.reaction_type)
+        return self.cache['loop_breakage_effects'][reaction_spec_pair]
 
 
 
@@ -339,7 +350,9 @@ class ComponentMgr(GraphManager):
             if c1 is not None:
                 # c1.history.append("hybridize: Adding edge (%r, %r, %r)." % (domain1, domain2, edge_key))
                 # I'm experimenting having Complex being a DiGraph...
-                c1.add_hybridization_edge((domain1, domain2))
+                dHdS = self.hybridization_energy(domain1, domain2)
+                c1.add_hybridization_edge((domain1, domain2), hyb_energy=dHdS)
+                # TODO: Manually effectuate loop changes
                 # c1.add_edge(domain1, domain2, key=edge_key, attr_dict=edge_kwargs)
                 # c1.add_edge(domain2, domain1, key=edge_key, attr_dict=edge_kwargs)
                 # c1._hybridization_fingerprint = None
@@ -610,7 +623,8 @@ class ComponentMgr(GraphManager):
                 c1.history.append(("stack: Manually adding stacking edges (%r, %r) (%r, %r) "
                                    "but not performing merge (if relevant).") %
                                   (h1end3p.domain, h1end5p.domain, h2end3p.domain, h2end5p.domain))
-                c1.add_stacking_edge(stacking_tuple)
+                dHdS = self.stacking_energy((h1end3p, h2end5p), (h2end3p, h1end5p))
+                c1.add_stacking_edge(stacking_tuple, stacking_energy=dHdS)
                 # c1.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
                 # c1.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, attr_dict=edge_kwargs)
                 # c1._stacking_fingerprint = None  # Reset hybridization fingerprint
@@ -749,12 +763,14 @@ class ComponentMgr(GraphManager):
         return result
 
 
-    def join_complex_at(self, domain_pair=None, stacking_pair=None, edge_kwargs=None):
+    def join_complex_at(self, domain_pair=None, stacking_pair=None, edge_kwargs=None, reset_state=False):
         """
-        TODO: Consider renaming to "complex_formation_reaction" or similar?
+        TODO: Consider renaming to "complex_formation_reaction" or "form_complex_connection" or similar?
         (We only "join" if we have inter-complex reaction between two existing complexes...)
-        What this method is actually doing is just "what happens in terms of Complexes for this reaction?"
-        Join one or more complexes, by forming one or more edges.
+        What this method is actually doing is more general "what happens in terms of Complexes for this reaction?"
+
+        Process a "forming" reaction for the Complex involved. If the reaction is intramolecular,
+        join one or more strands/complexes.
         Return result dict with:
         result = {'changed_complexes': None,
                   'new_complexes': None,
@@ -849,6 +865,13 @@ class ComponentMgr(GraphManager):
                 c_major = c1
                 result['changed_complexes'] = [c_major]
                 c_major.history.append("join_complex_at: Intra-complex hybridization.")
+
+                ## Effectuate loop changes: (edit: Moved to post_reaction_processing)
+                # if reaction_spec_pair is None:
+                #     print("join_complex_at: No reaction_spec_pair not provided")
+                # else:
+                #     loop_effects = self.reaction_loop_effects[reaction_spec_pair]
+                #     c_major.effectuate_loop_changes(loop_effects)
             else:
                 ## Case (2): Inter-complex hybridization between two complexes. Merge the two complexs:
                 # printd("hybridize case 2: inter-complex hybridization.")
@@ -953,12 +976,14 @@ class ComponentMgr(GraphManager):
         if domain_pair:
             c_major.history.append(" - join_complex_at: Adding hybri edge (%r, %r, %r)." %
                                    (domain1, domain2, HYBRIDIZATION_INTERACTION))
-            c_major.add_hybridization_edge((domain1, domain2))
+            dHdS = self.hybridization_energy(domain1, domain2)
+            c_major.add_hybridization_edge((domain1, domain2), hyb_energy=dHdS)
         if stacking_pair:
             c_major.history.append(" - join_complex_at: Adding stack edges (%r, %r, %r) and (%r, %r, %r)." %
                                    (h1end3p.domain, h1end5p.domain, STACKING_INTERACTION,
                                     h2end3p.domain, h2end5p.domain, STACKING_INTERACTION))
-            c_major.add_stacking_edge(stacking_pair)
+            dHdS = self.stacking_energy(*stacking_pair)
+            c_major.add_stacking_edge(stacking_pair, stacking_energy=dHdS)
 
         ## RESET DOMAIN AND COMPLEX STATE FINGERPRINTS:
         # c_major.domain_distances = {} # Reset distances
@@ -968,23 +993,25 @@ class ComponentMgr(GraphManager):
         # EDIT: join/break_complex_at MAY NOT BE CALLED FOR STACKING INTERACTIONS WHEN
         # INTER-COMPLEX STACKING IS DISABLED! TODO: CHECK THIS!
         ## TODO: Determine the best place to reset domain and complex state_fingerprint.
-        if strand1.complex is None:
-            for domain in strand1.domains:
-                domain.state_change_reset()
-        else:
-            strand1.complex.reset_state_fingerprint()
-        if strand2.complex is None:
-            for domain in strand2.domains:
-                domain.state_change_reset()
-        elif strand2.complex is not strand1.complex:
-            strand2.complex.reset_state_fingerprint()
-        else:
-            assert strand2.complex == strand1.complex
+        if reset_state:
+            pdb.set_trace()
+            if strand1.complex is None:
+                for domain in strand1.domains:
+                    domain.state_change_reset()
+            else:
+                strand1.complex.reset_state_fingerprint(reset_loops=False)
+            if strand2.complex is None:
+                for domain in strand2.domains:
+                    domain.state_change_reset()
+            elif strand2.complex is not strand1.complex:
+                strand2.complex.reset_state_fingerprint(reset_loops=False)
+            else:
+                assert strand2.complex == strand1.complex
 
         return result
 
 
-    def break_complex_at(self, domain_pair=None, stacking_pair=None, interaction=None):
+    def break_complex_at(self, domain_pair=None, stacking_pair=None, interaction=None, reset_state=False):
         """
         Break complex at one or more edges and determine how it splits up.
         Note: This only deals with the complex (although it uses system graphs for analysis).
@@ -1086,6 +1113,15 @@ class ComponentMgr(GraphManager):
             result['case'] = 1
             result['changed_complexes'] = [c]
             # printd("Dehybridize case 0: Complex still intact.")
+
+            ## Effectuate loop changes:
+            ## Moved back to ReactionMgr.post_reaction_processing so reaction_spec_pair needn't be shuffled around.
+            # if reaction_spec_pair is None:
+            #     print("join_complex_at: No reaction_spec_pair not provided")
+            # else:
+            #     loop_effects = self.reaction_loop_effects[reaction_spec_pair]
+            #     c.effectuate_loop_changes(loop_effects)
+
             return result
 
         #### The two strands are no longer connected: ####
@@ -1097,6 +1133,7 @@ class ComponentMgr(GraphManager):
         ## Case 4(c) Two unhybridized strands
 
         dom2_cc_oligos = nx.node_connected_component(self.strand_graph, strand2)
+        ## TODO: Use Complex loops to determine if the complex breaks apart. (Or use as a check to verify integrity)
         assert strand2 not in dom1_cc_oligos
         assert strand1 not in dom2_cc_oligos
         dom1_cc_size = len(dom1_cc_oligos)  # cc = connected component
@@ -1212,18 +1249,20 @@ class ComponentMgr(GraphManager):
 
         ## RESET DOMAIN AND COMPLEX STATE FINGERPRINTS:
         ## TODO: Determine the best place to reset domain and complex state fingerprints:
-        if strand1.complex is None:
-            for domain in strand1.domains:
-                domain.state_change_reset()
-        else:
-            strand1.complex.reset_state_fingerprint()
-        if strand2.complex is None:
-            for domain in strand2.domains:
-                domain.state_change_reset()
-        elif strand2.complex is not strand1.complex:
-            strand2.complex.reset_state_fingerprint()
-        else:
-            assert strand2.complex == strand1.complex
+        if reset_state:
+            pdb.set_trace()
+            if strand1.complex is None:
+                for domain in strand1.domains:
+                    domain.state_change_reset()
+            else:
+                strand1.complex.reset_state_fingerprint(reset_loops=False)
+            if strand2.complex is None:
+                for domain in strand2.domains:
+                    domain.state_change_reset()
+            elif strand2.complex is not strand1.complex:
+                strand2.complex.reset_state_fingerprint(reset_loops=False)
+            else:
+                assert strand2.complex == strand1.complex
 
         return result
 
@@ -1236,7 +1275,8 @@ class ComponentMgr(GraphManager):
             dH, dS = hybridization_dH_dS(domain1.sequence, c_seq=domain2.sequence[::-1])
             print("Energy (dH, dS) for %s hybridizing to %s: %0.4g kcal/mol, %0.4g cal/mol/K" %
                   (domain1, domain2, dH, dS))
-            print("     ", domain1.sequence, "\n     ", domain2.sequence[::-1])
+            print("     ", domain1.sequence, #type(domain1.sequence),
+                  "\n     ", domain2.sequence[::-1])#, type(domain2.sequence), type(domain2.sequence[::-1]))
             # Convert to units of R, R/K: -- uh... really? Isn't it that already?
             dH, dS = dH*1000/R, dS/R
             # printd(" - In units of R: %0.4g R, %0.4g R/K" % (dH, dS))
@@ -1246,7 +1286,8 @@ class ComponentMgr(GraphManager):
 
     def stacking_energy(self, duplexend1, duplexend2):
         """ Calculate state-independent duplex stacking energy. """
-        (h1end3p, h1end5p), (h2end5p, h2end3p) = duplexend1, duplexend2
+        # (h1end3p, h1end5p), (h2end5p, h2end3p) = duplexend1, duplexend2  # Wrong
+        (h1end3p, h2end5p), (h2end3p, h1end5p) = duplexend1, duplexend2  # Correct
         stack_string = "%s%s/%s%s" % (h1end3p.base, h1end5p.base, h2end5p.base, h2end3p.base)
         if stack_string not in DNA_NN4_R:
             stack_string = stack_string[::-1]
@@ -1254,7 +1295,7 @@ class ComponentMgr(GraphManager):
         return dH_stack, dS_stack
 
 
-    def dHdS_from_state_cache(self, domain1, domain2, state_spec_pair=None, reaction_type=HYBRIDIZATION_INTERACTION):
+    def dHdS_from_state_cache(self, elem1, elem2, state_spec_pair=None, reaction_type=HYBRIDIZATION_INTERACTION):
         """
         Cache hybridization energy
         Returns
@@ -1265,7 +1306,7 @@ class ComponentMgr(GraphManager):
         if state_spec_pair not in self._statedependent_dH_dS:
             ## TODO: Right now we don't support state-dependent energies and just stop short here:
             if reaction_type is HYBRIDIZATION_INTERACTION:
-                return self.hybridization_energy(domain1, domain2)
+                return self.hybridization_energy(elem1, elem2)
             elif reaction_type is STACKING_INTERACTION:
                 return self.stacking_energy(elem1, elem2)
             else:
@@ -1394,19 +1435,25 @@ class ComponentMgr(GraphManager):
         if reaction_spec_pair in self.cache['intracomplex_activity']:
             return self.cache['intracomplex_activity'][reaction_spec_pair]
         # activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
-        activity, loop_info = self.loop_formation_effects(elem1, elem2, reaction_type)
+        activity, loop_effects = self.loop_formation_effects(elem1, elem2, reaction_type)
 
         # print("Intracomplex activity %0.04f for %s+ reaction between %s and %s" % (
         #     activity, reaction_type, elem1, elem2))
         # reaction will always be forming and intra:
         activity *= steric_overhang_factor
+        # If using steric overhang factor, then that must also affect the energy, that is, we would have
+        # an energy contribution the overhangs which (1) stabilises hybridization and (2) are lost when stacking.
 
         reaction_attr = ReactionAttrs(reaction_type=reaction_type, is_forming=True, is_intra=True)
         print("activity %0.03f for reaction %s" % (activity, reaction_to_str(reaction_spec_pair, reaction_attr)))
 
         self.cache['intracomplex_activity'][reaction_spec_pair] = activity
         if activity > 0:
-            self.reaction_loop_effects[reaction_spec_pair] = loop_info
+            # Make cacheable: (edit: is done in loop_formation_effects)
+            # loop_effects['shortest_path_spec'] = [ifnode.state_fingerprint() for ifnode in loop_effects['shortest_path']]
+            # for old_loop_hash in loop_effects['changed_loops']:
+
+            self.reaction_loop_effects[reaction_spec_pair] = loop_effects
         return activity
 
 
@@ -1591,4 +1638,3 @@ class ComponentMgr(GraphManager):
                 dS += dS_volume
                 dHdS_contribs['volume'][0] += dS_volume
         assert (dS_shape is None) != (dS_volume is None)
-

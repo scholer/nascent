@@ -58,6 +58,7 @@ target/
 
 # Project files
 *.komodoproject
+.idea/
 
 # Other:
 # notebooks/*

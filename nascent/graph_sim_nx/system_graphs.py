@@ -461,7 +461,10 @@ class InterfaceNode(object):
 
     def state_fingerprint(self):
         """ Return state-specific fingerprint hash for this node. Currently NOT cached. """
-        return hash(frozenset(ifnode.domain_end.state_fingerprint() for ifnode in self.delegated_edges.keys()))
+        # Changed to use always use the fingerprint of the top_delegate. This ensures that src/tgt.state_fingerprint()
+        # in Complex.calculate_loop_hash() works more consistently regardless of delegation scheme.
+        return hash(frozenset(ifnode.domain_end.state_fingerprint()
+                              for ifnode in self.top_delegate().delegated_edges.keys()))
 
 
     def __str__(self, ):

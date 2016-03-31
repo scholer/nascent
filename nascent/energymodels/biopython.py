@@ -154,7 +154,8 @@ for tbl_name in "DNA_NN3, DNA_NN4, DNA_IMM1, DNA_TMM1, DNA_DE1".split(", "):
     energy_tables[tbl_name] = tbl  # Use energy_tables["DNA_NN4"] instead of globals()["DNA_NN4"] to get table.
     energy_tables_in_units_of_R[tbl_name] = {
         # R is in cal/mol/K, 1.987 cal/mol/K to be exact.
-        k: (H*1000/R, S/R) for k, (H, S) in tbl.items()
+        # Also add the reverse stack:
+        k: (H*1000/R, S/R) for stack, (H, S) in tbl.items() for k in (stack, stack[::-1])
     }
 DNA_NN4_R = energy_tables_in_units_of_R['DNA_NN4']
 DNA_NN3_R = energy_tables_in_units_of_R['DNA_NN3']

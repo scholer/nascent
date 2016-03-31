@@ -393,6 +393,7 @@ class DM_Simulator(Simulator):
 
                 # Returns the reacted pair and a dict with changed complexes
                 logger.debug("Performing reaction %s" % reaction_to_str(reaction_spec_pair, reaction_attr))
+                # reaction_spec_pair is optional and will be calculated if not provided
                 reacted_pair, result = sysmgr.hybridize_and_process(reaction_pair, reaction_attr)
                 assert (d1, d2) == tuple(reacted_pair) or (d2, d1) == tuple(reacted_pair)
 

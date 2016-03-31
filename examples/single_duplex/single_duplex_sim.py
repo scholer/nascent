@@ -136,6 +136,7 @@ def main():
                 #'rotating': False,
                }
     init_logging(args=log_args, logdir=run_directory)
+    print("Logging to file:", os.path.join(run_directory, "Nascent.log"))
 
     # Ensure that we have a unique filename:
     outputstatsfnfmt = os.path.join(statsfolder, "{statstype}.{ext}")
@@ -323,9 +324,9 @@ def main():
                 # simulator.simulate(T=332, n_steps_max=200000, systime_max=2000)
                 # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
-                # simulator.simulate(T=330, n_steps_max=4000, systime_max=200)
-                simulator.simulate(T=330, n_steps_max=2000, systime_max=200)
-                # simulator.simulate(T=330, n_steps_max=1000, systime_max=200)
+                # simulator.simulate(T=330, n_steps_max=4000, systime_max=400)
+                # simulator.simulate(T=330, n_steps_max=2000, systime_max=200)
+                simulator.simulate(T=330, n_steps_max=1000, systime_max=100)
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 

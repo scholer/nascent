@@ -90,7 +90,7 @@ def test_ifnode_state_fingerprint_1():
         assert state_ifnode_spec_counts[-1].most_common(1)[0][1] == 1  # Count (value) of most common dspec hash is 1
 
     # We use ComponentMgr because that has what we need to prepare the complex assembly:
-    mgr = ComponentMgr([s1, s2, s3, s4], params={})
+    mgr = ComponentMgr([s1, s2, s3, s4], params={}, volume=1e-12)
     mgr.hybridize(E1, e1)
     update_and_assert()
     mgr.hybridize(E2, e2)
@@ -140,7 +140,7 @@ def test_ifnode_state_fingerprint_1():
 
     ## Re-build, checking that we get the same ifnode state fingerprints:
     i = 0
-    mgr = ComponentMgr([s1, s2, s3, s4], params={})
+    mgr = ComponentMgr([s1, s2, s3, s4], params={}, volume=1e-12)
     mgr.hybridize(E1, e1)
     update_and_assert(i)
     i += 1
@@ -192,7 +192,7 @@ def test_ifnode_state_fingerprint_1():
 
     ## Re-build, checking that we get the same ifnode state fingerprints:
     i = 0
-    mgr = ComponentMgr([s1, s2, s3, s4], params={})
+    mgr = ComponentMgr([s1, s2, s3, s4], params={}, volume=1e-12)
     mgr.hybridize(E1, e1)
     update_and_assert(i)
     i += 1
@@ -237,7 +237,7 @@ def test_intracomplex_activity_1():
     s3 = Strand("s3", [e1])
     s4 = Strand("s4", [e2])
     # We use ComponentMgr because that has what we need to prepare the complex assembly:
-    mgr = ComponentMgr([s1, s2, s3, s4], params={})
+    mgr = ComponentMgr([s1, s2, s3, s4], params={}, volume=1e-12)
     mgr.hybridize(E1, e1)
     mgr.hybridize(E2, e2)
     mgr.hybridize(E3, e3)

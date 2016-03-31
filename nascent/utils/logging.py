@@ -125,3 +125,4 @@ def init_logging(args=None, logfilepath=None, logdir=None):
             # only set a min level if we are not using module_debug_filter. (Level is an additional filter.)
             logstreamhandler.setLevel(loglevel)
     logger.info("Logging system initialized...")
+    return logfilepath

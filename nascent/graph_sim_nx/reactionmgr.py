@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
+##    Copyright 2015-2016 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
 ##    This file is part of Nascent.
 ##
@@ -57,15 +57,7 @@ Reactions: (this could be a separate object, but for now system state and reacti
 
 from __future__ import absolute_import, print_function, division
 import os
-#import random
 from collections import defaultdict, namedtuple, Counter, deque
-try:
-    from itertools import zip_longest, chain
-except ImportError:
-    from itertools import izip_longest as zip_longest, chain # pylint: disable=E0611
-# Using namedtuple is quite slow in CPython, but faster than dicts in PyPy.
-# (Attribute accessing namedtuple.a is faster than dict['a']; not sure about instantiation.)
-#import math
 from math import exp, log, sqrt #, log as ln
 ln = log
 #from datetime import datetime
@@ -75,6 +67,13 @@ import networkx as nx
 import numpy as np
 import pdb
 import random
+try:
+    from itertools import zip_longest, chain
+except ImportError:
+    from itertools import izip_longest as zip_longest, chain # pylint: disable=E0611
+# Using namedtuple is quite slow in CPython, but faster than dicts in PyPy.
+# (Attribute accessing namedtuple.a is faster than dict['a']; not sure about instantiation.)
+
 
 from nascent.energymodels.biopython import DNA_NN4_R, hybridization_dH_dS
 # DNA_NN4_R = energy_tables_in_units_of_R['DNA_NN4']
@@ -90,7 +89,7 @@ from .debug import printd, pprintd
 from .domain import Domain, DomainEnd
 from .utils import sequential_number_generator
 from .reaction_graph import ReactionGraph, reaction_attr_to_str, reaction_to_str, reaction_spec_pair_to_str
-
+from .reaction_utils import get_reaction_spec_pair
 
 reaction_graph_sequantial_number_generator = sequential_number_generator()  # Used for reaction_graph filenames.
 cmplx_state_sequential_number_generator = sequential_number_generator()     # Used for enumerating complex states
@@ -104,6 +103,8 @@ cmplx_state_enum_by_hash = {}   # cstate_hash => enum (runtime specific)
 debug_test_throttles = False
 test_throttles = False
 # test_throttles = {True: 0}     # Use a boolean True dict to effectiely freeze throttles at 1.0
+
+
 
 
 
@@ -1363,14 +1364,16 @@ class ReactionMgr(ComponentMgr):
         # pdb.set_trace()
 
 
+
     def hybridize_and_process(self, domain_pair, reaction_attr, reaction_spec_pair=None):
         """
         Will select a random pair of domain instances from the domain species pair
         for hybridization reaction, or a random duplex in case of dehybridization reactions.
-        Reaction specie consists of:
+        Reaction spec pair consists of:
             ({domspec1, domspec2}, is_forming, is_intracomplex)
         """
         ## TODO: Merge this with stack_and_process
+        ## TODO: Consolidate normal order of reaction_pair vs reaction_attr vs reaction_spec_pair.
         # printd("\nreact_and_process invoked with args: domain_pair = %s, reaction_attr = %s" % (domain_pair, reaction_attr))
         # printd("domain domspecs/fingerprints (before reaction):", [d.state_fingerprint() for d in domain_pair])
         if self.invoked_reactions_file:
@@ -1380,8 +1383,8 @@ class ReactionMgr(ComponentMgr):
             print("sysmgr.hybridize_and_process(domain_pair, %s)" % (reaction_attr, ),
                   file=self.invoked_reactions_file)
 
-
-        d1, d2 = tuple(domain_pair)
+        ## TODO, Disambiguate: "domain_pair" and "stacking_pair" should consistently be either a tuple *or* frozenset.
+        d1, d2 = domain_pair
         if reaction_spec_pair is None:
             ## TODO: Add a global reaction_spec_pair by reaction_pair cache (making a frozenset is a bit slow).
             reaction_spec_pair = frozenset((d1.state_fingerprint(), d2.state_fingerprint()))
@@ -1493,14 +1496,15 @@ class ReactionMgr(ComponentMgr):
         # TODO: Move this hybridization/dehybridization methods and apply conditionally.
         # Also, doing this here would be too late: We've already updated possible reactions, so they would be all wrong.
         # Also, remember to reset domain state fingerprint explicitly if there is no complex!!
-        if d1.strand.complex is None:
-            d1.state_change_reset()
-        else:
-            d1.strand.complex.reset_state_fingerprint()
-        if d2.strand.complex is None:
-            d2.state_change_reset()
-        elif d2.strand.complex is not d1.strand.complex:
-            d2.strand.complex.reset_state_fingerprint()
+        # Commented out; shouldn't be needed here and shouldn't be called here.
+        # if d1.strand.complex is None:
+        #     d1.state_change_reset()
+        # else:
+        #     d1.strand.complex.reset_state_fingerprint()
+        # if d2.strand.complex is None:
+        #     d2.state_change_reset()
+        # elif d2.strand.complex is not d1.strand.complex:
+        #     d2.strand.complex.reset_state_fingerprint()
 
 
         ## Update reactions for changed domains:
@@ -1543,7 +1547,7 @@ class ReactionMgr(ComponentMgr):
 
 
 
-    def stack_and_process(self, stacking_pair, reaction_spec_pair=None):
+    def stack_and_process(self, stacking_pair, reaction_attr=None, reaction_spec_pair=None):
         """
         The stacking equivalent to hybridize_and_process.
         Perform a stacking reaction, determine which domains have changed,
@@ -1556,11 +1560,19 @@ class ReactionMgr(ComponentMgr):
                     h2end5p         h2end3p
         Returns stacking_pair, result
         """
-        ## TODO: Consolidate stacking and hybridization
+        # TODO: Consolidate stack_and_process and hybridize_and_process
+        # TODO: Make reaction_pair argument consistently either a frozenset or tuple.
+        #       if reaction_pair is a tuple, then maybe reaction_2tup to make it explicit?
+        #       obviously reaction_spec_pair should ALWAYS be a 2-elem frozenset.
+        # We use the reaction_pair as an order-independent frozenset lookup-key in e.g.:
+        #   stack_and_process: reaction_attr = self.reaction_attrs[stacking_pair]
+        #   post_reaction_processing: c_j = self.possible_hybridization_reactions[reacted_pair]
+        #   update_possible_stacking_reactions: reaction_attr = self.reaction_attrs[reacted_pair]
+
 
         # printd("stack_and_process invoked with stacking_pair:")
         # pprintd(stacking_pair)
-        (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(stacking_pair)
+        (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair  # a, b = frozenset("ab") # works just fine.
         if self.invoked_reactions_file:
             print(("stacking_pair = frozenset(("
                    "(getattr(domains_by_duid[%s], 'end%s'), getattr(domains_by_duid[%s], 'end%s'))"
@@ -1572,7 +1584,13 @@ class ReactionMgr(ComponentMgr):
                   file=self.invoked_reactions_file)
             print("sysmgr.stack_and_process(stacking_pair)", file=self.invoked_reactions_file)
 
-        reaction_attr = self.reaction_attrs[stacking_pair]
+        if reaction_attr is None:
+            try:
+                reaction_attr = self.reaction_attrs[stacking_pair]
+            except KeyError: # If using tuples the order may be reversed:
+                reaction_attr = self.reaction_attrs[stacking_pair[::-1]]
+        else:
+            assert reaction_attr == self.reaction_attrs[stacking_pair]
         if reaction_spec_pair is None:
             reaction_spec_pair = frozenset(((h1end3p.state_fingerprint(), h2end5p.state_fingerprint()),
                                             (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
@@ -1673,6 +1691,7 @@ class ReactionMgr(ComponentMgr):
         return stacking_pair, result
 
 
+
     def update_state_times(self, tau):
         """ Update tau_cum for all state nodes in reaction graph and add a time step. """
         # Q: Does it matter if we have one complex that stays in a state for 2 secs,
@@ -1745,6 +1764,7 @@ class ReactionMgr(ComponentMgr):
         throttle_factor = self.reaction_throttle_cache[edge_key][0] if edge_key in self.reaction_throttle_cache else 1.0
         reaction_attr_str = (reaction_attr.reaction_type + ("+" if reaction_attr.is_forming else "-")
                              + (" " if reaction_attr.is_intra else "*"))
+        reaction_str = reaction_to_str(reacted_spec_pair, reaction_attr)
         reaction_is_joining = reaction_attr.is_forming and not reaction_attr.is_intra
         reaction_is_splitting = not reaction_attr.is_forming and reaction_result['case'] > 1
 
@@ -1813,12 +1833,101 @@ class ReactionMgr(ComponentMgr):
                                     for cmplx in lst]
         # new_complexes_set = set(reaction_result['new_complexes']) if reaction_result['new_complexes'] else set()
 
+        print("\n\nPerforming reaction:", reaction_attr_str)
+        print(reaction_str)
 
-        ### 0. ASSERT STATE CHANGE FOR ALL CHANGED COMPLEXES: ###
+        ## 0. Form or break loops: ##
+        ## Edit: Moved to ComponentMgr.join/break_complex_at.
+        ## Edit edit: Moved back; we don't have reaction_spec_pair in ComponentMgr methods.
+
+        ## ERROR: At this point we have already performed the reaction and closed the loop by forming the bond.
+        ## If we try to calculate ifnode fingerprints, they will no longer match the hashes in loop path_spec.
+        ## Thus, we should either update the loop_effects dict *before* doing the reaction, injecting the actual
+        ## ifnode instances and loopid, or we should effectuate the loop_effects BEFORE doing the actual reaction.
+        ##
+        # We do this here because we need the loop energies for updating complexes and reaction graph energies
+        # By definition, if we are forming or breaking a loop, then only one complex is changed.
+        # We get info about forming loops from the loop_effects dict obtained in intracomplex_activity
+        if reaction_attr.is_forming:
+            if reaction_attr.is_intra:
+                # Intra-complex reactions are guaranteed to produce changes to the Complex's loops
+                assert len(reaction_result['changed_complexes']) == 1
+                assert reaction_result['new_complexes'] is None
+                assert reaction_result['free_strands'] is None
+                cmplx = reaction_result['changed_complexes'][0]
+
+                # See if we have any loop_effects dicts registered for this reaction:
+                if reacted_spec_pair not in self.reaction_loop_effects:
+                    print("Error case, not implemented!")
+                    pdb.set_trace()
+
+                loop_effects = self.reaction_loop_effects[reacted_spec_pair]
+                print("%s.ifnode_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+                print("%s.loopid_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
+                print("%s.loopids_by_interface BEFORE loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
+                print("%s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
+                print("Effectuating LOOP FORMATION using: %s" % (loop_effects))
+                cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming)
+                print("%s.ifnode_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+                print("%s.loopid_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
+                print("%s.loopids_by_interface AFTER loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
+                print("%s.loops AFTER loop formation: %s\n" % (cmplx, cmplx.loops))
+                # Make sure we have loops:
+                try:
+                    assert sum(len(loopids) for loopids in cmplx.loopids_by_interface.values()) > 0
+                    assert len(cmplx.loops) > 0
+                    assert len(cmplx.ifnode_by_hash) > 0
+                    assert len(cmplx.loopid_by_hash) > 0
+                except AssertionError:
+                    print(sum(len(loopids) for loopids in cmplx.loopids_by_interface.values()))
+                    print(len(cmplx.loops))
+                    print(len(cmplx.ifnode_by_hash))
+                    print(len(cmplx.loopid_by_hash))
+                    pdb.set_trace()
+                # Note: All the loop and ifnode hashes applies to the state before making the change and asserting
+                # the state (hash/fingerprint) change.
+            else:
+                assert reacted_spec_pair not in self.reaction_loop_effects
+        elif reaction_result['case'] < 2:
+            # TODO: Case 0 (intra-strand reaction) not yet supported.
+            # TODO: Case 0 should be supported when moving to "One complex per strand using complex-delegation" scheme.
+            # Check if we are breaking a loop:
+            # It might actually be nice to have this in result.
+            # Modify ComponentMgr.hybridize/stack to include loop_effects in the reaction_result dict.
+            assert len(reaction_result['changed_complexes']) == 1
+            assert reaction_result['new_complexes'] is None
+            assert reaction_result['free_strands'] is None
+            cmplx = reaction_result['changed_complexes'][0]
+            if len(cmplx.loops) == 0:
+                print("\n\nThis shouldn't happen: dehybridize/unstack result case 1 complexes should contain loops"
+                      "since the two strands are still connected.")
+                print(reaction_result)
+                pdb.set_trace()
+            # if len(cmplx.loops) > 0:
+            # No need to check for loop-breaking effects if there are no loops. But there really should be.
+            print("%s.ifnode_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+            print("%s.loopid_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
+            print("%s.loopids_by_interface BEFORE effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
+            print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
+            # pdb.set_trace()
+            loop_effects = self.loop_breakage_effects_cached(elem1, elem2, reacted_spec_pair, reaction_attr)
+            print("Effectuating loop breakage using: %s" % (loop_effects))
+            cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming)
+            print("%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+            print("%s.loopid_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
+            print("%s.loopids_by_interface AFTER effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
+            print("%s.loops AFTER loop breakage: %s\n" % (cmplx, cmplx.loops))
+        else:
+            assert reacted_spec_pair not in self.reaction_loop_effects
+
+
+        ### 1. ASSERT STATE CHANGE FOR ALL CHANGED COMPLEXES: ###
         source_states = set()
         asserted_target_states = dict()
         asserted_target_states_list = []
+        # pdb.set_trace()
         for cmplx in new_or_changed_complexes:
+            print("%s.ifnode_by_hash before asserting state change:\n%s" % (cmplx, cmplx.ifnode_by_hash))
             source_state = cmplx._historic_fingerprints[-1]  # Can be 0 for new complexes!
             ## TODO: How about when merging, you make fingerprint = frozenset of the two merging complexes?
             assert source_state is 0 or source_state in reaction_spec_source_states  # 0 for new complexes
@@ -1841,6 +1950,8 @@ class ReactionMgr(ComponentMgr):
             asserted_target_states_list.append(target_state)
             if expected_state_fingerprints is not None:
                 assert target_state in expected_state_fingerprints  # List of target states via edge with edge_key.
+            print("%s.ifnode_by_hash after asserting state change:\n%s" % (cmplx, cmplx.ifnode_by_hash))
+            print("%s.loops after asserting state change: %s" % (cmplx, cmplx.loops))
 
         ### 0(b): Reset domain state fingerprint and icid for all free strand's domains:
         ### (This is also done in componentmgr.join/break_complex_at, but better safe than sorry)
@@ -1856,60 +1967,15 @@ class ReactionMgr(ComponentMgr):
         else:
             assert len(asserted_target_states_list) == 1
 
+
+        # ## Update ifnode_by_hash cache (doing it here for now, should be done lazily eventually...)
+        # self.rebuild_ifnode_by_hash_index()
+
+
         ### 0(c) Update reactionmgr attributes:
         new_reaction_graph_nodes = asserted_target_states.keys() - self.reaction_graph.node
         self.state_counter.update(asserted_target_states_list)
         self.state_counter.subtract(reaction_spec_source_states_list)
-
-        ## 1. Form or break loops: ##
-
-        ## ERROR: At this point we have already performed the reaction and closed the loop by forming the bond.
-        ## If we try to calculate ifnode fingerprints, they will no longer match the hashes in loop path_spec.
-        ## Thus, we should either update the loop_effects dict *before* doing the reaction, injecting the actual
-        ## ifnode instances and loopid, or we should register the new loop (and corresponding changes) BEFORE
-        ## doing the actual reaction.
-        ##
-        # We do this here because we need the loop energies for updating complexes and reaction graph energies
-        # By definition, if we are forming or breaking a loop, then only one complex is changed.
-        # We get info about forming loops from the loop_effects dict obtained in intracomplex_activity
-        if False and reaction_attr.is_forming:
-            # See if we have any loop_effects dicts registered for this reaction:
-            if reacted_spec_pair in self.reaction_loop_effects:
-                loop_effects = self.reaction_loop_effects[reacted_spec_pair]
-                ## TODO: (Optimization) Check if the old ifnodes path is still valid (if may well be...)
-                ## Re-create ifnodes from
-                assert len(reaction_result['changed_complexes']) == 1
-                assert reaction_result['new_complexes'] is None
-                assert reaction_result['free_strands'] is None
-                cmplx = reaction_result['changed_complexes'][0]
-                # The shortest-path loop should certainly be created:
-                # TODO: Consolidate all this with a Complex method register_new_loop
-                shortest_loop_path_spec = loop_effects['shortest_path_spec']  # primary loop path
-                # loop_path_spec, loop_path, loop_activity, replacing_loop_spec=None
-                cmplx.register_new_loop(
-                    shortest_loop_path_spec,
-                    loop_effects['shortest_path_activity'])
-
-                # Then consider splitted-loops:
-                # What about loops that are just adjusted? E.g. by stacking backbone-linked duplexes?
-                # old_loop_spec => [replacement_path1, replacement_path2]
-                for loop0_hash, replacement_loops in loop_effects['changed_loops'].items():
-                    # loop0_hash => list of one or two new loops. (Should always just be 1, right?)
-                    # A loop is split in either 1 or two new loops.
-                    # if len(replacement_loops) == 1:
-                    #     # Perhaps just adjust existing loop?
-                    # else:
-                    for replacement_loop in replacement_loops:
-                        cmplx.update_changed_loop(loop0_hash, replacement_loop)
-
-                # Consider other affected loops, not being split but still affected?
-                # if loop_effects['loops_affected']:
-                #     for loop0 in loop_effects['loops_affected']:
-                #         # Should re-calculate loop0 energy:
-                #         if new_loop_paths:
-                            # Loop is not
-
-
 
 
         ### 2. Calculate state energy change used to update complex energies and reaction graph: ###
@@ -1950,7 +2016,7 @@ class ReactionMgr(ComponentMgr):
                 dH_stack, dS_stack = -dH_stack, -dS_stack
             dH += dH_stack
             dS += dS_stack
-            dHdS_contribs['hybridization'] = [dH_stack, dS_stack]
+            dHdS_contribs['stacking'] = [dH_stack, dS_stack]
         else:
             raise NotImplementedError("Only HYBRIDIZATION and STACKING interactions implemented ATM.")
         # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
@@ -1998,6 +2064,7 @@ class ReactionMgr(ComponentMgr):
             ## Note: This is only really needed for annotating reaction graph edges.
 
             if reaction_result['case'] <= 1:
+                # case 0, 1: Complex is still intact after reaction
                 if reaction_attr.reaction_type is STACKING_INTERACTION:
                     reverse_reaction_spec_pair = frozenset(
                         ((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
@@ -2147,7 +2214,7 @@ class ReactionMgr(ComponentMgr):
             'is_intra': reaction_attr.is_intra,
             'reaction_attr_str': reaction_attr_str,
             'reaction_spec_pair_str': reaction_spec_pair_to_str(reacted_spec_pair),
-            'reaction_str': reaction_to_str(reacted_spec_pair, reaction_attr),
+            'reaction_str': reaction_str,
             'reaction_invocation_count': self.reaction_invocation_count[edge_key],
             #'dHdS': dHdS,
             'dH': dH, #dHdS[0],
@@ -2375,6 +2442,7 @@ class ReactionMgr(ComponentMgr):
                     # creating two throttle_factor encapsulating lists:
                     self.reaction_throttle_cache[edge_key] = throttle_factor
                 elif test_throttles:
+                    # TODO: Remove test_throttles case
                     if reaction_attr_str in test_throttles:
                         if reaction_attr.reaction_type is STACKING_INTERACTION:
                             domain1, domain2 = h1end3p.domain, h2end5p.domain

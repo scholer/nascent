@@ -96,7 +96,9 @@ class ReactionGraph(DiGraph):
             print("\n\nWriting reaction_graph event stream to file: %s\n" % self.reaction_graph_events_file)
             self.dispatchers.append(gs_file_dispatcher)
         else:
-            raise ValueError("self.reaction_graph_events_file not given: ", self.reaction_graph_events_file)
+            # raise ValueError("self.reaction_graph_events_file not given: ", self.reaction_graph_events_file)
+            print("self.reaction_graph_events_file (%s) not given: Graph events will not be available." %
+                  self.reaction_graph_events_file)
 
 
     # Same func spec as nx.Graph except added default dHdS:

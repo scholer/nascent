@@ -46,8 +46,11 @@ from collections import defaultdict, Counter, deque
 import networkx as nx
 from pprint import pprint
 from functools import wraps
-import pdb
 import numpy as np
+# Debug imports:
+import pdb
+import inspect
+import traceback
 
 # Relative imports
 from .connected_multigraph import ConnectedMultiGraph
@@ -356,8 +359,8 @@ class Complex(nx.MultiDiGraph):
         self.loop_delegations_rev = {} # loop1id => {set of loop0s split by loop1} (delegatee => delegators)
 
         ## IFNODES (which makes up a path): ##
-        self.ifnode_by_ifnode_statespec = {}  # ifnode-state-hash => ifnode-instance.
-        # ifnode_by_ifnode_statespec is reset with complex and should be updated at every change to the complex..
+        self.ifnode_by_hash = {}  # ifnode-state-hash => ifnode-instance.
+        # ifnode_by_hash is reset with complex and should be updated at every change to the complex..
         #
 
 
@@ -420,6 +423,9 @@ class Complex(nx.MultiDiGraph):
     # @property
     # def domains(self):
     #     return list(self.node.keys())
+
+    # def domains_gen(self):
+    #     return (domain for strand in self.strands for domain in strand.domains)
 
 
 
@@ -570,17 +576,22 @@ class Complex(nx.MultiDiGraph):
 
 
     # @state_should_change
-    def add_hybridization_edge(self, domain_pair, hyb_energy=None):
+    def add_hybridization_edge(self, domain_pair, hyb_energy):
         """
         Add a hybridization edge to the graph.
         If hyb_energy is provided, also add an entry to hybridization_energies.
         """
         # self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
-        domain1, domain2 = domain_pair
+        if isinstance(domain_pair, frozenset):
+            domain1, domain2 = tuple(domain_pair)
+        else:
+            domain1, domain2 = domain_pair
+            domain_pair = frozenset(domain_pair)
         self.add_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION, direction=DIRECTION_SYMMETRIC)
         if self.is_directed():
             self.add_edge(domain2, domain1, key=HYBRIDIZATION_INTERACTION, direction=DIRECTION_SYMMETRIC)
-        self.hybridized_pairs.add(frozenset(domain_pair))
+        self.hybridized_pairs.add(domain_pair)
+        self.hybridization_energies[domain_pair] = hyb_energy
         ## TODO: This could be used to calculate fingerprints faster, but probably not worth it:
         # hybridized_domain_name_pairs = frozenset(frozenset(d.name for d in pair) for pair in self.hybridized_pairs)
         # if len(hybridized_domain_name_pairs) == len(self.hybridized_pairs):
@@ -588,33 +599,36 @@ class Complex(nx.MultiDiGraph):
         #     self._hybridization_fingerprint = hash(hybridized_domain_name_pairs)
         self._hybridization_fingerprint = None
         self._state_fingerprint = None
-        if hyb_energy:
-            self.hybridization_energies[frozenset(domain_pair)] = hyb_energy
 
     # @state_should_change
     def remove_hybridization_edge(self, domain_pair):
         # self.history.append("add_hybridization_edge: domain_pair = %s" % (domain_pair,))
-        domain1, domain2 = domain_pair
+        if isinstance(domain_pair, frozenset):
+            domain1, domain2 = tuple(domain_pair)
+        else:
+            domain1, domain2 = domain_pair
+            domain_pair = frozenset(domain_pair)
         self.remove_edge(domain1, domain2, key=HYBRIDIZATION_INTERACTION)
         if self.is_directed():
             self.remove_edge(domain2, domain1, key=HYBRIDIZATION_INTERACTION)
-        self.hybridized_pairs.remove(frozenset(domain_pair))
+        self.hybridized_pairs.remove(domain_pair)
+        del self.hybridization_energies[domain_pair]
         self._hybridization_fingerprint = None
         self._state_fingerprint = None
-        if not isinstance(domain_pair, frozenset):
-            domain_pair = frozenset(domain_pair)
-        if domain_pair in self.hybridization_energies:
-            del self.hybridization_energies[domain_pair]
 
 
     # @state_should_change
-    def add_stacking_edge(self, stacking_pair, stacking_energy=None):
+    def add_stacking_edge(self, stacking_pair, stacking_energy):
         """
         Stacking pair must be tuple ((h1end3p, h2end5p), (h2end3p, h1end5p))
         or frozenset((h1end3p, h2end5p), (h2end3p, h1end5p)).
         """
         # self.history.append("add_stacking_edge: stacking_pair = %s" % (stacking_pair,))
-        (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+        if isinstance(stacking_pair, frozenset):
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(stacking_pair)
+        else:
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+            stacking_pair = frozenset(stacking_pair)
         self.add_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION, direction=DIRECTION_DOWNSTREAM)
         self.add_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION, direction=DIRECTION_DOWNSTREAM)
         if self.is_directed():
@@ -622,10 +636,9 @@ class Complex(nx.MultiDiGraph):
             self.add_edge(h2end5p.domain, h2end3p.domain, key=STACKING_INTERACTION, direction=DIRECTION_UPSTREAM)
         self.stacked_pairs.add((h1end3p.domain, h1end5p.domain))
         self.stacked_pairs.add((h2end3p.domain, h2end5p.domain))
+        self.stacking_energies[stacking_pair] = stacking_energy
         self._stacking_fingerprint = None
         self._state_fingerprint = None
-        if stacking_energy:
-            self.stacking_energies[frozenset(stacking_pair)] = stacking_energy
 
 
     # @state_should_change
@@ -633,7 +646,11 @@ class Complex(nx.MultiDiGraph):
         """ Remove stacking edge from complex graph and stacked_pairs set.
         Stacking pair must be tuple ((h1end3p, h2end5p), (h2end3p, h1end5p)). """
         # self.history.append("remove_stacking_edge: stacking_pair = %s" % (stacking_pair,))
-        (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+        if isinstance(stacking_pair, frozenset):
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(stacking_pair)
+        else:
+            (h1end3p, h2end5p), (h2end3p, h1end5p) = stacking_pair
+            stacking_pair = frozenset(stacking_pair)
         self.remove_edge(h1end3p.domain, h1end5p.domain, key=STACKING_INTERACTION)
         self.remove_edge(h2end3p.domain, h2end5p.domain, key=STACKING_INTERACTION)
         if self.is_directed():
@@ -641,16 +658,14 @@ class Complex(nx.MultiDiGraph):
             self.remove_edge(h2end5p.domain, h2end3p.domain, key=STACKING_INTERACTION)
         self.stacked_pairs.remove((h1end3p.domain, h1end5p.domain))
         self.stacked_pairs.remove((h2end3p.domain, h2end5p.domain))
+        del self.stacking_energies[stacking_pair]
         self._stacking_fingerprint = None
         self._state_fingerprint = None
-        if not isinstance(stacking_pair, frozenset):
-            stacking_pair = frozenset(stacking_pair)
-        if stacking_pair in self.stacking_energies:
-            del self.stacking_energies[stacking_pair]
 
 
-    def update_complex_energy(self, dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume,
-                              reaction_attr, reacted_pair):
+    def check_complex_energy_change(self, dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume,
+                                    reaction_attr, reacted_pair, volume_entropy):
+        """ Update complex energy sub-totals and energy_total_dHdS total. """
         # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
         # use result['case'] to determine if the volume energy of the complex is changed.
         # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
@@ -678,6 +693,8 @@ class Complex(nx.MultiDiGraph):
         # else:
         #     # IntER-strand/complex reaction; Two strands/complexes coming together or splitting up.
         #     cmplx.energies_dHdS[1]['volume'] += dS_volume
+        subtotals_before = {k: tuple(v) for k, v in self.energies_dHdS.items()}  # {'volume': (dH, dS)}
+        total_before = tuple(self.energy_total_dHdS)  # (dH, dS)
         if dH_hyb:
             assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
             # We group energies_dHdS first by enthalpy/entropy, then by contribution type
@@ -1049,12 +1066,16 @@ class Complex(nx.MultiDiGraph):
         ### Edit: We no longer detect micro-cycles, only reaction invocations ###
 
         """
+        print("DEBUG: reset_state_fingerprint called with %s\nFROM:" % (locals(),))
+        traceback.print_stack(limit=4)
         if reset: ## TODO: Determine if we should always reset here
             ## We could reset state fingerprints (strands, hybridizations, stackings);
             ## we can use reaction_attr.reaction_type to know whether to reset hyb or stack,
             ## but we would need to probe result['case'] in order to know whether to reset
             ## strands/backbone fingerprint.
             self.reset_state_fingerprint()
+            self.rebuild_ifnode_by_hash_index()
+            self.rebuild_loopid_by_hash_index()
         try:
             assert reaction_spec_pair != self.reaction_deque[-1] != None
         except IndexError:
@@ -1077,6 +1098,9 @@ class Complex(nx.MultiDiGraph):
 
         ## Increment reaction count:
         self.reaction_invocation_count[reaction_spec_pair] += 1
+
+        # Update ifnode_by_hash cache (doing it here for now, should be done lazily eventually...)
+        self.rebuild_ifnode_by_hash_index()
 
         # pdb.set_trace()
         ## Detect reaction cycle:  (obsolete)
@@ -1109,7 +1133,7 @@ class Complex(nx.MultiDiGraph):
 
 
     def reset_state_fingerprint(self, reset_strands=True, reset_hybridizations=True, reset_stacking=True,
-                                reset_domains=True):
+                                reset_domains=True, reset_loops=True):
         """ Properly reset complex state fingerprint (and also all domains, by default). """
         ## TODO: Make sure reset_stacking is properly set when required!
         # self.history.append("reset_state_fingerprint: Unsetting fingerprints: %r" % (locals(),))
@@ -1121,7 +1145,8 @@ class Complex(nx.MultiDiGraph):
         #            frameinfo.filename, frameinfo.lineno))
         #     frameinfo = getframeinfo(currentframe().f_back.f_back)
         #     print(" -- Previous frameinfo file and line: %s:%s" % (frameinfo.filename, frameinfo.lineno))
-
+        print("DEBUG: reset_state_fingerprint called with %s\nFROM:" % (locals(),))
+        traceback.print_stack(limit=4)
         self._state_fingerprint = None
         if reset_strands:
             self._strands_fingerprint = None
@@ -1133,48 +1158,79 @@ class Complex(nx.MultiDiGraph):
         if reset_domains:
             for domain in self.domains():
                 domain.state_change_reset()
-        self.ifnode_by_ifnode_statespec = {}
+        if reset_loops or True:
+            self.ifnode_by_hash = None
+            self.loopid_by_hash = None
+        # Make sure to update Complex's ifnode_by_hash and loopid_by_hash indexes:
+        # self.rebuild_ifnode_by_hash_index()
+        # self.rebuild_loopid_by_hash_index()
 
-    # def domains_gen(self):
-    #     return (domain for strand in self.strands for domain in strand.domains)
 
 
     #### LOOP TRACKING LOGIC: ####
 
-    def get_ifnode_by_ifnode_statespec(self, ifnode_statespec):
+    def get_ifnode_by_hash(self, ifnode_statespec):
         """ Get ifnode instance by it's state-specific hash (fingerprint). """
         # Q: Is it really worth bothering with caching of this? We are only going to use it once, I think.
         try:
-            return self.ifnode_by_ifnode_statespec[ifnode_statespec]
+            return self.ifnode_by_hash[ifnode_statespec]
         except KeyError:
             print("ERROR: Could not get ifnode by ifnode_statespec %s" % ifnode_statespec)
-            print(" -- resetting self.ifnode_by_ifnode_statespec")
+            print(" -- resetting self.ifnode_by_hash")
+            pdb.set_trace()
             # Update the map, check that no ifnode gives the same hash.
             ifnodes = [end.ifnode for domain in self.domains() for end in (domain.end5p, domain.end3p)]
             top_ifnodes = {ifnode for ifnode in ifnodes if ifnode.delegatee is None}
-            self.ifnode_by_ifnode_statespec = {ifnode.state_fingerprint(): ifnode for ifnode in top_ifnodes}
+            self.ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in top_ifnodes}
             try:
-                return self.ifnode_by_ifnode_statespec[ifnode_statespec]
+                return self.ifnode_by_hash[ifnode_statespec]
             except KeyError:
                 print("ERROR: Still could not get ifnode by ifnode_statespec %s" % ifnode_statespec)
-                print(" -- invoking reset_state_fingerprint and then resetting self.ifnode_by_ifnode_statespec")
+                print(" -- invoking reset_state_fingerprint and then resetting self.ifnode_by_hash")
                 self.reset_state_fingerprint()
                 ifnodes = [end.ifnode for domain in self.domains() for end in (domain.end5p, domain.end3p)]
                 top_ifnodes = {ifnode for ifnode in ifnodes if ifnode.delegatee is None}
-                self.ifnode_by_ifnode_statespec = {ifnode.state_fingerprint(): ifnode for ifnode in top_ifnodes}
-                return self.ifnode_by_ifnode_statespec[ifnode_statespec]
+                self.ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in top_ifnodes}
+                return self.ifnode_by_hash[ifnode_statespec]
 
+    def calculate_loop_path_spec(self, loop_path):
+        """
+        Return the list:
+            [ifnode.state_fingerprint() for ifnode in loop_path]
+        Using this method will make it easier to cache the ifnode values at a later point
+        (although arguably the cached value should be stored in the ifnode - but premature optimization).
+        Also, calling this will ensure that the ifnode_by_hash index hash been built when ifnode hashes are used.
+        """
+        if self.ifnode_by_hash is None:
+            self.rebuild_ifnode_by_hash_index()
+        return [ifnode.state_fingerprint() for ifnode in loop_path]
 
-    def calculate_loop_hash(self, loop_path, loop_path_spec=None, loop=None, loopid=None):
+    def calculate_loop_hash(self, loop_path_spec):
+        """
+        Calculate a state-dependent hash for the given loop spec (list of ifnode hashes).
+        The calculation algorithm will "cyclirize" the list (connecting the start and end nodes)
+        and then use all edges between nodes as the hash:
+            hash(frozenset(frozenset((src, tgt)) for src, tgt in edgelist))
+        An alternative would be to simply calculate the hash based on the set of all ifnodes:
+            hash(frozenset(frozenset(loop_path_spec))
+        and hope that is sufficiently unique to distinguish the loop by its hash.
+        Is there any reason why it wouldn't be?
+        """
+        if self.loopid_by_hash is None:
+            # If we are ever creating a loop_hash, we want to make sure Complex.loopid_by_hash is also available.
+            self.rebuild_loopid_by_hash_index()
+        edgelist = list(zip(loop_path_spec[:-1], loop_path_spec[1:]))
+        edgelist.append((loop_path_spec[-1], loop_path_spec[0]))
+        edges = frozenset(frozenset((src, tgt)) for src, tgt in edgelist)
+        return hash(edges)
+
+    def calculate_loop_hash_slow(self, loop_path, loop=None, loopid=None):
         """
         Calculate a state-dependent hash for the given loop.
-        Complex state fingerprint and domain icid labelling must be up-to-date.
+        Complex state fingerprint and domain icid labelling must be up-to-date,
+        but does not otherwise rely on any cached values.
+        Use calculate_loop_hash(loop_path_spec) for a fast version of this.
         """
-        if loop_path_spec:
-            edgelist = list(zip(loop_path_spec[:-1], loop_path_spec[1:]))
-            edgelist.append((loop_path_spec[-1], loop_path_spec[0]))
-            edges = frozenset(frozenset((src, tgt)) for src, tgt in edgelist)
-            return hash(edges)
         if loop_path is None:
             if loop is None:
                 assert loopid is not None
@@ -1188,87 +1244,258 @@ class Complex(nx.MultiDiGraph):
         return hash(edges)
 
 
-    def recreate_loop_ifnodes_from_spec(self, ifnodes_specs, use_cached=False):
-        """
-        Recreate a current ifnodes loop path from a list of ifnodes fingerprints.
-        """
-        ## TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
-        if use_cached:
-            ifnode_by_hash = self.ifnode_by_ifnode_statespec
-        else:
-            # Go over all ifnodes (for all domain ends):
-            cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)
-                             if end.ifnode.delegatee is None]
-            ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in cmplx_ifnodes}
-            self.ifnode_by_ifnode_statespec = ifnode_by_hash
-        assert all(spec in ifnode_by_hash for spec in ifnodes_specs)
-        return [ifnode_by_hash[spec] for spec in ifnodes_specs]
-
-    def update_ifnodes_and_loops_specs(self, ):
-        """ Update all ifnodes and loop hashes. """
+    def rebuild_ifnode_by_hash_index(self):
+        """ Rebuild ifnode_by_hash dict. """
+        # Go over all ifnodes (for all domain ends):
         cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)
                          if end.ifnode.delegatee is None]
-        ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in cmplx_ifnodes}
-        self.ifnode_by_ifnode_statespec = ifnode_by_hash
-        loopid_by_hash = {}
-        old_loop_hash_by_id = {loopid: loop_hash for loop_hash, loopid in self.loopid_by_hash.items()}
+        self.ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in cmplx_ifnodes}
+
+
+    def recreate_loop_ifnodes_from_spec(self, ifnodes_specs):
+        """
+        Recreate a loop path with ifnodes (instances) from a list of ifnodes fingerprints.
+        """
+        ## TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
+        if self.ifnode_by_hash is None:
+            self.rebuild_ifnode_by_hash_index()
+        # assert all(spec in self.ifnode_by_hash for spec in ifnodes_specs)
+        return [self.ifnode_by_hash[spec] for spec in ifnodes_specs]
+
+
+    def rebuild_loopid_by_hash_index(self, update_ifnodes=None):
+        """ Update all loop hashes. Will also update ifnodes if update_ifnodes is True (default). """
+        if update_ifnodes or self.ifnode_by_hash is None:
+            self.rebuild_ifnode_by_hash_index()
+        self.loopid_by_hash = {}
+        # pdb.set_trace()
+        # old_loop_hash_by_id = {loopid: loop_hash for loop_hash, loopid in self.loopid_by_hash.items()}
         for loopid, loop in self.loop_by_loopid.items():
             new_path_spec = [ifnode.state_fingerprint() for ifnode in loop['path']]
             new_loop_hash = self.calculate_loop_hash(new_path_spec)
             loop['path_spec'] = new_path_spec
             loop['loop_hash'] = new_loop_hash
-            loopid_by_hash[new_loop_hash] = loopid
-            del self.loopid_by_hash[old_loop_hash_by_id[loopid]] # Checking that the old one was present
-        self.loopid_by_hash = loopid_by_hash # overwrite the old map
+            self.loopid_by_hash[new_loop_hash] = loopid
+            # del self.loopid_by_hash[old_loop_hash_by_id[loopid]] # Checking that the old one was present
+        # self.loopid_by_hash = loopid_by_hash # overwrite the old map
 
 
-    def register_new_loop(self, loop_path_spec, loop_activity, loop_path=None, replacing_loop_spec=None):
-        """ Register a new loop. """
-        if loop_path_spec is None:
-            loop_path_spec = [ifnode.state_fingerprint() for ifnode in loop_path]
+    def effectuate_loop_changes(self, loop_effects, is_forming):
+        """
+        loop_effects is a dict describing what the effects of
+        a new loop being formed or an existing loop being broken.
+        it should contain a 'changed_loops_by_hash' entry which is a dict with:
+        loop_hash:
+
+        Note: The loop hashes applies to the state *before* the loop is formed.
+
+        The timing of this needs to be exactly right. Make sure you keep track of when and where
+        hashes (state specs) are re-calculated for ifnodes and loops:
+        ifnode state fingerprint is reset and re-calculated:
+            IfNode.state_fingerprint() is called by:
+                Complex.calculate_loop_hash(loop_path) similarly calls ifnode.state_fingerprint() for all src,tgt.
+                Complex.rebuild_loopid_by_hash_index() calls ifnode.state_fingerprint(), which simply calls
+            ifnode.state_fingerprint() simply calls:
+                ifnode.domain_end.state_fingerprint() for ifnode in IfNode.delegated_edges.keys()
+            DomainEnd.state_fingerprint() calls:
+                (DomainEnd.domain.state_fingerprint(), DomainEnd.end, DomainEnd.stack_partner is not None)
+            Domain.state_fingerprint() uses:
+                Domain._specie_state_fingerprint - which is recalculated if None as:
+                Domain._specie_state_fingerprint = (dspecie, self.partner is not None, c_state, in_complex_identifier)
+            Domain._specie_state_fingerprint reset by (and only by):
+                Domain.state_change_reset()
+            Domain.state_change_reset is currently called from multiple places:
+                Complex.reset_state_fingerprint()
+                ReactionMgr.hybridize_and_process (but not stack_and_process?) - debugging...
+                ComponentMgr.join/break_complex_at() - if Domain.strand.complex is None
+                ReactionMgr.post_reaction_processing - but only for free strands (!)
+            Complex.reset_state_fingerprint is called from:
+                ComponentMgr.join/break_complex_at()
+                Complex.assert_state_change()
+                # Complex.get_ifnode_by_hash -- but just for debugging
+                # ReactionMgr.hybridize_and_process (but not stack_and_process?) - but only temporarily, for debugging...
+
+        Now, we need to be able to update Complex loops based on the abstract hash-based
+        loop_hash and path_spec values loop_effects.
+        These hashes are all based on the Complex state *before* performing the reaction.
+        Thus, we need to either effectuate_loop_changes(loop_effects) or at least update loop_effects
+        before calling Complex.reset_state_fingerprint(), i.e.:
+            in ComponentMgr.join/break_complex_at, or
+            in ReactionMgr.post_reaction_processing() before calling Complex.assert_state_change.
+
+        I think I will try to effectuate_loop_changes() it in ComponentMgr.join/break_complex_at
+            Edit: Is a little tedious since we do not have reaction_spec_pair
+            ComponentMgr generally doesn't know much about reactions...
+            We DO calculate dHdS for stacking and hybridization in ComponentMgr.hybridize/stack,
+            but they are state independent and does not rely on reaction_spec_pair.
+
+        Moved effectuate_loop_changes invocation to ReactionMgr.post_reaction_processing
+
+        Note: Tools to generate call graphs:
+            pycallgraph:
+            pyan: https://github.com/dafyddcrosby/pyan, https://github.com/davidfraser/pyan
+            yapppi: https://bitbucket.org/sumerc/yappi/
+        Profiling blog posts:
+            TalkPython podcast #28, http://blog.thehumangeo.com/2015/07/28/profiling-in-python/
+            PyCharm professional has a very nice profiler with call-graph:
+            http://blog.jetbrains.com/pycharm/2015/05/pycharm-4-5-eap-build-141-988-introducing-python-profiler/
+
+        """
+        # pdb.set_trace()
+        if is_forming:
+            # 1a. Add new loop:
+            new_loop = loop_effects['new_loop']
+            new_loop_id = next(loopid_sequential_number_generator)
+            new_loop_hash = new_loop['loop_hash']
+            self.loops[new_loop_id] = new_loop
+            self.loopid_by_hash[new_loop_hash] = new_loop_id
+
+            # Make sure ifnode_by_hash is up-to-date:
+            # TODO: Check if this is needed or even a good idea. Shouldn't the index already be up-to-date?
+            # Yes, it is definitely a bad idea to re-build ifnode_by_hash index.
+            # Even if most ifnode state hashes haven't changed, the ifnode delegation may have changed,
+            # and we use THAT when re-building the index.
+            # self.rebuild_ifnode_by_hash_index()
+
+            # Update loop path to use this Complex's ifnodes (instances):
+            new_loop['path'] = self.recreate_loop_ifnodes_from_spec(new_loop['path_spec'])
+
+            # Testing for changes in ifnode delegation:
+            assert new_loop['path'][0].top_delegate() == new_loop['path'][-1].top_delegate()
+            new_loop['path'][0] = new_loop['path'][0].top_delegate()
+            new_loop['path'].pop() # Remove the last ifnode (which is also the first after reaction)
+            # Make sure path consists of top_delegates only:
+            assert [ifnode.top_delegate() for ifnode in new_loop['path']] == new_loop['path']
+            if max(Counter(ifnode.top_delegate() for ifnode in new_loop['path']).values()) > 1:
+                print("\n\nWARNING: new_loop['path'] has duplicate top_delegate ifnodes:")
+                print(new_loop['path'])
+                print([ifnode.top_delegate() for ifnode in new_loop['path']])
+                print(Counter(ifnode.top_delegate() for ifnode in new_loop['path']).most_common(3))
+                pdb.set_trace()
+                # Isn't it natural that delegation will have changed? The loop effects were calculated before
+                # the reaction was done, but delegation has now been updated.
+                # Either (a) Take changes in delegation into account when calculating the path,
+                # or (b) update the path to account for delegation changes.
+                # (a) is probably hard since we can't know in advance which node is selected as top_delegate.
+                # We don't consider the edge between reactants when calculating activity, so we don't need to modify.
+                # In fact, we could just say that the loop path is just always
+
+
+            # Make sure the loop hash haven't changed:
+            # new_loop_hash_from_path = self.calculate_loop_hash(new_loop['path'])
+            # new_loop_hash_from_path_spec = self.calculate_loop_hash(None, new_loop['path_spec'])
+            # assert new_loop['loop_hash'] == self.calculate_loop_hash(new_loop['path'])
+            # Edit: you cannot re-calculate the loop hash from the path ifnodes and expect to get the same hash
+            # if you have performed a reaction because then the ifnode's delegation scheme will have changed
+            # and that is used when calling src/tgt.state_fingerprint().
+            # If you want to rely on a cached hash, you have to use self.loops[loopid]['loop_hash']
+            assert new_loop['loop_hash'] == self.calculate_loop_hash(new_loop['path_spec'])
+            for ifnode in new_loop['path']:
+                self.loopids_by_interface[ifnode].add(new_loop_id)
         else:
-            loop_path = self.recreate_loop_ifnodes_from_spec(loop_path_spec)
-        # recreate_loop_ifnodes_from_spec will update self.ifnode_by_ifnode_statespec
-        # You can then do: ifnodes = [self.ifnode_by_ifnode_statespec[spec] for spec in ifnodes_specs]
-        loop_hash = self.calculate_loop_hash(loop_path)
-        # To get a loop dict from a loop hash, first get the id with loopid_by_hash,
-        # then use self.loops[loopid] (loops_by_id) to get loop info dict.
-        assert loop_hash not in self.loopid_by_hash
-        # Get new id for loop: (It would be a little easier if loops were object instances)
-        loopid = next(loopid_sequential_number_generator)  # Is currently a uuid
-        # What's in a loop (dict/object)?
-        loop = {
-            'loopid': loopid,
-            'path': loop_path,
-            'path_spec': loop_path_spec,
-            'node_set': set(loop_path),  # Not sure this is worth it...
-            'original_path': tuple(loop_path), # For later reference..
-            'activity': loop_activity,  # a1 in the calculations, not "a"?
-            'original_activity': loop_activity,  # For later reference..
-            'original_loop_hash': loop_hash,  # The current loop hash is in self.loopid_by_hash.
-            # For loop delegation/overrides see self.loop_delegations(_rev).
-        }
-        assert loopid not in self.loop_by_loopid
-        self.loop_by_loopid[loopid] = loop
+            # 1b: Remove existing loop
+            del_loop_hash = loop_effects['del_loop_hash']
+            del_loop_id = self.loopid_by_hash[del_loop_hash]
+            if del_loop_id == loop_effects['del_loop_id']:
+                print("del_loop_id == loop_effects['del_loop_id']: %s == %s" %
+                      (del_loop_id, loop_effects['del_loop_id']))
+            del_loop = self.loops[del_loop_id]
+            for ifnode in del_loop['path']:
+                self.loopids_by_interface[ifnode].remove(del_loop_id)
+            assert not any(del_loop_id in loopids_set for loopids_set in self.loopids_by_interface.values())
+            del self.loops[del_loop_id]
+            del self.loopid_by_hash[del_loop_hash]
+
+            # Update ifnodes hashes: - No. See above reason for why not.
+            # self.rebuild_ifnode_by_hash_index()
+
+        # 2. Update existing loops:
+        for loop_hash, loop_info in loop_effects['changed_loops_by_hash'].items():
+            if loop_hash is None:
+                # None is used to indicate a new loop. but only when used as loop_id, not hash.
+                print("\n\nThis shouldn't happen!!\n")
+                pdb.set_trace()
+            # Update loop ifnodes:
+            loop_id = self.loopid_by_hash[loop_hash]
+            old_loop_info = self.loop_by_loopid[loop_id]
+            old_loop_nodes = set(old_loop_info['path'])
+            new_loop_nodes = set(loop_info['path'])
+            # Remove old ifnode entries from self.loopids_by_interface and add new:
+            for ifnode in (old_loop_nodes - new_loop_nodes):
+                self.loopids_by_interface[ifnode].remove(loop_id)
+            for ifnode in (new_loop_nodes - old_loop_nodes):
+                self.loopids_by_interface[ifnode].add(loop_id)
+
+            assert all(ifnode in self.loopids_by_interface and loop_id in self.loopids_by_interface[ifnode]
+                       for ifnode in new_loop_nodes)
+            old_loop_info.update(loop_info)
+
+        for loop in self.loops.values():
+            top_delegate_path = [ifnode.top_delegate() for ifnode in loop['path']]
+            assert top_delegate_path == loop['path']
+            assert max(Counter(top_delegate_path).values()) == 1
+
+        # Update loop hashes (state specs):
+        # Note: We need the old loop state specs (fingerprints, hashes) when updating existing loops above
+        # self.rebuild_loopid_by_hash_index(update_ifnodes=False)
+
+        # TODO: Do we need to update loops when ifnode delegation changes?
+        # E.g. if stacking, then four ifnodes are represented as one ifnode.
+        # All four ifnodes will have the same hash, because ifnode.state_fingerprint uses all delegates.
+        # So if a path includes the edge {src, tgt} and the edge is collapsed by e.g. stacking to a single ifnode,
+        # then that is just {ifnode}, which should be OK.
+        # What if we have a path that includes ifnode2 and ifnode2 is expanded to {ifnode2, ifnode3}?
+        # The system-level InterfaceGraph only includes edges between the top delegates.
+        # InterfaceGraph.delegate() will move the delegator's edges to the top delegatee.
+        # So new paths DOES NOT include
+        # But either way, the all affected paths should be updated to reflect the new ifnode top_delegate path, right?
 
 
-    def update_changed_loop(self, loop0_hash, replacement_loop, refresh_cache=True):
-        """ Update an existing loop to use a new, shorter path: """
-        if refresh_cache:
-            self.update_ifnodes_and_loops_specs()
-        loop0id = self.loopid_by_hash[loop0_hash]
-        loop0 = self.loop_by_loopid[loop0id]
-        if 'loop_hash' in loop0: # This should usually just be a lookup entry in self.loopid_by_hash
-            try:
-                del self.loopid_by_hash[loop0['loop_hash']]
-            except KeyError:
-                print("Could not delete old entry in loopid_by_hash using old loop_hash %s" % loop0['loop_hash'])
-        loop0.update(replacement_loop)  # Or you could just overwrite the old entry in loop_by_loopid.
+
+    # def register_new_loop(self, loop_path_spec, loop_activity, loop_path=None, replacing_loop_spec=None):
+    #     """ Register a new loop. """
+    #     if loop_path_spec is None:
+    #         loop_path_spec = [ifnode.state_fingerprint() for ifnode in loop_path]
+    #     else:
+    #         loop_path = self.recreate_loop_ifnodes_from_spec(loop_path_spec)
+    #     # recreate_loop_ifnodes_from_spec will update self.ifnode_by_hash
+    #     # You can then do: ifnodes = [self.ifnode_by_hash[spec] for spec in ifnodes_specs]
+    #     loop_hash = self.calculate_loop_hash(loop_path)
+    #     # To get a loop dict from a loop hash, first get the id with loopid_by_hash,
+    #     # then use self.loops[loopid] (loops_by_id) to get loop info dict.
+    #     assert loop_hash not in self.loopid_by_hash
+    #     # Get new id for loop: (It would be a little easier if loops were object instances)
+    #     loopid = next(loopid_sequential_number_generator)  # Is currently a uuid
+    #     # What's in a loop (dict/object)?
+    #     loop = {
+    #         'loopid': loopid,
+    #         'path': loop_path,
+    #         'path_spec': loop_path_spec,
+    #         'node_set': set(loop_path),  # Not sure this is worth it...
+    #         'original_path': tuple(loop_path), # For later reference..
+    #         'activity': loop_activity,  # a1 in the calculations, not "a"?
+    #         'original_activity': loop_activity,  # For later reference..
+    #         'original_loop_hash': loop_hash,  # The current loop hash is in self.loopid_by_hash.
+    #         # For loop delegation/overrides see self.loop_delegations(_rev).
+    #     }
+    #     assert loopid not in self.loop_by_loopid
+    #     self.loop_by_loopid[loopid] = loop
+    #
+    #
+    # def update_changed_loop(self, loop0_hash, replacement_loop, refresh_cache=True):
+    #     """ Update an existing loop to use a new, shorter path: """
+    #     if refresh_cache:
+    #         self.update_ifnodes_and_loops_specs()
+    #     loop0id = self.loopid_by_hash[loop0_hash]
+    #     loop0 = self.loop_by_loopid[loop0id]
+    #     if 'loop_hash' in loop0: # This should usually just be a lookup entry in self.loopid_by_hash
+    #         try:
+    #             del self.loopid_by_hash[loop0['loop_hash']]
+    #         except KeyError:
+    #             print("Could not delete old entry in loopid_by_hash using old loop_hash %s" % loop0['loop_hash'])
+    #     loop0.update(replacement_loop)  # Or you could just overwrite the old entry in loop_by_loopid.
 
 
-
-
-    ## TODO: Need method to register broken loop. What is the best way to deal with that?
 
 
     ## OLD FINGERPRINT METHODS: ##

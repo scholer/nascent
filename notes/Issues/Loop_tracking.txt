@@ -23,7 +23,9 @@ ReactionMgr.hybridize/stack_and_process(reactant_pair, reaction_attr, reaction_s
 		 return c_j
 return reacted_pair, result
 
-Currently working on: Loop tracking
+
+## Currently working on: Loop tracking
+
 * Loops are tracked on a per-complex basis;
 * What loops do we need to track?
 * Can loops be "obsoleted"?
@@ -38,6 +40,7 @@ Currently working on: Loop tracking
 	- However, then we wouldn't be able to create loops using ComponentMgr.hybridize/dehybridize/stack/unstack.
 		Well, we wouldn't be able to do that anyway, since we don't have access to any loop information here.
 		Then we would essentially have to re-analyze the reaction to see what loops are formed by a particular reaction.
+		Edit: We could just move intracomplex_activity cache to ComponentMgr. - Done.
 	- Note that the loop_info dict has instance-specific content such as sets and lists of ifnodes;
 		these may not be readily cachable, nor transferable from one complex to another.
 		Either:
@@ -79,3 +82,38 @@ Currently working on: Loop tracking
 		try:
 			self.ifnode_by_ifnode_state_hash[]
 
+
+
+
+"loop_effects" data structure, describing the loop shape effects of the reaction:
+    loop_effects = {
+        'activity': 0,   # total loop formation activity; Product of shortest-path activity and any/all loop_change_factors.
+        'shortest_path': path, # new loop path
+        'shortest_path_activity': activity,
+        'changed_loops': changed_loops, # What existing loops are affected by the forming this loop?
+        # currently just old_loopid => [list of new paths] - but it would be nice to also have activities.
+        # Edit: Is now a list of dicts, each dict representing the new loop formed, with keys 'path' and activity.
+        'loops_considered': processed_secondary_loopids, # mostly for debugging
+        'loop_split_factors': loop_split_factors,
+        # loops not reached by "neighbor-loop-propagation" algorithm but which should still be considered.
+        'stacking_side_effects_activities': side_effects_activities,
+        'stacking_side_effects_factors': side_effects_factors,
+    }
+    # "changed_loops" is a dict of describing which loops are effected and how they should be updated:
+    # For each old loop that will be affected by the reaction:
+    # old_loop_hash: [list of new loop_info dicts]
+    loop_effects['changed_loops'] = {
+        old_loop_hash: [
+            {
+                'path': loop2_path,
+                'loop_hash': cmplx.calculate_loop_hash(loop2_path),
+                'a0': a0,
+                'loop0_hash': loop0_hash, # so we can relate this to the original/parent loop.
+                'old_loop0_id': loop0id,
+                'new_activity': a2,
+                'loop_change_factor': loop_split_factor, # = a2/a0
+                'description': "Case 1: shared loop on shortest_path."
+            },
+            # {}, ...
+        ]
+    }
