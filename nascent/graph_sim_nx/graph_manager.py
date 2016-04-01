@@ -311,6 +311,8 @@ class GraphManager(object):
         part_b_last_group = part_b[-1]
         if simulate_reaction is STACKING_INTERACTION:
             # Here we can assume that stacking *goes through* the duplexes:
+            # TODO: Not sure this assertion is correct!
+            # One case where it is not the case is the backbone edge connecting a stacked ifnode (self-loop)
             assert part_a[0][SEGMENT_STIFFNESS] > 0
             assert part_b[-1][SEGMENT_STIFFNESS] > 0
             # First join the first segment of a to the last segment of b: (using extend in-place)
@@ -597,11 +599,11 @@ class GraphManager(object):
             d1end3p, d2end3p = domain1.end3p, domain2.end3p
             # path = self.ends5p3p_shortest_path(d1end5p, d2end5p)
             # Domains are currently NOT hybridized and thus also NOT stacked. There should be NO delegation!
-            assert d1end3p.ifnode.top_delegate() == d1end3p.ifnode
-            assert d2end3p.ifnode.top_delegate() == d2end3p.ifnode
             assert d1end5p.ifnode.top_delegate() == d1end5p.ifnode
+            assert d1end3p.ifnode.top_delegate() == d1end3p.ifnode
             assert d2end5p.ifnode.top_delegate() == d2end5p.ifnode
-            reactant_nodes = {d1end3p.ifnode, d2end3p.ifnode, d1end5p.ifnode, d2end5p.ifnode}
+            assert d2end3p.ifnode.top_delegate() == d2end3p.ifnode
+            reactant_nodes = (d1end5p.ifnode, d1end3p.ifnode, d2end5p.ifnode, d2end3p.ifnode)
             ## TODO: (OPTIMIZATION) Instead of finding the shortest path, try to
             ## DETECT IF THE TWO DOMAINS ARE ALREADY PART OF AN EXISTING LOOP.
             ## If they are, then the existing loop should give the shortest path.
@@ -632,19 +634,169 @@ class GraphManager(object):
             cmplx = d1end5p.domain.strand.complex
             elem1_ifnode, elem2_ifnode = elem1.ifnode.top_delegate(), elem2.ifnode.top_delegate()
 
+        # We assume elem1 and elem2 has been split apart, so they should no longer be represented by a single ifnode.
+        assert elem1_ifnode != elem2_ifnode
+
         # We assume connection is already broken between elem1 and elem2.
         if len(cmplx.loops) == 0:
             return None
 
+        # TODO, FIX: While stacking/unstacking always creates/deletes a loop, that is not necessarily the case
+        # TODO, FIX: for HYBRIDIZATION reactions.
+        # TODO, FIX: Actually that is not the problem. The problem is that loops can be affected in different ways.
+        # TODO, FIX: We assumed that the "shared path" was broken. But that may not be true for duplex dehybridization.
+        # TODO, FIX: This should be fixed when looping over affected loops.
+
         # 1. Find all affected loops:
         # cmplx.loopids_by_interface[elem1_ifnode] => {set of loopids for loops touching ifnode}
-        affected_loopids = set.union(cmplx.loopids_by_interface[elem1_ifnode],
-                                     cmplx.loopids_by_interface[elem2_ifnode])
+        # Wait: If elem1 and elem2 are currently hybridized or stacked, wouldn't they have the
+        # same top_delegate and thus share the exact same loops?
+        # No: At this point, the breaking reaction has occured, so the two elem no longer has the same ifnode.
+        # However, since we haven't updated cmplx.loopids_by_interface index yet, one of them should be empty
+        # and the other should be full.
+        if reaction_type is HYBRIDIZATION_INTERACTION:
+            d1end5p_loops = cmplx.loopids_by_interface[d1end5p.ifnode]
+            d1end3p_loops = cmplx.loopids_by_interface[d1end3p.ifnode]
+            d2end5p_loops = cmplx.loopids_by_interface[d2end5p.ifnode]
+            d2end3p_loops = cmplx.loopids_by_interface[d2end3p.ifnode]
+            if len(d1end5p_loops) > 0:
+                assert len(d2end3p_loops) == 0
+                end1_loops = d1end5p_loops
+                end1_former_delegate = d1end5p.ifnode
+                end1_new_delegate = d2end3p.ifnode
+            else:
+                # assert len(d2end3p_loops) > 0  # There is no guarantee we have any loops
+                assert len(d1end5p_loops) == 0
+                end1_loops = d2end3p_loops
+                end1_former_delegate = d2end3p.ifnode
+                end1_new_delegate = d1end5p.ifnode
+            if len(d2end5p_loops) > 0:
+                assert len(d1end3p_loops) == 0
+                end2_loops = d2end5p_loops
+                end2_former_delegate = d2end5p.ifnode
+                end2_new_delegate = d1end3p.ifnode
+            else:
+                # assert len(d1end3p_loops) > 0   # There is no guarantee we have any loops
+                assert len(d2end5p_loops) == 0
+                end2_loops = d1end3p_loops
+                end2_former_delegate = d1end3p.ifnode
+                end2_new_delegate = d2end5p.ifnode
+            ends_former_top_delegates = (end1_former_delegate, end2_former_delegate)
+            ends_new_delegates = (end1_new_delegate, end2_new_delegate)
+            affected_loopids = set.union(*[cmplx.loopids_by_interface[ifnode] for ifnode in reactant_nodes])
+        else:
+            # For STACKING (and probably backbone ligation/nicking) we can do it simpler:
+            elem1_loops = cmplx.loopids_by_interface[elem1_ifnode]
+            elem2_loops = cmplx.loopids_by_interface[elem2_ifnode]
+            if len(elem1_loops) > 0:
+                previous_top_delegate = elem1_ifnode    # Or maybe there just wasn't any loops?
+                newly_undelegated_ifnode = elem2_ifnode
+                assert len(elem2_loops) == 0
+                affected_loopids = elem1_loops
+            else:
+                previous_top_delegate = elem2_ifnode
+                newly_undelegated_ifnode = elem1_ifnode
+                assert len(elem1_loops) == 0
+                affected_loopids = elem2_loops
         if len(affected_loopids) == 0:
             return None
-        # 2. Find the loop with the shortest path. This is the one we want to remove.
-        # loop1_id = max(affected_loopids, key=lambda loopid: cmplx.loops[loopid]['activity'])
-        changed_loopids_deque = deque(sorted(affected_loopids, key=lambda loopid: cmplx.loops[loopid]['activity']))
+        # Make sure not to modify affected_loopids - we use that later! (This is just for debugging)
+        unprocesses_affected_loopids = affected_loopids.copy()
+
+        # 2. Update all loops to include the ifnode split.
+        # Edit: TODO: Should this be described genericly? Otherwise, maybe move this function to Complex
+        #       to indicate that this is actually modifying the loops, not just "calculating loop effects" !
+        #       OTOH, I'm making use of self.interface_graph which is not available within Complex.
+        # We need to have the updated ifnodes in the paths because we query the edge length in
+        # find_alternative_shortest_path using self.interface_graph[source][target]['len_contour']
+        changed_loopids_lst = sorted(affected_loopids, key=lambda loopid: cmplx.loops[loopid]['activity'], reverse=True)
+        changed_loopids_deque = deque(changed_loopids_lst)
+        affected_loops = [cmplx.loops[loopid] for loopid in changed_loopids_lst]
+        for loopid, affected_loop in zip(changed_loopids_lst, affected_loops):
+            path = affected_loop['path']
+            path_node_index = {ifnode: idx for idx, ifnode in enumerate(path)}
+            # TODO, FIX: For duplex dehybridization, we should perhaps pre-process the path such that if
+            # the previous_top_delegate ifnode is no longer connected to the next ifnode in the path,
+            # then check if the newly_delegated_ifnode is and if so, swap them out.
+            # Then, if both duplex ends are still connected to the rest of the path, then
+            # no further path changes are necessary. You can add effects caused by changes in contour length,
+            # so perhaps re-calculate loop activity, but you don't need to change the path ifnodes.
+            if reaction_type is HYBRIDIZATION_INTERACTION:
+                ends_path_idxs = [path_node_index.get(ifnode) for ifnode in ends_former_top_delegates]
+                end_on_path = [idx is not None for idx in ends_path_idxs]
+                assert any(end_on_path) # path should go through duplex somehow.
+                if all(end_on_path):
+                    # Both duplex ends are part of the path. Figure out which is up/down stream in the path's direction
+                    assert abs(ends_path_idxs[0] - ends_path_idxs[1]) == 1
+                    # path_is_parallel = ends_path_idxs[0] < ends_path_idxs[1]
+                    end_downstream_idx, end_upstream_idx = ((ends_path_idxs[0], ends_path_idxs[1])
+                                                            if ends_path_idxs[0] < ends_path_idxs[1] else
+                                                            (ends_path_idxs[1], ends_path_idxs[0]))
+                    neighbor_idxs = (end_downstream_idx-1, # OK, even if idx=0
+                                     end_upstream_idx+1 if end_upstream_idx+1 < len(path) else 0)
+                    neighbors = [path[idx] for idx in neighbor_idxs]
+                    for (neighbor, top_delegate, new_delegate, idx) in zip(
+                            neighbors, ends_former_top_delegates, ends_new_delegates, ends_path_idxs):
+                        if top_delegate not in self.interface_graph.adj[neighbor]:
+                            # I can't think of any situations where neither delegates are connected in the path:
+                            assert new_delegate in self.interface_graph.adj[neighbor]
+                            # Swap ifnodes:
+                            print("Swapping old top delegate %s with new delegate %s on loop %s path %s" %
+                                  (top_delegate, new_delegate, loopid, path))
+                            path[idx] = new_delegate
+                        else:
+                            pdb.set_trace()
+                    # Check if the two path-connected delegates are connected to each other.
+                    # TODO: This check belongs in the "find-new-loop-path-maybe" loop below!
+                    path_connected_ifnodes = [path[idx] for idx in ends_path_idxs]
+                    if path_connected_ifnodes[0] in self.interface_graph.adj[path_connected_ifnodes[1]]:
+                        print("Loop %s: Path-connected Ifnodes %s are still connected to each other" % (
+                            loopid, path_connected_ifnodes))
+                        # continue
+
+                # If not all(ends_on_path), then I don't think we need to do any pre-processing.
+                # The loop path must surely change, it is just a question of how.
+
+
+
+            else:
+                # STACKING_INTERACTION
+                ifnode_idx = path.index(previous_top_delegate)
+                # How to know if the new ifnode should be inserted before or after?
+                if ifnode_idx == len(path)-1 or ifnode_idx == 0:
+                    # We can just append the new ifnode and it should be OK.
+                    path.append(newly_undelegated_ifnode)
+                else:
+                    # the previous_top_delegate ifnode is not at the start or end of the path;
+                    # check if the previous_top_delegate is connected to the nodes before/after it:
+                    ifnode_before, ifnode_after = path[ifnode_idx-1], path[ifnode_idx+1]
+                    if previous_top_delegate in self.interface_graph.adj[ifnode_before]:
+                        # Not sure about these assertions, verify if you encounter AssertionErrors:
+                        # One reason why it may be correct is that ifnode_idx is not at the start or end of the path,
+                        # so the path must be 3 or more elements long.
+                        assert ifnode_before in self.interface_graph.adj[previous_top_delegate]
+                        assert previous_top_delegate not in self.interface_graph.adj[ifnode_after]
+                        assert ifnode_after not in self.interface_graph.adj[previous_top_delegate]
+                        assert newly_undelegated_ifnode in self.interface_graph.adj[ifnode_after]
+                        assert newly_undelegated_ifnode not in self.interface_graph.adj[ifnode_before]
+                        # TODO: Remove the excessive assertions above.
+                        # Insert newly_undelegated_ifnode AFTER previous_top_delegate in the path at position idx+1:
+                        path.insert(ifnode_idx+1, newly_undelegated_ifnode)
+                        print(("Inserted newly_undelegated_ifnode %s AFTER previous_top_delegate %s in loop %s path at "\
+                               "position %s+1") % (newly_undelegated_ifnode, previous_top_delegate, loopid, ifnode_idx))
+                    else:
+                        assert ifnode_before not in self.interface_graph.adj[previous_top_delegate]
+                        assert previous_top_delegate in self.interface_graph.adj[ifnode_after]
+                        assert ifnode_after in self.interface_graph.adj[previous_top_delegate]
+                        assert newly_undelegated_ifnode not in self.interface_graph.adj[ifnode_after]
+                        assert newly_undelegated_ifnode in self.interface_graph.adj[ifnode_before]
+                        # TODO: Remove the excessive assertions above.
+                        # Insert newly_undelegated_ifnode *before* previous_top_delegate in the path:
+                        path.insert(ifnode_idx, newly_undelegated_ifnode)
+                        print(("Inserted newly_undelegated_ifnode %s BEFORE previous_top_delegate %s in loop %s path at "\
+                               "position %s") % (newly_undelegated_ifnode, previous_top_delegate, loopid, ifnode_idx))
+
+        # 3. Find the loop with the highest activity. This is the one we want to remove.
         loop1_id = changed_loopids_deque.popleft()
         loop1_hash = cmplx.loops[loop1_id]['loop_hash']
 
@@ -655,13 +807,49 @@ class GraphManager(object):
             'del_loop_hash': loop1_hash,
             'changed_loops': changed_loops,
             'changed_loops_by_hash': changed_loops_by_hash,
+            'previous_top_delegate': previous_top_delegate,         # Do not use, for debugging only
+            'newly_undelegated_ifnode': newly_undelegated_ifnode,   # Do not use, for debugging only
+            'previous_top_delegate_spec': previous_top_delegate.state_fingerprint(),
+            'newly_undelegated_ifnode_spec': newly_undelegated_ifnode.state_fingerprint(),
+            'complex_loop_ensemble_fingerprint': cmplx.loop_ensemble_fingerprint
         }
 
-        affected_loopids.remove(loop1_id) # changed_loopids
+        unprocesses_affected_loopids.remove(loop1_id) # changed_loopids
 
-        #
-        # for affected_loopid in affected_loopids:
-        #     No, this is not the correct way to propagate the change.
+        # System:   Λ₀           .------.
+        #            .-------,--´------. \
+        #           /  Λa   /          \  \ c
+        #         a \   eᵤᵥ/:/   Λb    /   \  Λc
+        #            \      /       b /     \
+        #             `-.--´---------´      |
+        #                `-----------------´
+        # We have three affected loops: Λa (aᵢ+e₁ᵢ), Λb (bᵢ+e₂ᵢ), and Λc (cᵢ+e₃ᵢ).
+        # Note that the edge designation is a little weird, since it is basically a matrix:
+        # Λa vs Λb:  Λa=a₂+e₂₁, Λb=b₁+e₁₂,  e₁₂==e₂₁
+        # Λa vs Λc:  Λa=a₃+e₃₁, Λc=c₁+e₁₃,  e₁₃==e₃₁
+        # Λb vs Λc:  Λb=b₃+e₃₂, Λc=c₂+e₂₃,  e₂₃==e₃₂
+
+        # That is, the "shared subpath" depends on what loops we are comparing.
+        # If we assume that two loops will only ever have one shared sub-path,
+        # then any shared path should be eᵤᵥ, the path that is no longer usable.
+
+        # All loops goes through eᵤᵥ which is broken apart, so all loops are affected.
+        # We must: (1) Delete one loop, and (2) find new paths for the remaining loops.
+        # When finding new loops, care must be taken to make the new loops (a) unique and
+        # (b) use the shortest-path available.
+        # In the case above:
+        # affected_loopids = {Λa, Λb, Λc}
+        # del_loop = Λa
+        # changed_loopids_deque = (Λb, Λc)
+        # alternative_loop_paths = [Λa]
+        # Expected (if both Λb and Λc opts to use sub-path a for the new shortest path)
+        #   Λb:  b₁+e₁₂ --> b₁+a₂
+        #   Λc:  c₁+e₁₃ --> a₃+c₁
+        # while loop 1:
+        #   # loop1 is the loop before
+        #   loop1 = Λb
+        #   path2_
+
 
         # Propagate the change iteratively same way as you determine loop formation efffects:
         alternative_loop_paths = [cmplx.loops[loop1_id]['path']]
@@ -669,29 +857,32 @@ class GraphManager(object):
             # For the first round, the loop considered is Λ₁ with loop_id None.
             # It is not appropriate to use "loop0" to describe this; you can use "loop1" or "new_loop"
             loop1_id = changed_loopids_deque.popleft()
-            loop1_info = changed_loops[loop1_id]
+            loop1_info = cmplx.loops[loop1_id]
+            loop1_old_hash = loop1_info['loop_hash']
             loop1_shortest_path = loop1_info['path']
-            path2_length, loop2_path, e1, e2, e3, loop0_path = self.find_alternative_shortest_path(
+            # loop0_path is the alternative_loop_path used to create the new_loop_path.
+            new_path_length, new_loop_path, e1, e2, e3, loop0_path = self.find_alternative_shortest_path(
                 loop1_shortest_path, alternative_loop_paths)
-            a2 = self.calculate_loop_activity(loop2_path, simulate_reaction=None)
+            a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=None)
             # [ifnode.state_fingerprint() for ifnode in loop2_path]
-            loop2_path_spec = cmplx.calculate_loop_path_spec(loop2_path)
-            loop_change_factor = a2/loop1_info['path']
+            new_loop_path_spec = cmplx.calculate_loop_path_spec(new_loop_path)
+            loop_change_factor = a2/loop1_info['activity']
             replacement_loop = {
-                'path': loop2_path,
-                'path_spec': loop2_path_spec,
-                'loop_hash': cmplx.calculate_loop_hash(loop2_path_spec),
+                'path': new_loop_path, # Only for debugging; the result is cached and uses between complexes
+                'path_spec': new_loop_path_spec,
+                'loop_hash': cmplx.calculate_loop_hash(new_loop_path_spec),
                 'activity': a2,
                 'dS': ln(a2), # in units of R
                 'loop_change_factor': loop_change_factor, # = a2/a0
-                'description': "Case 1: shared loop on shortest_path.",
                 # Values for the original loop (mostly for debugging)
                 'a0': loop1_info['path'],
-                'loop0_hash': loop1_info['hash'], # so we can relate this to the original/parent loop.
+                'loop0_hash': loop1_old_hash, # so we can relate this to the original/parent loop.
                 'old_loop0_id': loop1_id,
             }
             changed_loops[loop1_id] = replacement_loop
-            changed_loops[loop1_info['hash']] = replacement_loop
+            changed_loops[loop1_old_hash] = replacement_loop
+            unprocesses_affected_loopids.remove(loop1_id)
+        assert len(unprocesses_affected_loopids) == 0  # TODO: Remove debug check
         return loop_effects
 
 
@@ -702,107 +893,162 @@ class GraphManager(object):
             alternative_loops are other loop paths that are also broken, but should be usable...
         The hypothesis is currently that we should be able to piece together a new shortest path
         using the previous (broken-up and processed) paths.
-        """
-        # alt_loops_nodes = [set(path) for path in alternative_loops]
-        alternatives = []
-        for loop0_path in alternative_loop_paths:
-            loop0_nodes = set(loop0_path)
-            # Note: When forming, e3 is the "possibly shorter" path and e1 the shared path part;
-            # when breaking, e3 is the "broken part" (shared) and e1 is the "possibly shorter" part?
+        ## Consider the system:   .------.
+        ##            .-------,--´------. \
+        ##           /  Λa   /          \  \ c = e1
+        ##         a \   eᵤᵥ/:/   Λb    /   \  Λc = loop1
+        ##            \      /       b /     \
+        ##             `-.--´---------´      |
+        ##                `-----------------´
+        We are considering loop1_path = Λc = c+eᵤᵥ
+        against alternative_loop_paths = [Λa, Λb]     "loop0"
+        for each loop0 in alternative_loop_paths
+        we find the shared part eᵤᵥ aka e3 and the not-shared-but-possibly-new-shorter sub-path e2.
+        Thus, for loop1_path=Λc and alternative_loop_path=Λa, we have the following loop aliases:
+            e3 = eᵤᵥ = e₁₃ = e₃₁
+            e2 = a
+            e1 = c
+            loop2_path = e1 + e2 = c + a
+        # (Yes, there was lots of changes to the nomenclature, but I think it is fixed now:)
+        # EDIT EDIT EDIT: e3 is the shared part, e1 is the "unique to loop1" part, e2 is the "unique to loop0" part.
+
+        # Note: When forming, e3 is the "possibly shorter" path and e1 the shared path part;
+        # when breaking, e3 is the "broken part" (shared) and e2 is the "possibly shorter" part.
+        Previous considerations:
             # Or should we make it the same: e3 is the "possibly shorter" path, e1 is the shared (but broken) path.
-            e1_or_e3_sub_paths = [(is_shared, list(group_iter)) for is_shared, group_iter in
-                                  groupby(loop1_path, lambda ifnode: ifnode not in loop0_nodes)] # pylint: disable=W0640
             # e3 is "possibly shorter", e1 is the shared part.
             # edit edit: e1 is the shared part, e3 is the "unique to loop1" part, e2 is the "unique to loop0" part.
             # edit edit edit: e3 is the shared part, e1 is the "unique to loop1" part, e2 is the "unique to loop0" part.
 
-            assert len(e1_or_e3_sub_paths) <= 3
-            if len(e1_or_e3_sub_paths) == 1:
-                # We only have one sub-path: make sure it is e1
-                assert e1_or_e3_sub_paths[0][0] is True  # verify that e₁ is *not* on Λ₀
-                e1 = e1_or_e3_sub_paths[0][1]
-                e3a, e3b = [e1[0]], [e1[-1]]
-            elif len(e1_or_e3_sub_paths) == 2:
-                if e1_or_e3_sub_paths[0][0] is True:
-                    # We have e3b > 0; e3a starts at e1 (has zero length)
-                    e1 = e1_or_e3_sub_paths[0][1]
-                    e3a, e3b = [e1[0]], [e1[-1]]
-                    e3b.extend(e1_or_e3_sub_paths[1][1])
-                else:
-                    # We have e3a > 0; e3b starts and ends on e1 (has zero length)
-                    e3a, e1 = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1]
-                    e3a, e3b = [e1[0]], [e1[-1]]
-                    e3a.append(e1[0])
+        Discussion: Where do the "intersection nodes" go?
+        - in find_maybe_shorter_e1_e3_subpaths() we added the intersection nodes to the two candidate sub-paths
+            because we wanted to compare the two candidate sub-paths directly
+        We don't have that concern here: we are comparing the full loop path length, since the different
+        alternatives have different shared/overlapping sub-paths.
+
+
+        """
+        alternatives = []
+        loop1_nodes = set(loop1_path)
+        for loop0_path in alternative_loop_paths:
+            loop0_nodes = set(loop0_path)
+            e2_nodes = loop0_nodes - loop1_nodes # set(e3)
+            e3_nodes = loop0_nodes & loop1_nodes # shared nodes
+            # This is probably an easier and more reliable way:
+            loop1_e3 = [ifnode for ifnode in loop1_path if ifnode in e3_nodes]
+            loop0_e3 = [ifnode for ifnode in loop0_path if ifnode in e3_nodes]
+            if loop1_e3 == loop0_e3:
+                e3_is_parallel = True
             else:
-                # We cannot know whether loop1_path starts on e1 or e3, but we can easily check:
-                if e1_or_e3_sub_paths[0][0] is True: # True means "on e1, not on e3".
-                    # loop1_path starts on e1
-                    assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (True, False, True)
-                    e1a, e3, e1b = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1], e1_or_e3_sub_paths[2][1]
-                    e1 = e1b + e1a
-                    e3 = [e1[-1]] + e3 + [e1[0]] # e3 starts with the last node in e1 and ends with the first e1 node
-                else:
-                    # loop1_path starts on e3:
-                    assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (False, True, False)
-                    e3a, e1, e3b = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1], e1_or_e3_sub_paths[2][1]
-                    e3 = [e1[-1]] + e3b + e3a + [e1[0]] # e3 starts with last node in e1 and end in the first e1 node
-
-            # e1_groups = [(stiffness, list(group_iter)) for stiffness, group_iter
-            #              in self.group_interfaces_path_by_stiffness(e1)]
-
-            ## Unlike when forming new loops, here we are not very interested in e1.
-            ## However, we *are* interested in e2 and the total loop path length.
-
-            # Find e2:
-            # loop1 and loop0 can potentially go in opposite directions. We need to be aware of that:
-            e3_is_parallel = loop0_path.index(e3[0]) < loop0_path.index(e3[-1])
-            e2_nodes = loop0_nodes - set(e3)
-            e2_or_e3 = [(is_shared, list(group_iter)) for is_shared, group_iter
-                        in groupby(loop0_path, lambda node: node in e2_nodes)]  # pylint: disable=W0640
-            # e2_subpaths = [sub_path_group[1] for sub_path_group in e2_or_e3 if sub_path_group[0]]
-            assert 1 <= len(e2_or_e3) <= 3
-            if len(e2_or_e3) == 3:
-                if e2_or_e3[0][0] is True: # we start in e2
-                    e2a, e3s, e2b = e2_or_e3[0][1] + e2_or_e3[1][1] + e2_or_e3[2][1]
-                    e2 = e2b + e2a
-                else:
-                    e3a_, e2, e3b_ = e2_or_e3[0][1] + e2_or_e3[1][1] + e2_or_e3[2][1]
-                    e3_ = e3b_ + e3a_  # Using underscore to distinguish from e3 calculated using loop1_path
-            elif len(e2_or_e3) == 2:
-                if e2_or_e3[0][0] is True: # we start in e2
-                    e2, e3_ = e2_or_e3[0][1] + e2_or_e3[1][1]
-                else:
-                    e3_, e2 = e2_or_e3[0][1] + e2_or_e3[1][1]
-            else:
-                # I don't think this should happen since e3 includes the "intersection nodes" (as does e1).
-                assert len(e3) == 0
-                assert e2_or_e3[0][0] is True # we start in e2
-                e2 = e2_or_e3[0][1]
-            # alternatively, you could have looked at whether loop0_path[0] and loop0_path[-1]
-            # are both in e2_nodes
-
-            ## Determine how e2 and e1 should be combined to form a new shortest candidate:
-            # Note: e1 and e3 e3a/e3b share the "intersection nodes", but e2 does not.
+                e3_is_parallel = False
+                assert loop1_e3 == loop0_e3[::-1]
+            loop1_e1 = [ifnode for ifnode in loop1_path if ifnode not in e3_nodes]
+            loop0_e2 = [ifnode for ifnode in loop0_path if ifnode not in e3_nodes]
+            # intersection_nodes = (loop1_e3[0], loop1_e3[-1])
+            assert len(loop1_e3) >= 2
+            assert loop1_e3[0] != loop1_e3[-1]
+            loop1_e3_idxs = (loop1_path.index(loop1_e3[0]), loop1_path.index(loop1_e3[-1]))
+            loop1_e3_idxs = (loop1_path.index(loop0_e3[0]), loop1_path.index(loop0_e3[-1]))
             if e3_is_parallel:
-                # we must reverse e2 when concatenating with e1:
-                assert e2[-1] in self.interface_graph.adj[e1[-1]] # the last nodes are next to each other
-                assert e2[0] in self.interface_graph.adj[e1[0]]   # and the first nodes are next to each other
-                loop2_path = e1 + e2[::-1]                        # so definitely need to reverse
+                # We need to reverse loop0_e2 to make it fit.
+                loop2_path = loop1_e1 + [loop1_e3[0]] + loop0_e2[::-1] + [loop1_e3[-1]]
+                # It is generally faster to extend+append instead of concatenate, but no difference for small lists.
             else:
-                assert e2[0] in self.interface_graph.adj[e1[-1]]
-                assert e2[-1] in self.interface_graph.adj[e1[0]]
-                loop2_path = e1 + e2
-            # loop2_groups = [(stiffness, list(group_iter)) for stiffness, group_iter
-            #                 in self.group_interfaces_path_by_stiffness(loop2_path)]
-            # We only evaluate shortest paths based on length, we do not calculate activity or anything like that:
-            # path_source_target_eattr = ((source, target, self.interface_graph[source][target])
-            #                             for source, target in zip(loop2_path, loop2_path[1:]))
-            # # We really should have all three lengths: len_contour, dist_ee_nm, and dist_ee_sq.
-            # path_tuples = ((edge_attrs['len_contour'], edge_attrs['dist_ee_sq'], edge_attrs['stiffness'], source, target)
-            #                for source, target, edge_attrs in path_source_target_eattr)
+                loop2_path = loop1_e1 + [loop1_e3[0]] + loop0_e2 + [loop1_e3[-1]]
             path2_length = sum(self.interface_graph[source][target]['len_contour']
                                for source, target in zip(loop2_path, loop2_path[1:]))
-            alternatives.append((path2_length, loop2_path, e1, e2, e3, loop0_path))
+            alternatives.append((path2_length, loop2_path, loop1_e1, loop0_e2, loop1_e3, loop0_path))
+
+
+            #
+            # ## Old groupby approach:
+            # # e3 is the shared part, e1 is the "unique to loop1" part, e2 is the "unique to loop0" part.
+            # e1_or_e3_sub_paths = [(is_shared, list(group_iter)) for is_shared, group_iter in
+            #                       groupby(loop1_path, lambda ifnode: ifnode not in loop0_nodes)] # pylint: disable=W0640
+            # assert len(e1_or_e3_sub_paths) <= 3
+            # if len(e1_or_e3_sub_paths) == 1:
+            #     # We only have one sub-path: make sure it is e1
+            #     assert e1_or_e3_sub_paths[0][0] is True  # verify that e₁ is *not* on Λ₀
+            #     e1 = e1_or_e3_sub_paths[0][1]
+            #     e3a, e3b = [e1[0]], [e1[-1]]
+            # elif len(e1_or_e3_sub_paths) == 2:
+            #     if e1_or_e3_sub_paths[0][0] is True:
+            #         # We have e3b > 0; e3a starts at e1 (has zero length)
+            #         e1 = e1_or_e3_sub_paths[0][1]
+            #         e3a, e3b = [e1[0]], [e1[-1]]
+            #         e3b.extend(e1_or_e3_sub_paths[1][1])
+            #     else:
+            #         # We have e3a > 0; e3b starts and ends on e1 (has zero length)
+            #         e3a, e1 = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1]
+            #         e3a, e3b = [e1[0]], [e1[-1]]
+            #         e3a.append(e1[0])
+            # else:
+            #     # We cannot know whether loop1_path starts on e1 or e3, but we can easily check:
+            #     if e1_or_e3_sub_paths[0][0] is True: # True means "on e1, not on e3".
+            #         # loop1_path starts on e1
+            #         assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (True, False, True)
+            #         e1a, e3, e1b = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1], e1_or_e3_sub_paths[2][1]
+            #         e1 = e1b + e1a
+            #         e3 = [e1[-1]] + e3 + [e1[0]] # e3 starts with the last node in e1 and ends with the first e1 node
+            #     else:
+            #         # loop1_path starts on e3:
+            #         assert tuple(tup[0] for tup in e1_or_e3_sub_paths) == (False, True, False)
+            #         e3a, e1, e3b = e1_or_e3_sub_paths[0][1], e1_or_e3_sub_paths[1][1], e1_or_e3_sub_paths[2][1]
+            #         e3 = [e1[-1]] + e3b + e3a + [e1[0]] # e3 starts with last node in e1 and end in the first e1 node
+            #
+            # ## Unlike when forming new loops, here we are not very interested in e1.
+            # ## However, we *are* interested in e2 and the total loop path length.
+            #
+            # # Find e2:
+            # # loop1 and loop0 can potentially go in opposite directions. We need to be aware of that:
+            # e3_is_parallel = loop0_path.index(e3[0]) < loop0_path.index(e3[-1])
+            # e2_or_e3 = [(is_shared, list(group_iter)) for is_shared, group_iter
+            #             in groupby(loop0_path, lambda node: node in e2_nodes)]  # pylint: disable=W0640
+            # # e2_subpaths = [sub_path_group[1] for sub_path_group in e2_or_e3 if sub_path_group[0]]
+            # assert 1 <= len(e2_or_e3) <= 3
+            # if len(e2_or_e3) == 3:
+            #     if e2_or_e3[0][0] is True: # we start in e2
+            #         e2a, e3s, e2b = e2_or_e3[0][1] + e2_or_e3[1][1] + e2_or_e3[2][1]
+            #         e2 = e2b + e2a
+            #     else:
+            #         e3a_, e2, e3b_ = e2_or_e3[0][1] + e2_or_e3[1][1] + e2_or_e3[2][1]
+            #         e3_ = e3b_ + e3a_  # Using underscore to distinguish from e3 calculated using loop1_path
+            # elif len(e2_or_e3) == 2:
+            #     if e2_or_e3[0][0] is True: # we start in e2
+            #         e2, e3_ = e2_or_e3[0][1] + e2_or_e3[1][1]
+            #     else:
+            #         e3_, e2 = e2_or_e3[0][1] + e2_or_e3[1][1]
+            # else:
+            #     # I don't think this should happen since e3 includes the "intersection nodes" (as does e1).
+            #     assert len(e3) == 0
+            #     assert e2_or_e3[0][0] is True # we start in e2
+            #     e2 = e2_or_e3[0][1]
+            # # alternatively, you could have looked at whether loop0_path[0] and loop0_path[-1]
+            # # are both in e2_nodes
+            #
+            # ## Determine how e2 and e1 should be combined to form a new shortest candidate:
+            # # Note: e1 and e3 e3a/e3b share the "intersection nodes", but e2 does not.
+            # # Again: e3 is the shared/broken sub-path, e1 is "unique to loop1" sub-path, e2 is "unique to loop0".
+            # if e3_is_parallel:
+            #     # we must reverse e2 when concatenating with e1:
+            #     assert e2[-1] in self.interface_graph.adj[e1[-1]] # the last nodes are next to each other
+            #     assert e2[0] in self.interface_graph.adj[e1[0]]   # and the first nodes are next to each other
+            #     loop2_path = e1 + e2[::-1]                        # so definitely need to reverse
+            # else:
+            #     assert e2[0] in self.interface_graph.adj[e1[-1]]
+            #     assert e2[-1] in self.interface_graph.adj[e1[0]]
+            #     loop2_path = e1 + e2
+            # # loop2_groups = [(stiffness, list(group_iter)) for stiffness, group_iter
+            # #                 in self.group_interfaces_path_by_stiffness(loop2_path)]
+            # # We only evaluate shortest paths based on length, we do not calculate activity or anything like that:
+            # # path_source_target_eattr = ((source, target, self.interface_graph[source][target])
+            # #                             for source, target in zip(loop2_path, loop2_path[1:]))
+            # # # We really should have all three lengths: len_contour, dist_ee_nm, and dist_ee_sq.
+            # # path_tuples = ((edge_attrs['len_contour'], edge_attrs['dist_ee_sq'], edge_attrs['stiffness'], source, target)
+            # #                for source, target, edge_attrs in path_source_target_eattr)
+            # path2_length = sum(self.interface_graph[source][target]['len_contour']
+            #                    for source, target in zip(loop2_path, loop2_path[1:]))
+            # alternatives.append((path2_length, loop2_path, e1, e2, e3, loop0_path))
         # end for loop0_path in alternative_loop_paths
         return min(alternatives)
 
@@ -848,6 +1094,7 @@ class GraphManager(object):
                 I'm currently doing this (2).
 
         """
+        print("\nCalculating loop_formation_effects for '%s' reaction between %s and %s" % (reaction_type, elem1, elem2))
 
         if reaction_type is HYBRIDIZATION_INTERACTION:
             domain1, domain2 = elem1, elem2
@@ -945,10 +1192,12 @@ class GraphManager(object):
         ifnode_by_hash_index_after = set(cmplx.ifnode_by_hash.items())
         assert path_spec == cmplx.calculate_loop_path_spec(new_loop_path)
         assert ifnode_by_hash_index_before == ifnode_by_hash_index_after
-        print("\npath_spec for new loop: ", path_spec)
+        print("\nnew loop (shortest_path):", new_loop_path)
+        print(" - new_loop_path_spec: ", path_spec)
         ## TODO: Remove until here <<
         new_loop = {'path': new_loop_path, 'path_spec': path_spec, 'activity': activity,
                     'loop_hash': cmplx.calculate_loop_hash(path_spec)}
+        print(" - new_loop info: %s" % (new_loop,))
         changed_loops[None] = new_loop
         new_stacking_loops = {}
         loop_effects = {
@@ -970,6 +1219,7 @@ class GraphManager(object):
             'new_stacking_loops': new_stacking_loops,
             'stacking_side_effects_activities': side_effects_activities,
             'stacking_side_effects_factors': side_effects_factors,
+            'complex_loop_ensemble_fingerprint': cmplx.loop_ensemble_fingerprint,
         }
 
         if not cmplx.loops:
@@ -1088,7 +1338,7 @@ class GraphManager(object):
         ##            .----------,--´------. \
         ##           /   Λ₁     /          \  \ e₄ (not part of the original discussion)
         ##        e₁ \      e₃ /:/   Λ₂    /   \
-        ##            \         |         / e₂  \
+        ##            \         /         / e₂  \
         ##             `----.--´---------´      |
         ##                   `-----------------´
         ## Where symbols Λ₀ Λ₁ Λ₂ e₁ e₂ e₃:
@@ -1174,27 +1424,37 @@ class GraphManager(object):
             # fully_unshared_nodes = shortest_path_nodes.difference(cmplx.loopids_by_interface.keys())
             for loop0_id in shared_loopids:
                 loop0 = cmplx.loop_by_loopid[loop0_id]
+                print("Processing possibly-affected loop0 %s: %s" % (loop0_id, loop0))
                 # path is shortest-path loop Λ₁, shared loop is Λ₀ aka "loop0".
                 # Makes lookup faster for long loop0 but with constant overhead.
                 ## TODO (optimization): If path[0] and path[-1] are both in the loop, then this can be optimized,
                 ##  because you don't have to group, but can simply calculate the e1, e2 paths directly.
-                #loop0_nodes = loop0['ifnodes']
                 loop0_path = loop0['path']
+                # When stacking backbone-connected duplex-ends, we form (self-)loops with a single node and no edge.
+                # Do not consider these for optimization.
+                if len(loop0_path) < 2:
+                    continue
                 loop0_path_spec = cmplx.calculate_loop_path_spec(loop0_path)
                 loop0_hash = cmplx.calculate_loop_hash(loop0_path_spec)
                 assert loop0['loop_hash'] == loop0_hash  # TODO: Remove recalculation check of loop0_hash
+                #loop0_nodes = loop0['ifnodes']
                 loop0_nodes = set(loop0_path)
+                assert len(loop0_nodes) > 1  # If path has more than 1 elems, the set should as well.
                 # Casting group_iter to list: (TODO: Check if that is really needed...)
-                e1, e3a, e3b, e3_groups, use_e3 = self.find_changed_loop_e1_e3(
-                    loop1_shortest_path, loop0_nodes, reaction_type)
+
+                # Note: loop1_shortest_path (e1+e3) is *NOT* a candidate path for loop0.
+                # loop1_shortest_path is used to find the overlap (e1) between loop0 and loop1 and determine if the
+                # "non-overlapping subpath" (e3) is a shorter route for loop0.
+                e1, e3a, e3b, e3_groups, use_e3 = self.find_maybe_shorter_e1_e3_subpaths(
+                    loop0_nodes, loop1_shortest_path, reaction_type)
 
                 # Calculate new activity for new loop0 path
                 if use_e3:
                     # New loops Λ₁ and Λ₂ are independent, multiply activity by factor a₁/a₀:
                     # TODO: Account for cases where e3a == [] or e3b == [] or both (e3==0) !
                     a0 = loop0['activity']
+                    # Find e2:
                     e2_nodes = loop0_nodes - set(e1)
-                    loop0_path = loop0['path']
                     e2_or_e1 = [(is_shared, list(group_iter)) for is_shared, group_iter
                                 in groupby(loop0_path, lambda node: node in e2_nodes)]
                     e2_subpaths = [sub_path_group[1] for sub_path_group in e2_or_e1 if sub_path_group[0]]
@@ -1226,7 +1486,8 @@ class GraphManager(object):
                         # Need to reverse direction of e3 or e2 before joining them:
                         # e3 is e3b extended by e3a (list performs best by extending at the end)
                         loop2_path = e3a + e2[::-1] + e3b
-                    print("Loop2 path:\n", loop2_path)
+                    print(" - The new loop produced a shorter path for existing loop0 %s, loop2_path = %s" % (
+                        loop0_id, loop2_path))
                     a2 = self.calculate_loop_activity(loop2_path, simulate_reaction=reaction_type)
                     if a2 == 0:
                         return 0, None
@@ -1255,6 +1516,7 @@ class GraphManager(object):
                         'loop0_hash': loop0_hash, # so we can relate this to the original/parent loop.
                         'old_loop0_id': loop0_id,
                     }
+                    print(" - New info (path, hash, activity) for loop0 %s: %s\n" % (loop0_id, replacement_loop))
                     assert loop0_id not in changed_loops
                     changed_loops[loop0_id] = replacement_loop
                     assert loop0_hash not in changed_loops_by_hash
@@ -1627,11 +1889,52 @@ class GraphManager(object):
         return activity, loop_effects
 
 
-    def find_changed_loop_e1_e3(self, loop1_path, loop0_nodes, reaction_type):
+    def find_maybe_shorter_e1_e3_subpaths(self, loop0_nodes, loop1_path, reaction_type):
         """
-        Find e1 and e3 sub-paths for loop1, where e1 is the sub-path that is
-        on loop0, and e3 is the sub-path that is not on loop0.
+        Arguments:
+            loop0_nodes: Nodes in a current loop for which we are considering there might be shorter path.
+            loop1_path: A recently created or updated loop forming a new shortest path.
+        Note: loop1_path is *NOT* the "possibly shorter candidate path for loop0.
+        It is a path that overlaps with loop0 and which is the shortest path for another
+        new or recently updated loop, but it is not a path that we are considering for loop0.
+        Instead, what we are considering is a new loop path for loop0 formed partially by
+        loop0 and partially by loop1_path, specifically the part of loop1 which does not overlap with loop0.
+        If you want to compare a current loop with a candidate loop, there is another method for doing that.
+
+        Consider the system below. It currently has a single loop, Λ₀. We have are forming a new
+        edge connection, e₃, producing a new loop (Λ₁) with shortest path e₁+e₃.
+        We want to know if Λ₀ (e₂+e₁) can be made shorter by using e₃ instead of e₁, forming the updated
+        shortest-path e₂+e₃ (Λ₂).
+        To do that, we must first determine what e₁ and e₃ sub-paths actually are (and by subtraction e₂).
+            Λ₀  .-------,--------.
+               /   Λ₁  /  e₃     \  e₂
+            e₁ \      /:/    Λ₂  /
+                `------´--------´
+        This method will find e1 and e3 sub-paths for loop1, where
+        e1 is the sub-path that is on Λ₀ and Λ₁ but not Λ₂,
+        e3 is the sub-path that is on Λ₁ and Λ₂ but not Λ₀,
+        e2 is the sub-path that is on Λ₀ and Λ₂ but not Λ₁.
+
+        Note: The nomenclature of e1, e3 is relative to the loop being considered defined as Λ₀ and the
+        recently updated shortest-path for another loop Λ₁.
+
+        That is, after creating the initial "new loop" (= Λ₁) and determining that we should update the old loop,
+        Λ₀ --> Λ₂, then we may want to look at a another existing loop, Λ₃ = (e₂+e₄), and determine if this loop
+        should use the possibly-shorter path e₃+e₄ instead.
+        We would then call find_maybe_shorter_loop2_subpaths(loop0_path=Λ₃=e₂+e₄, loop1_path=Λ₂=e₂+e₃, ...)
+        Within this method, Λ₃=e₂+e₄ --> Λ₀ (e₂+e₁)  and  Λ₂=e₂+e₃ --> Λ₁=e₁+e₃.
+
+        Question: Should the two "intersection nodes" where e1, e2 and e3 meet be part of e1, e2, e3?
+        It makes sense that they are part of e2 because obviously they are shared.
+        However, when comparing the original e1 subpath length with the new e3 subpath, it is nice if both sub-paths
+        contain the intersection nodes because we need to include the edge-length to/from the intersection nodes.
+        So, although it is not 100% intuitive, we define the intersection nodes
+        to be part of e1 and e3 and NOT PART of e2.
+
+        Also note that loop1_path must start and end on e3, i.e. at the new connection being formed.
+
         """
+        ### 1. Find e1 and e3 subpaths: ###
         ### TODO: DOES THIS WORK if loop1_path does not start and end on e3??
         ### This may be the case when working through all the "possibly changed" loops..
         ### Although I think for changed_loops, we always set the path to start at e3.
@@ -1671,7 +1974,10 @@ class GraphManager(object):
             # e3b starts with the last node in e1 and then extends the rest of the sub-path:
             e3b = [e1[-1]]
             e3b.extend(e1_or_e3_sub_paths[2][1])
-        ## TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
+
+        ### 2. Compare the lengths of e1 and e3 subpaths: ###
+        # TODO: Use a Blist to store path-nodes (you will be doing lots of arbitrary inserts/deletions)
+        # grouped by stiffness, i.e. similar to segments
         e1_groups = [(stiffness, list(group_iter)) for stiffness, group_iter
                      in self.group_interfaces_path_by_stiffness(e1)]
         e3a_groups = [(stiffness, list(group_iter)) for stiffness, group_iter

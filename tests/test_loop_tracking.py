@@ -36,7 +36,7 @@ from nascent.graph_sim_nx.strand import Strand
 # from nascent.graph_sim_nx.componentmgr import ComponentMgr
 from nascent.graph_sim_nx.reactionmgr import ReactionMgr
 # from nascent.graph_sim_nx import graph_manager
-from nascent.graph_sim_nx.constants import STACKING_INTERACTION, HYBRIDIZATION_INTERACTION
+from nascent.graph_sim_nx.constants import STACKING_INTERACTION, HYBRIDIZATION_INTERACTION, RA_UNSTACK_INTRA
 from nascent.graph_sim_nx.constants import ReactionAttrs, RA_HYB_INTRA, RA_HYB_INTER, RA_DEHYB_INTRA, RA_STACK_INTRA
 
 
@@ -129,6 +129,16 @@ reaction h+ :  s3_D >_< s4_d    (73404)
 
     # result = mgr.stack(A.end3p, a.end5p, b.end3p, B.end5p)
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+
+    reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]

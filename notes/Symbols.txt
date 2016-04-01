@@ -22,7 +22,7 @@
 ## Sub and super script: ##
 (Lines starts with upper-case letter A to visualize vertical position.)
 Sub-scripts:
-    A ₀ ₁ ₂ ₃ ₄ ₅ ₆ ₇ ₈ ₉ ₊ ₋ ₌ ₍ ₎ ᵢ ᵣ ᵤ ᵥ
+    A ₀ ₁ ₂ ₃ ₄ ₅ ₆ ₇ ₈ ₉ ₊ ₋ ₓ ₌ ₍ ₎ ᵢ ᵣ ᵤ ᵥ ₐ ₑ ₒ ₔ
 
 Super-scripts:
     A ⁰ ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ⁺ ⁻ ⁼ ⁽ ⁾
@@ -48,7 +48,7 @@ Arrows:
         → ← ↓ ↑ ↕ ↨ ꜛ ꜜ
 
 Math operators:
-         ∂ ∆ ∏ ∑  − ∕ ∙ √ ∞ ∟ ∩ ∫ ⌐ ─  (∕ is different from backslash /)
+         ∂ ∆ ∏ ∑  − ∕ ∙ √ ∞ ∟ ∩ ∫ ⌐ ─  (division sign ∕ is different from backslash / : ∕/)
 Math comparisons:
         ∝ ≈ ≠ ≡  ≤ ≥
 Math multi-line operators:

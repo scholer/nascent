@@ -72,7 +72,23 @@ helix_sequential_id_generator = sequential_number_generator()
 loopid_sequential_number_generator = sequential_number_generator()
 
 
+def unique_gen(sequence):
+    """ Return a generator with unique elements. """
+    seen = set()
+    for elem in sequence:
+        if elem not in seen:
+            yield elem
+            seen.add(elem)
 
+def unique_list(sequence):
+    """ Return a list with unique elements. """
+    seen = set()
+    res = []
+    for elem in sequence:
+        if elem not in seen:
+            res.append(elem)
+            seen.add(elem)
+    return res
 
 
 def state_should_change(method):
@@ -352,6 +368,7 @@ class Complex(nx.MultiDiGraph):
         # Since loops are mutable we cannot have a set of loops, so use a LoopID and
         self.loopids_by_interface = defaultdict(set)  # InterfaceNode => {loop1_id, loop3_id, ...}
         self.loopid_by_hash = {}   # loop hash => loop_id. See calculate_loop_hash function.
+        self.loop_ensemble_fingerprint = None
         # Should we use a set or list? We probably have random deletion of loops, so set is arguably better.
         # Delegatee: A person designated to act for or represent another or others.
         # Delegator: A person who is delegating or has delegated responsibility to someone else.
@@ -360,6 +377,7 @@ class Complex(nx.MultiDiGraph):
 
         ## IFNODES (which makes up a path): ##
         self.ifnode_by_hash = {}  # ifnode-state-hash => ifnode-instance.
+        self.ifnodes_ensemble_fingerprint = None # Not used
         # ifnode_by_hash is reset with complex and should be updated at every change to the complex..
         #
 
@@ -808,6 +826,12 @@ class Complex(nx.MultiDiGraph):
             The best is probably to probe the local environment.
 
         """
+        # TODO: Loops may still be different for Complexes with same state fingerprint,
+        # simply because loop formation depends on the reaction path taken to that state.
+        # It would probably be nice to add a separate "loop_ensemble_hash" which
+        # can be used to group complexes with the same loop ensemble conformation,
+        # and in particular avoid using a cached reaction loop_effects created by
+        # a complex in a different loop ensemble state.
         if self._state_fingerprint is None:
             # Check that all domains in complex have also been reset:
             # assert all(d._specie_state_fingerprint is None for d in self.domains())
@@ -1161,6 +1185,7 @@ class Complex(nx.MultiDiGraph):
         if reset_loops or True:
             self.ifnode_by_hash = None
             self.loopid_by_hash = None
+            self.loop_ensemble_fingerprint = None
         # Make sure to update Complex's ifnode_by_hash and loopid_by_hash indexes:
         # self.rebuild_ifnode_by_hash_index()
         # self.rebuild_loopid_by_hash_index()
@@ -1245,7 +1270,7 @@ class Complex(nx.MultiDiGraph):
 
 
     def rebuild_ifnode_by_hash_index(self):
-        """ Rebuild ifnode_by_hash dict. """
+        """ Rebuild ifnode_by_hash index/dict. """
         # Go over all ifnodes (for all domain ends):
         cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)
                          if end.ifnode.delegatee is None]
@@ -1264,23 +1289,32 @@ class Complex(nx.MultiDiGraph):
 
 
     def rebuild_loopid_by_hash_index(self, update_ifnodes=None):
-        """ Update all loop hashes. Will also update ifnodes if update_ifnodes is True (default). """
+        """
+        Update all loop hashes.
+        Will also update ifnodes if update_ifnodes is True or self.ifnode_by_hash is None.
+        Will also calculate self.loop_ensemble_fingerprint.
+        """
         if update_ifnodes or self.ifnode_by_hash is None:
             self.rebuild_ifnode_by_hash_index()
         self.loopid_by_hash = {}
         # pdb.set_trace()
         # old_loop_hash_by_id = {loopid: loop_hash for loop_hash, loopid in self.loopid_by_hash.items()}
-        for loopid, loop in self.loop_by_loopid.items():
-            new_path_spec = [ifnode.state_fingerprint() for ifnode in loop['path']]
-            new_loop_hash = self.calculate_loop_hash(new_path_spec)
-            loop['path_spec'] = new_path_spec
-            loop['loop_hash'] = new_loop_hash
-            self.loopid_by_hash[new_loop_hash] = loopid
-            # del self.loopid_by_hash[old_loop_hash_by_id[loopid]] # Checking that the old one was present
-        # self.loopid_by_hash = loopid_by_hash # overwrite the old map
+        if len(self.loop_by_loopid) > 0:
+            for loopid, loop in self.loop_by_loopid.items():
+                new_path_spec = [ifnode.state_fingerprint() for ifnode in loop['path']]
+                new_loop_hash = self.calculate_loop_hash(new_path_spec)
+                loop['path_spec'] = new_path_spec
+                loop['loop_hash'] = new_loop_hash
+                self.loopid_by_hash[new_loop_hash] = loopid
+                # del self.loopid_by_hash[old_loop_hash_by_id[loopid]] # Checking that the old one was present
+            # self.loopid_by_hash = loopid_by_hash # overwrite the old map
+            # Calculate loop ensemble fingerprint:
+            self.loop_ensemble_fingerprint = hash(frozenset(self.loopid_by_hash.keys()))
+        else:
+            self.loop_ensemble_fingerprint = 0
 
 
-    def effectuate_loop_changes(self, loop_effects, is_forming):
+    def effectuate_loop_changes(self, loop_effects, is_forming, reacted_ifnodes):
         """
         loop_effects is a dict describing what the effects of
         a new loop being formed or an existing loop being broken.
@@ -1400,8 +1434,22 @@ class Complex(nx.MultiDiGraph):
                 print("del_loop_id == loop_effects['del_loop_id']: %s == %s" %
                       (del_loop_id, loop_effects['del_loop_id']))
             del_loop = self.loops[del_loop_id]
+            print("%s.loopids_by_interface before deleting ifnodes in del_loop['path'] = %s: %s" % (
+                self, del_loop['path'], self.loopids_by_interface))
+            # There should be at least ONE loop to delete:
+            assert len(set.union(*[self.loopids_by_interface[ifnode] for ifnode in del_loop['path']])) > 0
             for ifnode in del_loop['path']:
-                self.loopids_by_interface[ifnode].remove(del_loop_id)
+                try:
+                    self.loopids_by_interface[ifnode].remove(del_loop_id)
+                except KeyError:
+                    assert ifnode in reacted_ifnodes
+                    # I'm not sure whether the ifnode delegation is invariant. I think it is random ATM, but
+                    # ifnode delegation should probably be made deterministic based on state fingerprints..
+                    # Although that might be hard because delegation can take different paths.
+                    assert ifnode.state_fingerprint() in (
+                        loop_effects['previous_top_delegate_spec'], loop_effects['newly_undelegated_ifnode_spec'])
+                    # pdb.set_trace()
+                    # print("This was unexpected! - no, not really.")
             assert not any(del_loop_id in loopids_set for loopids_set in self.loopids_by_interface.values())
             del self.loops[del_loop_id]
             del self.loopid_by_hash[del_loop_hash]
@@ -1415,11 +1463,36 @@ class Complex(nx.MultiDiGraph):
                 # None is used to indicate a new loop. but only when used as loop_id, not hash.
                 print("\n\nThis shouldn't happen!!\n")
                 pdb.set_trace()
-            # Update loop ifnodes:
+
             loop_id = self.loopid_by_hash[loop_hash]
             old_loop_info = self.loop_by_loopid[loop_id]
+
+            # Update loop path:
             old_loop_nodes = set(old_loop_info['path'])
+            # As with the new loop, we should update the path to reflect current ifnode delegation:
+            # I think it is guaranteed that the first and last ifnodes in the new_loop path above
+            # (before removing the last ifnode of the path) will be merged into a single ifnode.
+            # There might be more nodes joined, e.g. for hybridization.
+            if is_forming:
+                # Should be the easy part, just check for merged ifnodes by raising to t
+                # How is the updated path? e3a+e2+e3b or e2+e3b+e3a or ..?
+                updated_loop_path = list(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
+                print("Loop %s path changes after forming a new intra-complex connection:" % loop_id)
+                print("Old      loop path:", old_loop_info['path'])
+                print("Changed  loop path:", loop_info['path'])
+                print("Delegate loop path:", updated_loop_path)
+                loop_info['path'] = updated_loop_path
+            else:
+                # This is probably a bit harder. Except if the new loop path starts and ends with the node that
+                # is being split/expanded. Then it is just about the same:
+                updated_loop_path = list(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
+                print("Loop %s path changes after breaking:" % loop_id)
+                print("Old      loop path:", old_loop_info['path'])
+                print("Changed  loop path:", loop_info['path'])
+                print("Delegate loop path:", updated_loop_path)
+                loop_info['path'] = updated_loop_path
             new_loop_nodes = set(loop_info['path'])
+            # Update loopids_by_ifnode index:
             # Remove old ifnode entries from self.loopids_by_interface and add new:
             for ifnode in (old_loop_nodes - new_loop_nodes):
                 self.loopids_by_interface[ifnode].remove(loop_id)
@@ -1430,6 +1503,8 @@ class Complex(nx.MultiDiGraph):
                        for ifnode in new_loop_nodes)
             old_loop_info.update(loop_info)
 
+
+        ## Check all loops - DEBUG - TODO: Remove excessive assertion.
         for loop in self.loops.values():
             top_delegate_path = [ifnode.top_delegate() for ifnode in loop['path']]
             assert top_delegate_path == loop['path']

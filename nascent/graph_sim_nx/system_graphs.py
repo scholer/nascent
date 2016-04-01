@@ -159,7 +159,9 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
                 assert delegatee in self.adj[target]
                 # print("delegatee %s existing target/edge: %s/%s" % (delegatee, target, self.adj[target][delegatee]))
                 # Determine which edge is the better/shorter representation...
-                # Although they should be equal...
+                # Although they should be equal... # Edit: Why is that again? - Asserting to make sure...
+                assert eattr['len_contour'] == self.adj[delegatee][target]['len_contour']
+                # If the above assertion fails, you probably have to make sure you select the shortest edge.
                 try:
                     self.adj[target][delegatee]['edge_count'] += 1
                 except KeyError:
@@ -474,8 +476,18 @@ class InterfaceNode(object):
         #return "I:" + str(self.domain_end)
         return str(self) # + " at " + str(hex(id(self)))
 
-    def __lt__(self, other_node):
-        return str(self) < str(other_node)
+    def __key__(self):
+        """ Unfortunately python doesn't support a constant key function for comparison :( """
+        return self.state_fingerprint()
+
+    def __lt__(self, other):
+        """ Make InterfaceNodes sortable. """
+        # return str(self) < str(other_node)
+        # return self.__key__() < other_node.__key__()
+        return self.state_fingerprint() < other.state_fingerprint()
+
+    def __gt__(self, other):
+        return self.state_fingerprint() > other.state_fingerprint()
 
 
     def print_delegate_info(self, g=None):

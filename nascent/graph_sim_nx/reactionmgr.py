@@ -1777,9 +1777,13 @@ class ReactionMgr(ComponentMgr):
             raise ValueError("Unknown reaction type %s" % reaction_attr.reaction_type, reaction_attr)
         # Perhaps compare with self.cache['stochastic_rate_constant']?
 
-        elem1, elem2 = tuple(reacted_pair)
+        elem1, elem2 = reacted_pair # a, b = frozenset((a, b)) assignment is OK no need for tuple cast
         if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-            domain1, domain2 = tuple(reacted_pair)
+            domain1, domain2 = elem1, elem2
+            reacted_ifnodes = (domain1.end5p.ifnode.top_delegate(), domain1.end3p.ifnode.top_delegate(),
+                               domain2.end5p.ifnode.top_delegate(), domain2.end3p.ifnode.top_delegate())
+            assert (reacted_ifnodes[0] == reacted_ifnodes[3]) == reaction_attr.is_forming
+            assert (reacted_ifnodes[1] == reacted_ifnodes[2]) == reaction_attr.is_forming
             # domain state fingerprint = (dspecie, self.partner is not None, c_state, in_complex_identifier)
             d1fp, d2fp = reaction_spec_tuple
             c1state, c2state = d1fp[2], d2fp[2]
@@ -1809,6 +1813,8 @@ class ReactionMgr(ComponentMgr):
             (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(reacted_pair)
             assert all(end.end == "5p" for end in (h1end5p, h2end5p))  ## TODO: Remove assertions
             assert all(end.end == "3p" for end in (h1end3p, h2end3p))
+            reacted_ifnodes = (h1end3p.ifnode.top_delegate(), h2end3p.ifnode.top_delegate())
+            assert (reacted_ifnodes[0] == reacted_ifnodes[1]) == reaction_attr.is_forming
             if reaction_is_joining:
                 # reaction_spec_tuple is frozenset of tuples of DomainEnd fingerprints:
                 # DomainEnd fingerprints: (self.domain.state_fingerprint(), self.end, self.stack_partner is not None)
@@ -1820,7 +1826,10 @@ class ReactionMgr(ComponentMgr):
                 assert len(reaction_spec_source_states_list) == 1
             #
         elif reaction_attr.reaction_type is PHOSPHATEBACKBONE_INTERACTION:
-            h1end3p, h1end5p = tuple(reacted_pair)
+            h1end3p, h1end5p = elem1, elem2
+            reacted_ifnodes = (h1end3p.ifnode.top_delegate(), h1end5p.ifnode.top_delegate())
+            # Backbone connections alone does NOT merge InterfaceNodes, but they could be stacked...
+            # assert (reacted_ifnodes[0] != reacted_ifnodes[1]) == (h1end3p.stack_partner is h1end5p)
             assert h1end3p.end == "3p" and h1end5p.end == "5p"  ## TODO: Remove assertion
             reaction_spec_source_states = {d_fp[2] for d_fp in reaction_spec_tuple} # cstate or strand.name
         else:
@@ -1857,17 +1866,18 @@ class ReactionMgr(ComponentMgr):
                 cmplx = reaction_result['changed_complexes'][0]
 
                 # See if we have any loop_effects dicts registered for this reaction:
-                if reacted_spec_pair not in self.reaction_loop_effects:
+                # loop_effects_cache_key = (reacted_spec_pair, cmplx.loop_ensemble_fingerprint)
+                if (reacted_spec_pair, cmplx.loop_ensemble_fingerprint) not in self.reaction_loop_effects:
                     print("Error case, not implemented!")
                     pdb.set_trace()
-
-                loop_effects = self.reaction_loop_effects[reacted_spec_pair]
+                cmplx_loop_effects_cache_key = (reacted_spec_pair, cmplx.loop_ensemble_fingerprint)
+                loop_effects = self.reaction_loop_effects[cmplx_loop_effects_cache_key]
                 print("%s.ifnode_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
                 print("%s.loopid_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
                 print("%s.loopids_by_interface BEFORE loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
                 print("%s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
-                print("Effectuating LOOP FORMATION using: %s" % (loop_effects))
-                cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming)
+                print("Effectuating LOOP FORMATION using: %s" % (loop_effects,))
+                cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
                 print("%s.ifnode_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
                 print("%s.loopid_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
                 print("%s.loopids_by_interface AFTER loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
@@ -1887,6 +1897,7 @@ class ReactionMgr(ComponentMgr):
                 # Note: All the loop and ifnode hashes applies to the state before making the change and asserting
                 # the state (hash/fingerprint) change.
             else:
+                # I'm adding cmplx.loop_ensemble_fingerprint to cache key, so this check is no longer effective:
                 assert reacted_spec_pair not in self.reaction_loop_effects
         elif reaction_result['case'] < 2:
             # TODO: Case 0 (intra-strand reaction) not yet supported.
@@ -1910,9 +1921,9 @@ class ReactionMgr(ComponentMgr):
             print("%s.loopids_by_interface BEFORE effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
             print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
             # pdb.set_trace()
-            loop_effects = self.loop_breakage_effects_cached(elem1, elem2, reacted_spec_pair, reaction_attr)
+            loop_effects = self.loop_breakage_effects_cached(elem1, elem2, reacted_spec_pair, reaction_attr, cmplx)
             print("Effectuating loop breakage using: %s" % (loop_effects))
-            cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming)
+            cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
             print("%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
             print("%s.loopids_by_interface AFTER effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
@@ -1927,7 +1938,7 @@ class ReactionMgr(ComponentMgr):
         asserted_target_states_list = []
         # pdb.set_trace()
         for cmplx in new_or_changed_complexes:
-            print("%s.ifnode_by_hash before asserting state change:\n%s" % (cmplx, cmplx.ifnode_by_hash))
+            print("\n%s.ifnode_by_hash before asserting state change:\n%s" % (cmplx, cmplx.ifnode_by_hash))
             source_state = cmplx._historic_fingerprints[-1]  # Can be 0 for new complexes!
             ## TODO: How about when merging, you make fingerprint = frozenset of the two merging complexes?
             assert source_state is 0 or source_state in reaction_spec_source_states  # 0 for new complexes
@@ -1950,7 +1961,8 @@ class ReactionMgr(ComponentMgr):
             asserted_target_states_list.append(target_state)
             if expected_state_fingerprints is not None:
                 assert target_state in expected_state_fingerprints  # List of target states via edge with edge_key.
-            print("%s.ifnode_by_hash after asserting state change:\n%s" % (cmplx, cmplx.ifnode_by_hash))
+            print("%s.ifnode_by_hash after asserting state change:%s" % (cmplx, cmplx.ifnode_by_hash))
+            print("%s.loopids_by_interface after asserting state change:%s" % (cmplx, cmplx.loopids_by_interface))
             print("%s.loops after asserting state change: %s" % (cmplx, cmplx.loops))
 
         ### 0(b): Reset domain state fingerprint and icid for all free strand's domains:
@@ -2031,7 +2043,8 @@ class ReactionMgr(ComponentMgr):
             if reaction_result['case'] <= 1:
                 # IntRA-complex reaction
                 assert reaction_attr.is_intra
-                activity = self.cache['intracomplex_activity'][reacted_spec_pair]
+                cmplx = reaction_result['changed_complexes'][0]
+                activity = self.cache['intracomplex_activity'][cmplx_loop_effects_cache_key]
                 if activity == 0:
                     print(("\n\nActivity %s for %s reaction between %s and %s is <= 0; "
                            "shape/loop energy is infinite; reaction should revert.\n\n") %
@@ -2241,6 +2254,8 @@ class ReactionMgr(ComponentMgr):
             ## TODO: This would also prevent the bug where dS is altered multiple times!
 
             target_state = cmplx._state_fingerprint
+            # loop_ensemble_fingerprint is for target state, after effectuating loop changes and asserting state change:
+            loop_ensemble_fingerprint = cmplx.loop_ensemble_fingerprint
 
             # new_nodes_added += self.update_reaction_graph_changed_complex(cmplx)
             # Regarding z-coordinate: Some software uses x, y, z attribute names, others uses a single pos=(x,y,z).
@@ -2281,7 +2296,8 @@ class ReactionMgr(ComponentMgr):
                     pos=pos, # initial node position (and also default grid coordinate if not provided)
                     offset_relative_to=offset_relative_to, # offset initial position relative to existing nodes
                     encounters=1,
-                    count=count
+                    count=count,
+                    loop_ensemble_fingerprint=loop_ensemble_fingerprint
                     # x=x, y=y, z=z
                 )
                 new_nodes_added += 1
@@ -2304,6 +2320,7 @@ class ReactionMgr(ComponentMgr):
                     dHdS=tuple(cmplx.energy_total_dHdS),
                     encounters=encounters,
                     count=count,
+                    loop_ensemble_fingerprint=loop_ensemble_fingerprint
                     # n_strands=n_strands, size=10*sqrt(n_strands),
                     # pos=pos,
                     # x=x, y=y, z=z

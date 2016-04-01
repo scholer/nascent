@@ -240,11 +240,13 @@ class ComponentMgr(GraphManager):
         return sum(1 for strand in self.strands if strand.is_fully_hybridized())
 
 
-    def loop_breakage_effects_cached(self, elem1, elem2, reaction_spec_pair, reaction_attr):
-        if reaction_spec_pair not in self.cache['loop_breakage_effects']:
-            self.cache['loop_breakage_effects'][reaction_spec_pair] = self.loop_breakage_effects(
+    def loop_breakage_effects_cached(self, elem1, elem2, reaction_spec_pair, reaction_attr, cmplx):
+        loop_ensemble_fingerprint = cmplx.loop_ensemble_fingerprint
+        cache_key = (reaction_spec_pair, loop_ensemble_fingerprint)
+        if cache_key not in self.cache['loop_breakage_effects']:
+            self.cache['loop_breakage_effects'][cache_key] = self.loop_breakage_effects(
                 elem1, elem2, reaction_attr.reaction_type)
-        return self.cache['loop_breakage_effects'][reaction_spec_pair]
+        return self.cache['loop_breakage_effects'][cache_key]
 
 
 
@@ -1346,7 +1348,7 @@ class ComponentMgr(GraphManager):
     #     return stack_dH, stack_dS
 
 
-    def intracomplex_activity(self, elem1, elem2, reaction_type, reaction_spec_pair):
+    def intracomplex_activity(self, elem1, elem2, reaction_type, reaction_spec_pair, cmplx=None):
         """
         Return the activity for hybridization of two domains within a complex.
         :elem1:, :elem2: are either two domains, or two pairs of duplex domain ends:
@@ -1381,6 +1383,9 @@ class ComponentMgr(GraphManager):
                 assert reaction_spec_pair == frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
                 assert reaction_type == HYBRIDIZATION_INTERACTION
                 d1, d2 = elem1, elem2
+        if cmplx is None:
+            cmplx = d1.strand.complex
+        cache_key = (reaction_spec_pair, cmplx.loop_ensemble_fingerprint)
         ## TODO: FINGERPRINT DEBUGGING. REMOVE THIS.
         # cmplx = d1.strand.complex
         # assert cmplx == d2.strand.complex != None
@@ -1432,8 +1437,8 @@ class ComponentMgr(GraphManager):
                 steric_overhang_factor = self.stacking_overhang_steric_factor**neighboring_overhangs
 
         ## Check cache and return activity from cache if found: ##
-        if reaction_spec_pair in self.cache['intracomplex_activity']:
-            return self.cache['intracomplex_activity'][reaction_spec_pair]
+        if cache_key in self.cache['intracomplex_activity']:
+            return self.cache['intracomplex_activity'][cache_key]
         # activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
         activity, loop_effects = self.loop_formation_effects(elem1, elem2, reaction_type)
 
@@ -1444,16 +1449,16 @@ class ComponentMgr(GraphManager):
         # If using steric overhang factor, then that must also affect the energy, that is, we would have
         # an energy contribution the overhangs which (1) stabilises hybridization and (2) are lost when stacking.
 
+        # TODO: Remove debug output
         reaction_attr = ReactionAttrs(reaction_type=reaction_type, is_forming=True, is_intra=True)
         print("activity %0.03f for reaction %s" % (activity, reaction_to_str(reaction_spec_pair, reaction_attr)))
 
-        self.cache['intracomplex_activity'][reaction_spec_pair] = activity
+        self.cache['intracomplex_activity'][cache_key] = activity
         if activity > 0:
             # Make cacheable: (edit: is done in loop_formation_effects)
             # loop_effects['shortest_path_spec'] = [ifnode.state_fingerprint() for ifnode in loop_effects['shortest_path']]
             # for old_loop_hash in loop_effects['changed_loops']:
-
-            self.reaction_loop_effects[reaction_spec_pair] = loop_effects
+            self.reaction_loop_effects[cache_key] = loop_effects
         return activity
 
 
