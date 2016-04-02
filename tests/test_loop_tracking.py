@@ -128,7 +128,7 @@ reaction h+ :  s3_D >_< s4_d    (73404)
     assert cmplx == result['changed_complexes'][0]
 
 
-    # Unstack, then stack again:
+    # Unstack C-D, then stack again:
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
@@ -139,24 +139,59 @@ reaction h+ :  s3_D >_< s4_d    (73404)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
 
-    return
 
+    # Stack A-B then unstack A-B:
     # result = mgr.stack(A.end3p, a.end5p, b.end3p, B.end5p)
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
-
+    # Unstack A-B:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
 
+    # Unstack C-D
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
 
+
+    # Stack A-B, stack C-D, unstack A-B, unstack C-D:
+    # Stack A-B:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+    # Stack C-D
+    reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+    # Unstack A-B:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+    # Unstack C-D
+    reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+
+
+    # Stack A-B, stack C-D, unstack A-B, unstack C-D, again:
+    for reaction_pair, reaction_attr in (
+        (((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA),
+        (((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA),
+        (((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA),
+        (((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA),
+    ):
+        reaction_pair = frozenset(reaction_pair)
+        reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+        assert cmplx == result['changed_complexes'][0]
 
     # To quickly get adj list:
     # pp sorted([(str(src), str(tgt), ekey) for src, tgts in self.ends5p3p_graph.adj.items() for tgt, edges in tgts.items() for ekey in edges if ekey != 'b'])

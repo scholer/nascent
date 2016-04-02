@@ -340,9 +340,10 @@ def test_loop_formation_effects_1():
                  'ifnodes': set(loop0_path)
                 }
     cmplx.loops[loopid] = loop_info
-    for ifnode in loop0_path:
-        cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
-
+    cmplx.ifnode_by_hash = None
+    cmplx.loopid_by_hash = None
+    cmplx.rebuild_loopid_by_hash_index()
+    cmplx.rebuild_ifnode_loopids_index()
 
 
     ## Intracomplex activity for forming the left stack:
@@ -404,9 +405,10 @@ def test_loop_formation_effects_2():
                  'ifnodes': set(loop0_path)
                 }
     cmplx.loops[loopid] = loop_info
-    for ifnode in loop0_path:
-        cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
-
+    cmplx.ifnode_by_hash = None
+    cmplx.loopid_by_hash = None
+    cmplx.rebuild_loopid_by_hash_index()
+    cmplx.rebuild_ifnode_loopids_index()
 
 
     ## Intracomplex activity for forming the left stack:
@@ -486,8 +488,10 @@ def test_loop_formation_effects_3():
                  'ifnodes': set(loop0_path)
                 }
     cmplx.loops[loopid] = loop_info
-    for ifnode in loop0_path:
-        cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
+    cmplx.ifnode_by_hash = None
+    cmplx.loopid_by_hash = None
+    cmplx.rebuild_loopid_by_hash_index()
+    cmplx.rebuild_ifnode_loopids_index()
 
     ## Intracomplex activity for forming the left stack:
     dh1, dh2 = (e4.end3p, e3.end5p), (E3.end3p, E4.end5p)
@@ -565,7 +569,7 @@ def test_loop_formation_effects_4():
                 }
     cmplx.loops[loopid] = loop_info
     for ifnode in loop0_path:
-        cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
+        cmplx.ifnode_loopids_index[ifnode].add(loopid) # is a defaultdict(set)
 
     ## Intracomplex activity for forming the left stack:
     dh1, dh2 = (e4.end3p, e3.end5p), (E3.end3p, E4.end5p)
@@ -658,13 +662,26 @@ def test_loop_formation_effects_02():
 
     strands = [sA, sB, s0, s1, s2, s3]
     mgr = ComponentMgr(strands, params={}, volume=1e-12)
+    cmplx = None
     for arm in "AB":
         for i in range(4):
             name1 = '%s%s' % (arm.upper(), i)
             name2 = '%s%s' % (arm.lower(), i)
-            if arm > "A" and i > 0:
+            if not (arm > "A" and i > 0):  # arm == "A" or i == 0
+                print("Hybridizing %s and %s" % (d[name1], d[name2]))
+                res = mgr.hybridize(d[name1], d[name2])       # No loops registered yet.
+                print(" - result: %s" % (res,))
+                if cmplx is None:
+                    cmplx = res['new_complexes'][0]
+            else:
                 activity, effects = mgr.loop_formation_effects(d[name1], d[name2], reaction_type=HYBRIDIZATION_INTERACTION)
-            mgr.hybridize(d[name1], d[name2])       # No loops registered yet.
+                print("Hybridizing %s and %s" % (d[name1], d[name2]))
+                res = mgr.hybridize(d[name1], d[name2])       # No loops registered yet.
+                print(" - result:", res)
+                print(" - Applying loop_effects:", effects)
+                assert cmplx == res['changed_complexes'][0]
+                cmplx.effectuate_loop_changes(effects, is_forming=True)
+            cmplx.reset_and_recalculate()
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
     for arm in "A":
         for i in range(3):
@@ -674,17 +691,23 @@ def test_loop_formation_effects_02():
             ends = (d['%s%s' % (arm.upper(), i)].end3p, d['%s%s' % (arm.lower(), i)].end5p,
                     d['%s%s' % (arm.lower(), i+1)].end3p, d['%s%s' % (arm.upper(), i+1)].end5p)
             activity, effects = mgr.loop_formation_effects(ends[:2], ends[2:], reaction_type=STACKING_INTERACTION) # No loops registered yet
-            mgr.stack(*ends)
+            res = mgr.stack(*ends)
+            assert cmplx == res['changed_complexes'][0]
+            cmplx.effectuate_loop_changes(effects, is_forming=True)
+            cmplx.reset_and_recalculate()
     for arm in "B":
         for i in range(3):
             # Stack B1/3p, b1/5p, b0/3p, B0/5p
             ends = (d['%s%s' % (arm.upper(), (i+1))].end3p, d['%s%s' % (arm.lower(), (i+1))].end5p,
                     d['%s%s' % (arm.lower(), i)].end3p, d['%s%s' % (arm.upper(), i)].end5p)
             activity, effects = mgr.loop_formation_effects(ends[:2], ends[2:], reaction_type=STACKING_INTERACTION) # No loops registered yet
-            mgr.stack(*ends)
+            res = mgr.stack(*ends)
+            assert cmplx == res['changed_complexes'][0]
+            cmplx.effectuate_loop_changes(effects, is_forming=True)
+            cmplx.reset_and_recalculate()
 
     # cmplx = res['changed_complexes'][0]
-    cmplx = next(iter(mgr.complexes)) # mgr.complexes has set of all complexes.
+    assert cmplx == next(iter(mgr.complexes)) # mgr.complexes has set of all complexes.
     cmplx.rebuild_ifnode_by_hash_index()
     ifnode_by_hash_0 = cmplx.ifnode_by_hash.copy()
 
@@ -708,7 +731,6 @@ def test_loop_formation_effects_02():
     ifnode_by_hash_2 = cmplx.ifnode_by_hash.copy()
     assert ifnode_by_hash_0 == ifnode_by_hash_2
 
-    del i
     ## WIP: Manually adding the loop to the complex until that is automated:
     # loopid = 1
     for loopid, loop_path in enumerate(loop_paths):
@@ -718,7 +740,7 @@ def test_loop_formation_effects_02():
                     }
         cmplx.loops[loopid] = loop_info
         for ifnode in loop_path:
-            cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
+            cmplx.ifnode_loopids_index[ifnode].add(loopid) # is a defaultdict(set)
 
     cmplx.rebuild_ifnode_by_hash_index()
     ifnode_by_hash_3 = cmplx.ifnode_by_hash.copy()

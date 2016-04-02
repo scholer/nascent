@@ -648,17 +648,17 @@ class GraphManager(object):
         # TODO, FIX: This should be fixed when looping over affected loops.
 
         # 1. Find all affected loops:
-        # cmplx.loopids_by_interface[elem1_ifnode] => {set of loopids for loops touching ifnode}
+        # cmplx.ifnode_loopids_index[elem1_ifnode] => {set of loopids for loops touching ifnode}
         # Wait: If elem1 and elem2 are currently hybridized or stacked, wouldn't they have the
         # same top_delegate and thus share the exact same loops?
         # No: At this point, the breaking reaction has occured, so the two elem no longer has the same ifnode.
-        # However, since we haven't updated cmplx.loopids_by_interface index yet, one of them should be empty
+        # However, since we haven't updated cmplx.ifnode_loopids_index index yet, one of them should be empty
         # and the other should be full.
         if reaction_type is HYBRIDIZATION_INTERACTION:
-            d1end5p_loops = cmplx.loopids_by_interface[d1end5p.ifnode]
-            d1end3p_loops = cmplx.loopids_by_interface[d1end3p.ifnode]
-            d2end5p_loops = cmplx.loopids_by_interface[d2end5p.ifnode]
-            d2end3p_loops = cmplx.loopids_by_interface[d2end3p.ifnode]
+            d1end5p_loops = cmplx.ifnode_loopids_index[d1end5p.ifnode]
+            d1end3p_loops = cmplx.ifnode_loopids_index[d1end3p.ifnode]
+            d2end5p_loops = cmplx.ifnode_loopids_index[d2end5p.ifnode]
+            d2end3p_loops = cmplx.ifnode_loopids_index[d2end3p.ifnode]
             if len(d1end5p_loops) > 0:
                 assert len(d2end3p_loops) == 0
                 end1_loops = d1end5p_loops
@@ -683,11 +683,11 @@ class GraphManager(object):
                 end2_new_delegate = d2end5p.ifnode
             previous_top_delegates = ends_former_top_delegates = (end1_former_delegate, end2_former_delegate)
             newly_undelegated_ifnodes = ends_new_delegates = (end1_new_delegate, end2_new_delegate)
-            affected_loopids = set.union(*[cmplx.loopids_by_interface[ifnode] for ifnode in reactant_nodes])
+            affected_loopids = set.union(*[cmplx.ifnode_loopids_index[ifnode] for ifnode in reactant_nodes])
         else:
             # For STACKING (and probably backbone ligation/nicking) we can do it simpler:
-            elem1_loops = cmplx.loopids_by_interface[elem1_ifnode]
-            elem2_loops = cmplx.loopids_by_interface[elem2_ifnode]
+            elem1_loops = cmplx.ifnode_loopids_index[elem1_ifnode]
+            elem2_loops = cmplx.ifnode_loopids_index[elem2_ifnode]
             if len(elem1_loops) > 0:
                 previous_top_delegate = elem1_ifnode    # Or maybe there just wasn't any loops?
                 previous_top_delegates = [elem1_ifnode]    # Or maybe there just wasn't any loops?
@@ -777,8 +777,8 @@ class GraphManager(object):
                     # The loop path must surely change, it is just a question of how.
                     # (It could only happen if the end is stacked, but then it couldn't dehybridize..
                     # Also, we don't allow duplexes to be directly
-                    ifnode_idx, former_top_delegate = [(idx, ifnode) for idx, ifnode in zip(
-                        ends_path_idxs, ends_former_top_delegates) if idx is not None]
+                    ifnode_idx, former_top_delegate = next((idx, ifnode) for idx, ifnode in zip(
+                        ends_path_idxs, ends_former_top_delegates) if idx is not None)
                     neighbor_before, neighbor_after = path[ifnode_idx-1], path[(ifnode_idx+1) % len(path)]
                     if former_top_delegate in self.interface_graph.adj[neighbor_before]:
                         assert neighbor_before in self.interface_graph.adj[former_top_delegate]
@@ -1405,20 +1405,20 @@ class GraphManager(object):
         ## TODO: There are cases when we are splitting an existing loop, but not by direct "pinching":
         ## In fact, IN MOST CASES, path[0] and path[-1] will NOT BOTH be part of an existing loop, even though
         ## they are effectively splitting a loop in two. See notes on Wang-Uhlenbeck entropy.
-        # if False and (path[0] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[0]]) > 0
-        #     and path[-1] in cmplx.loopids_by_interface and len(cmplx.loopids_by_interface[path[-1]]) > 0):
+        # if False and (path[0] in cmplx.ifnode_loopids_index and len(cmplx.ifnode_loopids_index[path[0]]) > 0
+        #     and path[-1] in cmplx.ifnode_loopids_index and len(cmplx.ifnode_loopids_index[path[-1]]) > 0):
         #     ## Uh, OK so both elems are part of one or more existing loops. But we don't know if they are
         #     ##  part of the SAME loop. Not the best way to do it.. In any case, it is probably better
         #     ##  to handle this case like any other, as it is done below.
         #     ## For the record, this is what you should have done:
-        #     loop_with_both_nodes = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[0]]
+        #     loop_with_both_nodes = cmplx.ifnode_loopids_index[path[0]] & cmplx.ifnode_loopids_index[path[0]]
         #     ## TODO: Need to test this - e.g. case 1(a) or 1(b)
         #     ## TODO: I feel like we should still cosider *all* shared loops and not just break out by this one case ^^
         #     ## TODO: THIS CASE NEEDS TO BE COMPLETELY RE-WORKED!
         #     ## Perfect "pinching" of existing loop (rare)
         #     # We have a secondary loop.
         #     # Find loops containing both the first and last path interface nodes:
-        #     shared_loopids = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[-1]]
+        #     shared_loopids = cmplx.ifnode_loopids_index[path[0]] & cmplx.ifnode_loopids_index[path[-1]]
         #     assert len(shared_loopids) == 1           ## Not sure about this...
         #     loop0id = next(iter(shared_loopids))
         #     loop0 = cmplx.loops[loop0id]
@@ -1452,7 +1452,7 @@ class GraphManager(object):
         #     # If hybridization, special case where we account for the length of the newly-formed duplex.
         #     # TODO: This should not preclude processing of other shared loops, but rather be just an optimization.
 
-        # elif cmplx.loopids_by_interface:
+        # elif cmplx.ifnode_loopids_index:
 
         ## TODO, WIP: Add bredth-first algorithm to search for all changed loops.
         # Algorithm:
@@ -1531,13 +1531,13 @@ class GraphManager(object):
             loop1_shortest_path = tuple(changed_loop_paths[loop1_id])
 
 
-            # loops_with_both_nodes = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[-1]]
+            # loops_with_both_nodes = cmplx.ifnode_loopids_index[path[0]] & cmplx.ifnode_loopids_index[path[-1]]
             loop1_path_nodes = set(loop1_shortest_path)
             # Quick way to get all nodes on the shortest path that are already on *ANY* existing loop.
-            shared_nodes = loop1_path_nodes.intersection(cmplx.loopids_by_interface.keys())
+            shared_nodes = loop1_path_nodes.intersection(cmplx.ifnode_loopids_index.keys())
             if shared_nodes:
                 shared_loopids = set.union(*[
-                    cmplx.loopids_by_interface[ifnode] for ifnode in shared_nodes
+                    cmplx.ifnode_loopids_index[ifnode] for ifnode in shared_nodes
                 ]).difference(processed_secondary_loopids)
             else:
                 shared_loopids = {}
@@ -1561,7 +1561,7 @@ class GraphManager(object):
             ## TODO: Check that this does not overlap with the "side-effects" factors calculation..
             ## It actually seems like this could supplant the side-effects calculation.
             # Find nodes that are not part of any loops:
-            # fully_unshared_nodes = shortest_path_nodes.difference(cmplx.loopids_by_interface.keys())
+            # fully_unshared_nodes = shortest_path_nodes.difference(cmplx.ifnode_loopids_index.keys())
             for loop0_id in shared_loopids:
                 loop0 = cmplx.loop_by_loopid[loop0_id]
                 print("Processing possibly-affected loop0 %s: %s" % (loop0_id, loop0))
@@ -1715,14 +1715,14 @@ class GraphManager(object):
             dh1_ifnodes = set(dh1_upstream_ifnodes)
             dh2_ifnodes = set(dh2_upstream_ifnodes)
             dh_ifnodes = dh1_ifnodes | dh2_ifnodes
-            dh1_nodes_in_loops = dh1_ifnodes.intersection(cmplx.loopids_by_interface.keys())
-            dh2_nodes_in_loops = dh2_ifnodes.intersection(cmplx.loopids_by_interface.keys())
+            dh1_nodes_in_loops = dh1_ifnodes.intersection(cmplx.ifnode_loopids_index.keys())
+            dh2_nodes_in_loops = dh2_ifnodes.intersection(cmplx.ifnode_loopids_index.keys())
             # Edit: Loops are currently stored as mutable dicts, you cannot make a set of loops.
             # You must either use loop IDs or create an object for each loop.
-            dh1_loopids = {loopid for ifnode in dh1_nodes_in_loops if ifnode in cmplx.loopids_by_interface
-                           for loopid in cmplx.loopids_by_interface[ifnode]}
-            dh2_loopids = {loopid for ifnode in dh2_nodes_in_loops if ifnode in cmplx.loopids_by_interface
-                           for loopid in cmplx.loopids_by_interface[ifnode]}
+            dh1_loopids = {loopid for ifnode in dh1_nodes_in_loops if ifnode in cmplx.ifnode_loopids_index
+                           for loopid in cmplx.ifnode_loopids_index[ifnode]}
+            dh2_loopids = {loopid for ifnode in dh2_nodes_in_loops if ifnode in cmplx.ifnode_loopids_index
+                           for loopid in cmplx.ifnode_loopids_index[ifnode]}
             # Alternatively, go through all loops and check if any of the loop's nodes are on the doublehelix:
             # dh1_loops = {loopid for loopid in cmplx.loops.keys() if any(...) }
             ## NOTE: We should not consider loops that are only on one of the dh arms and not the other,

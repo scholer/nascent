@@ -262,9 +262,10 @@ def test_intracomplex_activity_1():
                  'ifnodes': set(loop0_path)
                 }
     cmplx.loops[loopid] = loop_info
-    for ifnode in loop0_path:
-        cmplx.loopids_by_interface[ifnode].add(loopid) # is a defaultdict(set)
-
+    # for ifnode in loop0_path:
+    #     cmplx.ifnode_loopids_index[ifnode].add(loopid) # is a defaultdict(set)
+    cmplx.rebuild_ifnode_by_hash_index()
+    cmplx.rebuild_ifnode_loopids_index()
 
 
 if __name__ == "__main__":

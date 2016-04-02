@@ -1600,7 +1600,7 @@ class ReactionMgr(ComponentMgr):
                                                     (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
         # reaction_str = ("" if reaction_attr.is_forming else "de-") + reaction_attr.reaction_type
 
-        print("\n\n-", "- "*20, "\n\nhybridize_and_process reaction:", reaction_to_str(reaction_spec_pair, reaction_attr))
+        print("\n\n-", "- "*20, "\n\nstack_and_process reaction:", reaction_to_str(reaction_spec_pair, reaction_attr))
 
         # d1 = h1end3p.domain
         # d2 = h2end3p.domain
@@ -1876,22 +1876,22 @@ class ReactionMgr(ComponentMgr):
                 loop_effects = self.reaction_loop_effects[cmplx_loop_effects_cache_key]
                 print("\n- %s.ifnode_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
                 print("- %s.loopid_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
-                print("- %s.loopids_by_interface BEFORE loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
-                print("- %s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
+                print("- %s.ifnode_loopids_index BEFORE loop formation: %s" % (cmplx, cmplx.ifnode_loopids_index))
+                # print("- %s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
                 print("- EFFECTUATING LOOP FORMATION using: %s" % (loop_effects,))
                 cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
                 print("- %s.ifnode_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
                 print("- %s.loopid_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
-                print("- %s.loopids_by_interface AFTER loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
-                print("- %s.loops AFTER loop formation: %s\n" % (cmplx, cmplx.loops))
+                print("- %s.ifnode_loopids_index AFTER loop formation: %s" % (cmplx, cmplx.ifnode_loopids_index))
+                # print("- %s.loops AFTER loop formation: %s\n" % (cmplx, cmplx.loops))
                 # Make sure we have loops:
                 try:
-                    assert sum(len(loopids) for loopids in cmplx.loopids_by_interface.values()) > 0
+                    assert sum(len(loopids) for loopids in cmplx.ifnode_loopids_index.values()) > 0
                     assert len(cmplx.loops) > 0
                     assert len(cmplx.ifnode_by_hash) > 0
                     assert len(cmplx.loopid_by_hash) > 0
                 except AssertionError:
-                    print(sum(len(loopids) for loopids in cmplx.loopids_by_interface.values()))
+                    print(sum(len(loopids) for loopids in cmplx.ifnode_loopids_index.values()))
                     print(len(cmplx.loops))
                     print(len(cmplx.ifnode_by_hash))
                     print(len(cmplx.loopid_by_hash))
@@ -1920,8 +1920,8 @@ class ReactionMgr(ComponentMgr):
             # No need to check for loop-breaking effects if there are no loops. But there really should be.
             print("\n%s.ifnode_by_hash BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.loopid_by_hash))
-            print("%s.loopids_by_interface BEFORE calculating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
-            print("%s.loops BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.loops))
+            print("%s.ifnode_loopids_index BEFORE calculating loop breakage: %s" % (cmplx, cmplx.ifnode_loopids_index))
+            # print("%s.loops BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.loops))
             # pdb.set_trace()
 
             loop_effects = self.loop_breakage_effects_cached(
@@ -1930,15 +1930,15 @@ class ReactionMgr(ComponentMgr):
             #       (elem1, elem2, reaction_attr, cmplx.loop_ensemble_fingerprint, loop_effects))
             print("\n%s.ifnode_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
-            print("%s.loopids_by_interface BEFORE effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
-            print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
+            print("%s.ifnode_loopids_index BEFORE effectuating loop breakage: %s" % (cmplx, cmplx.ifnode_loopids_index))
+            # print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
 
             print("\nEffectuating loop breakage on %s using loop_effects directive: %s" % (cmplx, loop_effects,))
             cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
             print("\n%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
-            print("%s.loopids_by_interface AFTER effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
-            print("%s.loops AFTER loop breakage: %s" % (cmplx, cmplx.loops))
+            print("%s.ifnode_loopids_index AFTER effectuating loop breakage: %s" % (cmplx, cmplx.ifnode_loopids_index))
+            # print("%s.loops AFTER loop breakage: %s" % (cmplx, cmplx.loops))
         else:
             assert reacted_spec_pair not in self.reaction_loop_effects
 
@@ -1973,8 +1973,8 @@ class ReactionMgr(ComponentMgr):
             if expected_state_fingerprints is not None:
                 assert target_state in expected_state_fingerprints  # List of target states via edge with edge_key.
             print("%s.ifnode_by_hash after asserting state change:%s" % (cmplx, cmplx.ifnode_by_hash))
-            print("%s.loopids_by_interface after asserting state change:%s" % (cmplx, cmplx.loopids_by_interface))
-            print("%s.loops after asserting state change: %s" % (cmplx, cmplx.loops))
+            print("%s.ifnode_loopids_index after asserting state change:%s" % (cmplx, cmplx.ifnode_loopids_index))
+            # print("%s.loops after asserting state change: %s" % (cmplx, cmplx.loops))
 
         ### 0(b): Reset domain state fingerprint and icid for all free strand's domains:
         ### (This is also done in componentmgr.join/break_complex_at, but better safe than sorry)
@@ -2141,6 +2141,7 @@ class ReactionMgr(ComponentMgr):
             # in changed_complexes.
 
             # 2c: Check if complex energy matches the expected complex energy and correct if not.
+            ## TODO: Disabled; fix and re-enable
             if cmplx._state_fingerprint in self.reaction_graph.node:
                 state_node = self.reaction_graph.node[cmplx._state_fingerprint]
                 expected_dHdS = state_node['dHdS']
@@ -2197,6 +2198,7 @@ class ReactionMgr(ComponentMgr):
                                 # print(simple_reaction_cycle)
                         reaction, source, target = simple_reaction_cycle[0]
                         src_attrs = self.reaction_graph.node[source]
+                        print("\nSimple reaction cycle (no edge traversed more than once):")
                         print("%s %s" % (source, src_attrs['dHdS']))
                         for reaction, source, target in simple_reaction_cycle:
                             src_attrs = self.reaction_graph.node[source] if source is not None else {}
@@ -2210,10 +2212,12 @@ class ReactionMgr(ComponentMgr):
                                 edge_attrs['reaction_str'], edge_attrs['dH'], edge_attrs['dS'],
                                 target, tgt_attrs.get('dHdS')))
                     # Done printing reaction cycle info...
-                    pdb.set_trace()
-                    print("Resetting complex %s@%s energy to %s." % (cmplx, cmplx._state_fingerprint, expected_dHdS))
-                    cmplx.energies_dHdS = expected_dHdS_contributions
-                    cmplx.energy_total_dHdS = expected_dHdS
+                    # pdb.set_trace()
+                    # print("Resetting complex %s@%s energy to %s." % (cmplx, cmplx._state_fingerprint, expected_dHdS))
+                    # Edit: No reason to re-set complex energy, it is always calculated by summning the individual
+                    # energy contributions (domain hybridization, stacking, loop formation and strand volume entropy).
+                    # cmplx.energies_dHdS = expected_dHdS_contributions
+                    # cmplx.energy_total_dHdS = expected_dHdS
                 # end if actual_dHdS != expected_dHdS
             # end if cmplx._state_fingerprint in self.reaction_graph.node
         # end for cmplx in new_or_changed_complexes
@@ -2300,7 +2304,9 @@ class ReactionMgr(ComponentMgr):
                 self.reaction_graph.add_node(
                     target_state,
                     dHdS=tuple(cmplx.energy_total_dHdS), # total complex enthalpy and entropy.
-                    dHdS_contributions=cmplx.energies_dHdS.copy(), # hyb, stack, loops and volume sub-totals
+                    dHdS_contributions={k: tuple(v) for k, v in cmplx.energies_dHdS.items()},
+                    # cmplx.energies_dHdS dict with hyb, stack, loops and volume energy sub-totals
+                    # Note: cmplx.energies_dHdS have list elements, so a deeper copy is required.
                     dG_std=dG_std,
                     n_strands=n_strands,
                     size=sqrt(n_strands),
