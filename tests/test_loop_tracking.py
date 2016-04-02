@@ -16,11 +16,11 @@
 ##    You should have received a copy of the GNU Affero General Public License
 ##    along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import pytest
+# import pytest
 import sys
-from random import choice
-from pprint import pprint
-import pdb
+# from random import choice
+# from pprint import pprint
+# import pdb
 try:
     from numpy import isclose
 except ImportError:
@@ -126,6 +126,20 @@ reaction h+ :  s3_D >_< s4_d    (73404)
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
+
+
+    # Unstack, then stack again:
+    reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+
+    reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
+    reaction_pair = frozenset(reaction_pair)
+    reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
+    assert cmplx == result['changed_complexes'][0]
+
+    return
 
     # result = mgr.stack(A.end3p, a.end5p, b.end3p, B.end5p)
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA

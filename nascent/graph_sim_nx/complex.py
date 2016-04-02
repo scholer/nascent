@@ -253,6 +253,7 @@ class Complex(nx.MultiDiGraph):
         ## DEBUG attributes: ##
         self._historic_strands = []
         self._historic_fingerprints = [0]
+        self._historic_loop_ensemble_fingerprints = []
         # edit: deque are not good for arbitrary access, using a list
         self.reaction_deque = deque(maxlen=reaction_deque_size) # deque with... (reaction_pair, reaction_attr)?
         #self.reaction_deque = [0]    # deque(maxlen=reaction_deque_size)
@@ -1091,7 +1092,7 @@ class Complex(nx.MultiDiGraph):
 
         """
         print("DEBUG: reset_state_fingerprint called with %s\nFROM:" % (locals(),))
-        traceback.print_stack(limit=4)
+        # traceback.print_stack(limit=4)
         if reset: ## TODO: Determine if we should always reset here
             ## We could reset state fingerprints (strands, hybridizations, stackings);
             ## we can use reaction_attr.reaction_type to know whether to reset hyb or stack,
@@ -1125,6 +1126,8 @@ class Complex(nx.MultiDiGraph):
 
         # Update ifnode_by_hash cache (doing it here for now, should be done lazily eventually...)
         self.rebuild_ifnode_by_hash_index()
+        self.rebuild_loopid_by_hash_index()
+        self._historic_loop_ensemble_fingerprints.append(self.loop_ensemble_fingerprint)
 
         # pdb.set_trace()
         ## Detect reaction cycle:  (obsolete)
@@ -1241,6 +1244,7 @@ class Complex(nx.MultiDiGraph):
         and hope that is sufficiently unique to distinguish the loop by its hash.
         Is there any reason why it wouldn't be?
         """
+        # TODO: What happens if loop_path_spec is 1 elem long?
         if self.loopid_by_hash is None:
             # If we are ever creating a loop_hash, we want to make sure Complex.loopid_by_hash is also available.
             self.rebuild_loopid_by_hash_index()
@@ -1301,7 +1305,7 @@ class Complex(nx.MultiDiGraph):
         # old_loop_hash_by_id = {loopid: loop_hash for loop_hash, loopid in self.loopid_by_hash.items()}
         if len(self.loop_by_loopid) > 0:
             for loopid, loop in self.loop_by_loopid.items():
-                new_path_spec = [ifnode.state_fingerprint() for ifnode in loop['path']]
+                new_path_spec = tuple([ifnode.state_fingerprint() for ifnode in loop['path']])
                 new_loop_hash = self.calculate_loop_hash(new_path_spec)
                 loop['path_spec'] = new_path_spec
                 loop['loop_hash'] = new_loop_hash
@@ -1376,11 +1380,25 @@ class Complex(nx.MultiDiGraph):
 
         """
         # pdb.set_trace()
+        # TODO: WAAIT a moment, are you modifying the loop_effects directive??
+        # TODO: Separate mutable vs immutable (and cachable) parts of the loop info!! Only add immutables to cache!
+
+        if is_forming:
+            # For forming reactions, loop_effects are calculated on the *previous* state.
+            assert loop_effects['complex_state_fingerprint'] == self._historic_fingerprints[-1]
+            assert loop_effects['complex_loop_ensemble_fingerprint'] == self._historic_loop_ensemble_fingerprints[-1]
+        else:
+            # For breaking reactions, loop_effects are calculated on the *current* state.
+            assert loop_effects['complex_state_fingerprint'] == self._state_fingerprint
+            assert loop_effects['complex_loop_ensemble_fingerprint'] == self.loop_ensemble_fingerprint
         if is_forming:
             # 1a. Add new loop:
             new_loop = loop_effects['new_loop']
             new_loop_id = next(loopid_sequential_number_generator)
             new_loop_hash = new_loop['loop_hash']
+            if -598104243721766330 in new_loop['path_spec']:
+                print("Special case (-598104243721766330 in new_loop['path_spec']) encountered!")
+                pdb.set_trace()
             self.loops[new_loop_id] = new_loop
             self.loopid_by_hash[new_loop_hash] = new_loop_id
 
@@ -1392,6 +1410,7 @@ class Complex(nx.MultiDiGraph):
             # self.rebuild_ifnode_by_hash_index()
 
             # Update loop path to use this Complex's ifnodes (instances):
+            new_loop_template_path = new_loop['path']
             new_loop['path'] = self.recreate_loop_ifnodes_from_spec(new_loop['path_spec'])
 
             # Testing for changes in ifnode delegation:
@@ -1400,6 +1419,7 @@ class Complex(nx.MultiDiGraph):
             new_loop['path'].pop() # Remove the last ifnode (which is also the first after reaction)
             # Make sure path consists of top_delegates only:
             assert [ifnode.top_delegate() for ifnode in new_loop['path']] == new_loop['path']
+            new_loop['path'] = tuple(new_loop['path'])
             if max(Counter(ifnode.top_delegate() for ifnode in new_loop['path']).values()) > 1:
                 print("\n\nWARNING: new_loop['path'] has duplicate top_delegate ifnodes:")
                 print(new_loop['path'])
@@ -1457,7 +1477,7 @@ class Complex(nx.MultiDiGraph):
             # Update ifnodes hashes: - No. See above reason for why not.
             # self.rebuild_ifnode_by_hash_index()
 
-        # 2. Update existing loops:
+        # 2. Update changed existing loops:
         for loop_hash, loop_info in loop_effects['changed_loops_by_hash'].items():
             if loop_hash is None:
                 # None is used to indicate a new loop. but only when used as loop_id, not hash.
@@ -1476,7 +1496,7 @@ class Complex(nx.MultiDiGraph):
             if is_forming:
                 # Should be the easy part, just check for merged ifnodes by raising to t
                 # How is the updated path? e3a+e2+e3b or e2+e3b+e3a or ..?
-                updated_loop_path = list(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
+                updated_loop_path = tuple(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
                 print("Loop %s path changes after forming a new intra-complex connection:" % loop_id)
                 print("Old      loop path:", old_loop_info['path'])
                 print("Changed  loop path:", loop_info['path'])
@@ -1485,7 +1505,7 @@ class Complex(nx.MultiDiGraph):
             else:
                 # This is probably a bit harder. Except if the new loop path starts and ends with the node that
                 # is being split/expanded. Then it is just about the same:
-                updated_loop_path = list(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
+                updated_loop_path = tuple(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
                 print("Loop %s path changes after breaking:" % loop_id)
                 print("Old      loop path:", old_loop_info['path'])
                 print("Changed  loop path:", loop_info['path'])
@@ -1499,14 +1519,17 @@ class Complex(nx.MultiDiGraph):
             for ifnode in (new_loop_nodes - old_loop_nodes):
                 self.loopids_by_interface[ifnode].add(loop_id)
 
-            assert all(ifnode in self.loopids_by_interface and loop_id in self.loopids_by_interface[ifnode]
-                       for ifnode in new_loop_nodes)
+            # At this point we haven't updated the loop indexes, so new loop ifnodes will not be present yet.
+            # New ifnodes will typically be present for breaking reactions (is_forming=False)
+            if is_forming:
+                assert all(ifnode in self.loopids_by_interface and loop_id in self.loopids_by_interface[ifnode]
+                           for ifnode in loop_info['path'])
             old_loop_info.update(loop_info)
 
 
         ## Check all loops - DEBUG - TODO: Remove excessive assertion.
         for loop in self.loops.values():
-            top_delegate_path = [ifnode.top_delegate() for ifnode in loop['path']]
+            top_delegate_path = tuple([ifnode.top_delegate() for ifnode in loop['path']])
             assert top_delegate_path == loop['path']
             assert max(Counter(top_delegate_path).values()) == 1
 

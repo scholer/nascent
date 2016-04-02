@@ -1391,6 +1391,7 @@ class ReactionMgr(ComponentMgr):
         else: ## TODO: Remove assertion when done debugging.
             assert reaction_spec_pair == frozenset((d1.state_fingerprint(), d2.state_fingerprint()))
 
+        print("\n\n-", "- "*20, "\n\nhybridize_and_process reaction:", reaction_to_str(reaction_spec_pair, reaction_attr))
 
         assert reaction_attr.reaction_type == HYBRIDIZATION_INTERACTION
         if reaction_attr.is_intra:
@@ -1599,6 +1600,7 @@ class ReactionMgr(ComponentMgr):
                                                     (h2end3p.state_fingerprint(), h1end5p.state_fingerprint())))
         # reaction_str = ("" if reaction_attr.is_forming else "de-") + reaction_attr.reaction_type
 
+        print("\n\n-", "- "*20, "\n\nhybridize_and_process reaction:", reaction_to_str(reaction_spec_pair, reaction_attr))
 
         # d1 = h1end3p.domain
         # d2 = h2end3p.domain
@@ -1842,7 +1844,7 @@ class ReactionMgr(ComponentMgr):
                                     for cmplx in lst]
         # new_complexes_set = set(reaction_result['new_complexes']) if reaction_result['new_complexes'] else set()
 
-        print("\n\nPerforming reaction:", reaction_attr_str)
+        print("\n-\npost_reaction_processing reaction:", reaction_attr_str)
         print(reaction_str)
 
         ## 0. Form or break loops: ##
@@ -1872,16 +1874,16 @@ class ReactionMgr(ComponentMgr):
                     pdb.set_trace()
                 cmplx_loop_effects_cache_key = (reacted_spec_pair, cmplx.loop_ensemble_fingerprint)
                 loop_effects = self.reaction_loop_effects[cmplx_loop_effects_cache_key]
-                print("%s.ifnode_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
-                print("%s.loopid_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
-                print("%s.loopids_by_interface BEFORE loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
-                print("%s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
-                print("Effectuating LOOP FORMATION using: %s" % (loop_effects,))
+                print("\n- %s.ifnode_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+                print("- %s.loopid_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
+                print("- %s.loopids_by_interface BEFORE loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
+                print("- %s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
+                print("- EFFECTUATING LOOP FORMATION using: %s" % (loop_effects,))
                 cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
-                print("%s.ifnode_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
-                print("%s.loopid_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
-                print("%s.loopids_by_interface AFTER loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
-                print("%s.loops AFTER loop formation: %s\n" % (cmplx, cmplx.loops))
+                print("- %s.ifnode_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+                print("- %s.loopid_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
+                print("- %s.loopids_by_interface AFTER loop formation: %s" % (cmplx, cmplx.loopids_by_interface))
+                print("- %s.loops AFTER loop formation: %s\n" % (cmplx, cmplx.loops))
                 # Make sure we have loops:
                 try:
                     assert sum(len(loopids) for loopids in cmplx.loopids_by_interface.values()) > 0
@@ -1916,18 +1918,27 @@ class ReactionMgr(ComponentMgr):
                 pdb.set_trace()
             # if len(cmplx.loops) > 0:
             # No need to check for loop-breaking effects if there are no loops. But there really should be.
-            print("%s.ifnode_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+            print("\n%s.ifnode_by_hash BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.ifnode_by_hash))
+            print("%s.loopid_by_hash BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.loopid_by_hash))
+            print("%s.loopids_by_interface BEFORE calculating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
+            print("%s.loops BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.loops))
+            # pdb.set_trace()
+
+            loop_effects = self.loop_breakage_effects_cached(
+                elem1, elem2, reacted_spec_pair, reaction_attr, cmplx.loop_ensemble_fingerprint)
+            # print("\nloop_breakage_effects_cached(%s, %s, %s,..,  %s) returned: %s" %
+            #       (elem1, elem2, reaction_attr, cmplx.loop_ensemble_fingerprint, loop_effects))
+            print("\n%s.ifnode_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
             print("%s.loopids_by_interface BEFORE effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
             print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
-            # pdb.set_trace()
-            loop_effects = self.loop_breakage_effects_cached(elem1, elem2, reacted_spec_pair, reaction_attr, cmplx)
-            print("Effectuating loop breakage using: %s" % (loop_effects))
+
+            print("\nEffectuating loop breakage using: %s" % (loop_effects))
             cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
-            print("%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
+            print("\n%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
             print("%s.loopids_by_interface AFTER effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
-            print("%s.loops AFTER loop breakage: %s\n" % (cmplx, cmplx.loops))
+            print("%s.loops AFTER loop breakage: %s" % (cmplx, cmplx.loops))
         else:
             assert reacted_spec_pair not in self.reaction_loop_effects
 

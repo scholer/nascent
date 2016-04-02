@@ -240,12 +240,14 @@ class ComponentMgr(GraphManager):
         return sum(1 for strand in self.strands if strand.is_fully_hybridized())
 
 
-    def loop_breakage_effects_cached(self, elem1, elem2, reaction_spec_pair, reaction_attr, cmplx):
-        loop_ensemble_fingerprint = cmplx.loop_ensemble_fingerprint
+    def loop_breakage_effects_cached(self, elem1, elem2, reaction_spec_pair, reaction_attr, loop_ensemble_fingerprint):
         cache_key = (reaction_spec_pair, loop_ensemble_fingerprint)
         if cache_key not in self.cache['loop_breakage_effects']:
-            self.cache['loop_breakage_effects'][cache_key] = self.loop_breakage_effects(
+            self.cache['loop_breakage_effects'][cache_key] = loop_effects = self.loop_breakage_effects(
                 elem1, elem2, reaction_attr.reaction_type)
+            print("\ncaching loop_breakage_effects(%s, %s, %s) result:" %
+                  (elem1, elem2, reaction_attr.reaction_type))
+            pprint(loop_effects)
         return self.cache['loop_breakage_effects'][cache_key]
 
 
@@ -367,6 +369,7 @@ class ComponentMgr(GraphManager):
             print("print('- hybridize complete.')", file=self.hyb_dehyb_file)
 
         self.N_domains_hybridized += 2
+        print("hybridize(%s, %s) - hybridized!")
 
         return result
 
@@ -509,6 +512,7 @@ class ComponentMgr(GraphManager):
 
         if self.hyb_dehyb_file:
             print("print('- dehybridize complete.')", file=self.hyb_dehyb_file)
+        print("dehybridize(%s, %s) - dehybridized!")
 
         self.N_domains_hybridized -= 2
 
@@ -636,7 +640,7 @@ class ComponentMgr(GraphManager):
 
         if self.hyb_dehyb_file:
             print("print('- stacking complete.')", file=self.hyb_dehyb_file)
-
+        print("stack(%s, %s, %s, %s) - stacked!" % (h1end3p, h2end5p, h2end3p, h1end5p))
         return result
 
 
@@ -761,6 +765,7 @@ class ComponentMgr(GraphManager):
 
         if self.hyb_dehyb_file:
             print("print('- un-stacking complete.')", file=self.hyb_dehyb_file)
+        print("unstack(%s, %s, %s, %s) - unstacked!" % (h1end3p, h2end5p, h2end3p, h1end5p))
 
         return result
 
@@ -1441,6 +1446,9 @@ class ComponentMgr(GraphManager):
             return self.cache['intracomplex_activity'][cache_key]
         # activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
         activity, loop_effects = self.loop_formation_effects(elem1, elem2, reaction_type)
+        print("\nloop_formation_effects(%s, %s, %s) (cstate %s) returned:" %
+              (elem1, elem2, reaction_type, d1.strand.complex._state_fingerprint))
+        pprint((activity, loop_effects))
 
         # print("Intracomplex activity %0.04f for %s+ reaction between %s and %s" % (
         #     activity, reaction_type, elem1, elem2))

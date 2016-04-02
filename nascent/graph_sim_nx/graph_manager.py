@@ -701,7 +701,9 @@ class GraphManager(object):
         if len(affected_loopids) == 0:
             return None
         # Make sure not to modify affected_loopids - we use that later! (This is just for debugging)
-        unprocesses_affected_loopids = affected_loopids.copy()
+        # unprocesses_affected_loopids = affected_loopids.copy()
+        intact_path_loops = set()
+        broken_path_loops = set()
 
         # 2. Update all loops to include the ifnode split.
         # Edit: TODO: Should this be described genericly? Otherwise, maybe move this function to Complex
@@ -709,11 +711,21 @@ class GraphManager(object):
         #       OTOH, I'm making use of self.interface_graph which is not available within Complex.
         # We need to have the updated ifnodes in the paths because we query the edge length in
         # find_alternative_shortest_path using self.interface_graph[source][target]['len_contour']
-        changed_loopids_lst = sorted(affected_loopids, key=lambda loopid: cmplx.loops[loopid]['activity'], reverse=True)
-        changed_loopids_deque = deque(changed_loopids_lst)
-        affected_loops = [cmplx.loops[loopid] for loopid in changed_loopids_lst]
-        for loopid, affected_loop in zip(changed_loopids_lst, affected_loops):
-            path = affected_loop['path']
+        # changed_loopids_lst = sorted(affected_loopids, key=lambda loopid: cmplx.loops[loopid]['activity'], reverse=True)
+        # changed_loopids_deque = deque(changed_loopids_lst)
+        affected_loop_tuples = sorted([(cmplx.loops[loopid]['activity'],
+                                        cmplx.loops[loopid]['loop_hash'],
+                                        cmplx.loops[loopid]['path_spec'],
+                                        cmplx.loops[loopid]['path'],
+                                        loopid)
+                                       for loopid in affected_loopids], reverse=True)
+        # affected_loops = [cmplx.loops[loopid] for loopid in changed_loopids_lst]
+        # for loopid, affected_loop in zip(changed_loopids_lst, affected_loops):
+        print("Pre-processing affected loop paths:")
+        print("\n".join(str(tup) for tup in affected_loop_tuples))
+        for activity, loop_old_hash, path_spec, path, loopid in affected_loop_tuples:
+            # path = affected_loop['path']
+            cmplx.loops[loopid]['path_tuple_before_breakage_preprocessing'] = tuple(path)  # TODO: Remove debug
             path_node_index = {ifnode: idx for idx, ifnode in enumerate(path)}
             # TODO, FIX: For duplex dehybridization, we should perhaps pre-process the path such that if
             # the previous_top_delegate ifnode is no longer connected to the next ifnode in the path,
@@ -733,7 +745,7 @@ class GraphManager(object):
                                                             if ends_path_idxs[0] < ends_path_idxs[1] else
                                                             (ends_path_idxs[1], ends_path_idxs[0]))
                     neighbor_idxs = (end_downstream_idx-1, # OK, even if idx=0
-                                     end_upstream_idx+1 if end_upstream_idx+1 < len(path) else 0)
+                                     (end_upstream_idx+1) % len(path))  # modulu list len to wrap around
                     neighbors = [path[idx] for idx in neighbor_idxs]
                     for (neighbor, top_delegate, new_delegate, idx) in zip(
                             neighbors, ends_former_top_delegates, ends_new_delegates, ends_path_idxs):
@@ -748,73 +760,146 @@ class GraphManager(object):
                             pdb.set_trace()
                     # Check if the two path-connected delegates are connected to each other.
                     # TODO: This check belongs in the "find-new-loop-path-maybe" loop below!
+                    # Path is updated to use the best-connected ifnode.
                     path_connected_ifnodes = [path[idx] for idx in ends_path_idxs]
                     if path_connected_ifnodes[0] in self.interface_graph.adj[path_connected_ifnodes[1]]:
                         print("Loop %s: Path-connected Ifnodes %s are still connected to each other" % (
                             loopid, path_connected_ifnodes))
-                        # continue
-
-                # If not all(ends_on_path), then I don't think we need to do any pre-processing.
-                # The loop path must surely change, it is just a question of how.
-
+                        intact_path_loops.add(loopid)
+                    else:
+                        broken_path_loops.add(loopid)
+                else:
+                    # If not all(ends_on_path), then I don't think we need to do any pre-processing.
+                    # The loop path must surely change, it is just a question of how.
+                    # (It could only happen if the end is stacked, but then it couldn't dehybridize..
+                    # Also, we don't allow duplexes to be directly
+                    ifnode_idx, former_top_delegate = [(idx, ifnode) for idx, ifnode in zip(
+                        ends_path_idxs, ends_former_top_delegates) if idx is not None]
+                    neighbor_before, neighbor_after = path[ifnode_idx-1], path[(ifnode_idx+1) % len(path)]
+                    if former_top_delegate in self.interface_graph.adj[neighbor_before]:
+                        assert neighbor_before in self.interface_graph.adj[former_top_delegate]
+                        assert neighbor_after not in self.interface_graph.adj[former_top_delegate]
+                        assert former_top_delegate not in self.interface_graph.adj[neighbor_after]
+                    else:
+                        assert neighbor_after in self.interface_graph.adj[former_top_delegate]
+                        assert former_top_delegate in self.interface_graph.adj[neighbor_after]
+                        assert neighbor_before not in self.interface_graph.adj[former_top_delegate]
+                        assert former_top_delegate not in self.interface_graph.adj[neighbor_before]
+                    broken_path_loops.add(loopid)
 
 
             else:
                 # STACKING_INTERACTION
-                ifnode_idx = path.index(previous_top_delegate)
-                # How to know if the new ifnode should be inserted before or after?
-                if ifnode_idx == len(path)-1 or ifnode_idx == 0:
-                    # We can just append the new ifnode and it should be OK.
+                # TODO: If unstacking backbone-connected domain-ends, then after ifnode-split path updating below,
+                # the path is essentially intact. True, we will also find the path with find_alternative_shortest_path,
+                # but that search isn't needed. Instead, just check if after processing the ifnode split, the
+                # two ifnodes are (a) still connected to each other, and (b) still connected to the path.
+                # if so, add loop to intact_path_loops.
+                if len(path) == 1:
+                    # Special case, backbone-connected stacked duplex ends;
                     path.append(newly_undelegated_ifnode)
-                else:
-                    # the previous_top_delegate ifnode is not at the start or end of the path;
-                    # check if the previous_top_delegate is connected to the nodes before/after it:
-                    ifnode_before, ifnode_after = path[ifnode_idx-1], path[ifnode_idx+1]
-                    if previous_top_delegate in self.interface_graph.adj[ifnode_before]:
-                        # Not sure about these assertions, verify if you encounter AssertionErrors:
-                        # One reason why it may be correct is that ifnode_idx is not at the start or end of the path,
-                        # so the path must be 3 or more elements long.
-                        assert ifnode_before in self.interface_graph.adj[previous_top_delegate]
-                        assert previous_top_delegate not in self.interface_graph.adj[ifnode_after]
-                        assert ifnode_after not in self.interface_graph.adj[previous_top_delegate]
-                        assert newly_undelegated_ifnode in self.interface_graph.adj[ifnode_after]
-                        assert newly_undelegated_ifnode not in self.interface_graph.adj[ifnode_before]
-                        # TODO: Remove the excessive assertions above.
-                        # Insert newly_undelegated_ifnode AFTER previous_top_delegate in the path at position idx+1:
+                    print(("Inserted newly_undelegated_ifnode %s AFTER previous_top_delegate %s in loop %s path") % (
+                        newly_undelegated_ifnode, previous_top_delegate, loopid))
+                    broken_path_loops.add(loopid)
+                    print(" - loop %s = %s marked as broken (length 1)." % (loopid, path))
+                    continue
+                ifnode_idx = path.index(previous_top_delegate)
+                ifnode_before = path[ifnode_idx-1] # = (ifnode_idx % len(path))-1
+                ifnode_after = path[(ifnode_idx+1) % len(path)]
+                if len(path) == 2:
+                    # For path of length 2, we should still be connected..  A--X --> A-B--X <=> A--X--B
+                    # We can still short-circuit the "where to insert newly_undelegated_ifnode (B)" check, but
+                    # we must still do the following "are A and B still connected or is loop broken" test below.
+                    path.append(newly_undelegated_ifnode)
+                    print(("Appending newly_undelegated_ifnode %s AFTER previous_top_delegate %s at end of loop %s."
+                           " path: %s ") % (newly_undelegated_ifnode, previous_top_delegate, loopid, path))
+                elif previous_top_delegate in self.interface_graph.adj[ifnode_before]:
+                    # former_top_delegate is still connected to ifnode_before
+                    # newly_undelegated_ifnode should be inserted *after* former_top_delegate in the path.
+                    # Not sure about these assertions, verify if you encounter AssertionErrors:
+                    # One reason why it may be correct is that ifnode_idx is not at the start or end of the path,
+                    # so the path must be 3 or more elements long.
+                    assert ifnode_before in self.interface_graph.adj[previous_top_delegate]
+                    assert previous_top_delegate not in self.interface_graph.adj[ifnode_after]
+                    assert ifnode_after not in self.interface_graph.adj[previous_top_delegate]
+                    assert newly_undelegated_ifnode in self.interface_graph.adj[ifnode_after]
+                    assert newly_undelegated_ifnode not in self.interface_graph.adj[ifnode_before]
+                    # TODO: Remove the excessive assertions above.
+                    # Insert newly_undelegated_ifnode AFTER previous_top_delegate in the path at position idx+1:
+                    if ifnode_idx+1 == len(path): # former_top_delegate at end of list; we can just append.
+                        path.append(newly_undelegated_ifnode)
+                        print(("Appending newly_undelegated_ifnode %s AFTER previous_top_delegate %s at end of loop %s."
+                               " path: %s ") % (newly_undelegated_ifnode, previous_top_delegate, loopid, path))
+                    else:
                         path.insert(ifnode_idx+1, newly_undelegated_ifnode)
                         print(("Inserted newly_undelegated_ifnode %s AFTER previous_top_delegate %s in loop %s path at "\
                                "position %s+1") % (newly_undelegated_ifnode, previous_top_delegate, loopid, ifnode_idx))
+                else:
+                    # former_top_delegate is NO longer connected to ifnode_before (but should be to ifnode_after)
+                    # newly_undelegated_ifnode should be connected to ifnode_before
+                    # newly_undelegated_ifnode should be inserted *before* former_top_delegate in the path.
+                    assert ifnode_before not in self.interface_graph.adj[previous_top_delegate]
+                    assert previous_top_delegate in self.interface_graph.adj[ifnode_after]
+                    assert ifnode_after in self.interface_graph.adj[previous_top_delegate]
+                    assert newly_undelegated_ifnode not in self.interface_graph.adj[ifnode_after]
+                    assert newly_undelegated_ifnode in self.interface_graph.adj[ifnode_before]
+                    # TODO: Remove the excessive assertions above.
+                    # Insert newly_undelegated_ifnode *before* previous_top_delegate in the path:
+                    if ifnode_idx == 0:
+                        # previous_top_delegate is at start of path; newly_undelegated_ifnode before = at end.
+                        path.append(newly_undelegated_ifnode)
+                        print(("Appending newly_undelegated_ifnode %s BEFORE previous_top_delegate %s at end of loop %s."
+                               " path: %s ") % (newly_undelegated_ifnode, previous_top_delegate, loopid, path))
                     else:
-                        assert ifnode_before not in self.interface_graph.adj[previous_top_delegate]
-                        assert previous_top_delegate in self.interface_graph.adj[ifnode_after]
-                        assert ifnode_after in self.interface_graph.adj[previous_top_delegate]
-                        assert newly_undelegated_ifnode not in self.interface_graph.adj[ifnode_after]
-                        assert newly_undelegated_ifnode in self.interface_graph.adj[ifnode_before]
-                        # TODO: Remove the excessive assertions above.
-                        # Insert newly_undelegated_ifnode *before* previous_top_delegate in the path:
                         path.insert(ifnode_idx, newly_undelegated_ifnode)
                         print(("Inserted newly_undelegated_ifnode %s BEFORE previous_top_delegate %s in loop %s path at "\
-                               "position %s") % (newly_undelegated_ifnode, previous_top_delegate, loopid, ifnode_idx))
+                               "position %s yielding the path: %s") % (
+                            newly_undelegated_ifnode, previous_top_delegate, loopid, ifnode_idx, path))
+                # Check if loop path is broken:
+                if newly_undelegated_ifnode in self.interface_graph.adj[previous_top_delegate]:
+                    # Loop path still valid, re-use:
+                    assert previous_top_delegate in self.interface_graph.adj[newly_undelegated_ifnode]
+                    intact_path_loops.add(loopid)
+                    print(" - loop %s = %s marked as INTACT." % (loopid, path))
+                else:
+                    broken_path_loops.add(loopid)
+                    print(" - loop %s = %s marked as BROKEN." % (loopid, path))
+
+
+
 
         # 3. Find the loop with the highest activity. This is the one we want to remove.
-        loop1_id = changed_loopids_deque.popleft()
-        loop1_hash = cmplx.loops[loop1_id]['loop_hash']
+        # Concern: Do we need the path ifnode-split processing of this loop? Well, yeah, because we use it
+        # as alternative path when piecing together new paths for broken loops.
+        # Concern: Do we really need a deque? Or can we just use an iterable? Do we need to append new loops to the
+        # list of affected loops? I don't think so.
+        # del_loop_id = changed_loopids_deque.popleft()
+        # del_loop_hash = cmplx.loops[del_loop_id]['loop_hash']
+        affected_loop_tups_iter = iter(affected_loop_tuples)
+        activity, del_loop_hash, del_loop_path_spec, del_loop_path, del_loop_id = next(affected_loop_tups_iter)
 
-        changed_loops = {loop1_id: None}
+        changed_loops = {del_loop_id: None}
         changed_loops_by_hash = {}
+        changed_loops_hash_by_id = {}
+        alternative_loop_paths = [del_loop_path]
         loop_effects = {
-            'del_loop_id': loop1_id,
-            'del_loop_hash': loop1_hash,
-            'changed_loops': changed_loops,
+            'del_loop_id': del_loop_id,
+            'del_loop_hash': del_loop_hash,
+            'del_loop_path_spec': del_loop_path_spec, # for debugging
+            'del_loop_activity': activity,
+            # 'changed_loops': changed_loops,
             'changed_loops_by_hash': changed_loops_by_hash,
+            'changed_loops_hash_by_id': changed_loops_hash_by_id,
             'previous_top_delegate': previous_top_delegate,         # Do not use, for debugging only
             'newly_undelegated_ifnode': newly_undelegated_ifnode,   # Do not use, for debugging only
             'previous_top_delegate_spec': previous_top_delegate.state_fingerprint(),
             'newly_undelegated_ifnode_spec': newly_undelegated_ifnode.state_fingerprint(),
-            'complex_loop_ensemble_fingerprint': cmplx.loop_ensemble_fingerprint
+            'complex_loop_ensemble_fingerprint': cmplx.loop_ensemble_fingerprint,
+            'complex_state_fingerprint': cmplx.state_fingerprint(),
+
         }
 
-        unprocesses_affected_loopids.remove(loop1_id) # changed_loopids
+        # unprocesses_affected_loopids.remove(loop1_id) # changed_loopids
 
         # System:   Λ₀           .------.
         #            .-------,--´------. \
@@ -852,37 +937,51 @@ class GraphManager(object):
 
 
         # Propagate the change iteratively same way as you determine loop formation efffects:
-        alternative_loop_paths = [cmplx.loops[loop1_id]['path']]
-        while changed_loopids_deque:
-            # For the first round, the loop considered is Λ₁ with loop_id None.
-            # It is not appropriate to use "loop0" to describe this; you can use "loop1" or "new_loop"
-            loop1_id = changed_loopids_deque.popleft()
-            loop1_info = cmplx.loops[loop1_id]
-            loop1_old_hash = loop1_info['loop_hash']
-            loop1_shortest_path = loop1_info['path']
-            # loop0_path is the alternative_loop_path used to create the new_loop_path.
-            new_path_length, new_loop_path, e1, e2, e3, loop0_path = self.find_alternative_shortest_path(
-                loop1_shortest_path, alternative_loop_paths)
-            a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=None)
+        # while changed_loopids_deque:
+        #     # For the first round, the loop considered is Λ₁ with loop_id None.
+        #     # It is not appropriate to use "loop0" to describe this; you can use "loop1" or "new_loop"
+        #     loop1_id = changed_loopids_deque.popleft()
+        for old_activity, loop_old_hash, loop_old_path_spec, path, loopid in affected_loop_tups_iter:
+            # looping over iter because we don't want to include the first to-be-deleted loop.
+            if loopid in intact_path_loops:
+                # Just need to update loop's activity using the updated loop path:
+                path_is_broken = False
+                new_loop_path = path # We can use old path
+                a2 = self.calculate_loop_activity(path, simulate_reaction=None)
+            else:
+                # loop1_info = cmplx.loops[loopid]
+                # loop_old_hash = loop1_info['loop_hash']
+                # path = loop1_info['path']
+                # loop0_path is the alternative_loop_path used to create the new_loop_path.
+                assert loopid in broken_path_loops
+                path_is_broken = True
+                new_path_length, new_loop_path, e1, e2, e3, loop0_path = self.find_alternative_shortest_path(
+                    path, alternative_loop_paths)
+                a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=None)
             # [ifnode.state_fingerprint() for ifnode in loop2_path]
+            new_loop_path_spec = tuple(new_loop_path_spec) # TODO: Remove cast
             new_loop_path_spec = cmplx.calculate_loop_path_spec(new_loop_path)
-            loop_change_factor = a2/loop1_info['activity']
+            loop_change_factor = a2/old_activity
             replacement_loop = {
-                'path': new_loop_path, # Only for debugging; the result is cached and uses between complexes
-                'path_spec': new_loop_path_spec,
+                'path_is_broken': path_is_broken,
+                'path_tuple': tuple(new_loop_path), # Only for debugging; the result is cached and uses between complexes
+                'path_spec': tuple(new_loop_path_spec),
                 'loop_hash': cmplx.calculate_loop_hash(new_loop_path_spec),
                 'activity': a2,
                 'dS': ln(a2), # in units of R
                 'loop_change_factor': loop_change_factor, # = a2/a0
                 # Values for the original loop (mostly for debugging)
-                'a0': loop1_info['path'],
-                'loop0_hash': loop1_old_hash, # so we can relate this to the original/parent loop.
-                'old_loop0_id': loop1_id,
+                'a0': old_activity,
+                'loop_old_hash': loop_old_hash, # so we can relate this to the original/parent loop.
+                'old_path_spec': loop_old_path_spec,
+                'description': 'loop_breakage_effects() modified/rebuilt loop',
+                'old_loop_id': loopid,
             }
-            changed_loops[loop1_id] = replacement_loop
-            changed_loops[loop1_old_hash] = replacement_loop
-            unprocesses_affected_loopids.remove(loop1_id)
-        assert len(unprocesses_affected_loopids) == 0  # TODO: Remove debug check
+            changed_loops[loopid] = replacement_loop
+            changed_loops_by_hash[loop_old_hash] = replacement_loop
+            changed_loops_hash_by_id[loopid] = loop_old_hash
+            # unprocesses_affected_loopids.remove(loop1_id)
+        # assert len(unprocesses_affected_loopids) == 0  # TODO: Remove debug check
         return loop_effects
 
 
@@ -1192,25 +1291,32 @@ class GraphManager(object):
         ifnode_by_hash_index_after = set(cmplx.ifnode_by_hash.items())
         assert path_spec == cmplx.calculate_loop_path_spec(new_loop_path)
         assert ifnode_by_hash_index_before == ifnode_by_hash_index_after
-        print("\nnew loop (shortest_path):", new_loop_path)
-        print(" - new_loop_path_spec: ", path_spec)
+        print("new loop (shortest_path):", new_loop_path)
+        print(" - new_loop_path_spec:", path_spec)
         ## TODO: Remove until here <<
-        new_loop = {'path': new_loop_path, 'path_spec': path_spec, 'activity': activity,
-                    'loop_hash': cmplx.calculate_loop_hash(path_spec)}
+        new_loop = {
+            'path': tuple(new_loop_path), # Use immutable tuples to avoid mutation bugs
+            'path_spec': tuple(path_spec),
+            'activity': activity,
+            'loop_hash': cmplx.calculate_loop_hash(path_spec),
+            'description': "loop_formation_effects new loop"
+        }
         print(" - new_loop info: %s" % (new_loop,))
-        changed_loops[None] = new_loop
+        changed_loops[None] = new_loop # Should we add new_loop here or not?
+        changed_loops_hash_by_id = {}
         new_stacking_loops = {}
         loop_effects = {
             # total loop formation activity; Product of shortest-path activity and any/all loop_change_factors:
             'activity': 0,
-            'shortest_path': new_loop_path, # use ['new_loop']['path'] instead.
-            'shortest_path_spec': path_spec, # use ['new_loop']['path_spec'] instead.
-            'shortest_path_activity': activity, # use ['new_loop']['activity'] instead.
+            # 'shortest_path': tuple(new_loop_path), # use ['new_loop']['path'] instead.
+            # 'shortest_path_spec': path_spec, # use ['new_loop']['path_spec'] instead.
+            # 'shortest_path_activity': activity, # use ['new_loop']['activity'] instead.
             'new_loop': new_loop,
-            'changed_loops': changed_loops, # old_loopid => [list of new loop dicts]
+            # 'changed_loops': changed_loops, # old_loopid => [list of new loop dicts]
             'changed_loops_by_hash': changed_loops_by_hash, # old_loop_hash:  {dict with new loop info.}
+            'changed_loops_hash_by_id': changed_loops_hash_by_id,
             # changed_loops is a list of dicts, each representing the new loop formed, with keys 'path' and activity.
-            'loops_considered': processed_secondary_loopids, # for debugging
+            # 'loops_considered': processed_secondary_loopids, # for debugging
             # 'loops_affected': all_affected_loops,  # Obsoleted by changed_loops
             'loop_split_factors': loop_split_factors,
             # loops not reached by "neighbor-loop-propagation" algorithm but which should still be considered.
@@ -1220,6 +1326,8 @@ class GraphManager(object):
             'stacking_side_effects_activities': side_effects_activities,
             'stacking_side_effects_factors': side_effects_factors,
             'complex_loop_ensemble_fingerprint': cmplx.loop_ensemble_fingerprint,
+            'complex_state_fingerprint': cmplx.state_fingerprint(),
+            'description': "loop_formation_effects",
         }
 
         if not cmplx.loops:
@@ -1503,14 +1611,15 @@ class GraphManager(object):
                     cmplx.rebuild_ifnode_by_hash_index()
                     cmplx.rebuild_loopid_by_hash_index()
                     assert loop2_path_spec == cmplx.calculate_loop_path_spec(loop2_path) # TODO: Remove assertion
+                    assert cmplx.calculate_loop_hash(loop2_path_spec) == cmplx.calculate_loop_hash(tuple(loop2_path_spec))
                     replacement_loop = {
-                        'path': loop2_path,
-                        'path_spec': loop2_path_spec,
+                        'path': tuple(loop2_path), # Use immutable tuples to prevent mutation bugs.
+                        'path_spec': tuple(loop2_path_spec),
                         'loop_hash': cmplx.calculate_loop_hash(loop2_path_spec),
                         'activity': a2,
                         'dS': ln(a2), # in units of R
                         'loop_change_factor': loop_split_factor, # = a2/a0
-                        'description': "Case 1: shared loop on shortest_path.",
+                        'description': "loop_formation_effects updated loop found by breath-first search starting at new loop.",
                         # Values for the original loop (mostly for debugging)
                         'a0': a0,
                         'loop0_hash': loop0_hash, # so we can relate this to the original/parent loop.
@@ -1521,6 +1630,7 @@ class GraphManager(object):
                     changed_loops[loop0_id] = replacement_loop
                     assert loop0_hash not in changed_loops_by_hash
                     changed_loops_by_hash[loop0_hash] = replacement_loop
+                    changed_loops_hash_by_id[loop0_id] = loop0_hash
                     loop_split_factors.append(loop_split_factor)
                     # Add loop0_id to deque so we can check if loop0 has any affected neighboring loops:
                     changed_loops_deque.append(loop0_id)
@@ -1649,6 +1759,8 @@ class GraphManager(object):
                     replacement_loop1['old_loop0_id'] = loop0id
                     replacement_loop1['activity'] = a1
                     replacement_loop1['loop_change_factor'] = a1/a0
+                    replacement_loop1['description'] = "loop_formation_effects updated loop (stacked helices).",
+
                     if idx2-idx1 == 1:
                         # Case 1a: Special case: The two joined interface nodes are adjacent; just re-calculate current loop0.
                         # No extra paths
