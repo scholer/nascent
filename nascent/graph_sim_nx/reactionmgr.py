@@ -1933,7 +1933,7 @@ class ReactionMgr(ComponentMgr):
             print("%s.loopids_by_interface BEFORE effectuating loop breakage: %s" % (cmplx, cmplx.loopids_by_interface))
             print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
 
-            print("\nEffectuating loop breakage using: %s" % (loop_effects))
+            print("\nEffectuating loop breakage on %s using loop_effects directive: %s" % (cmplx, loop_effects,))
             cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
             print("\n%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
@@ -2572,9 +2572,11 @@ class ReactionMgr(ComponentMgr):
             self.reaction_graph.change_edge(source=source_state, target=target_state, attrs=edge_attrs)
             assert edge_key in self.endstates_by_reaction[source_state]
             assert target_state in self.endstates_by_reaction[source_state][edge_key]
+            # Have we updated reaction_throttle_cache yet?
             if edge_key in self.reverse_reaction_key:
                 rev_edge_key = self.reverse_reaction_key[edge_key]
-                assert self.reaction_throttle_cache[edge_key] is self.reaction_throttle_cache[rev_edge_key]
+                # TODO: Re-enable assertion
+                # assert self.reaction_throttle_cache[edge_key] is self.reaction_throttle_cache[rev_edge_key]
             return False
 
 

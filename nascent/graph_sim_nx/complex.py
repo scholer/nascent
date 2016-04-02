@@ -1231,7 +1231,7 @@ class Complex(nx.MultiDiGraph):
         """
         if self.ifnode_by_hash is None:
             self.rebuild_ifnode_by_hash_index()
-        return [ifnode.state_fingerprint() for ifnode in loop_path]
+        return tuple([ifnode.state_fingerprint() for ifnode in loop_path])
 
     def calculate_loop_hash(self, loop_path_spec):
         """
@@ -1275,10 +1275,13 @@ class Complex(nx.MultiDiGraph):
 
     def rebuild_ifnode_by_hash_index(self):
         """ Rebuild ifnode_by_hash index/dict. """
-        # Go over all ifnodes (for all domain ends):
-        cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)
-                         if end.ifnode.delegatee is None]
+        # Go over all non-delegated, i.e. top_delegate, cmplx ifnodes (for all domain ends):
+        cmplx_ifnodes = [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p) if end.ifnode.delegatee is None]
         self.ifnode_by_hash = {ifnode.state_fingerprint(): ifnode for ifnode in cmplx_ifnodes}
+        if len(self.ifnode_by_hash) < len(cmplx_ifnodes):
+            print("WARNING: top_delegate ifnode state fingerprint degeneracy:")
+            pprint({ifnode: ifnode.state_fingerprint() for ifnode in cmplx_ifnodes})
+            pdb.set_trace()
 
 
     def recreate_loop_ifnodes_from_spec(self, ifnodes_specs):
@@ -1382,6 +1385,7 @@ class Complex(nx.MultiDiGraph):
         # pdb.set_trace()
         # TODO: WAAIT a moment, are you modifying the loop_effects directive??
         # TODO: Separate mutable vs immutable (and cachable) parts of the loop info!! Only add immutables to cache!
+        loop_effects = dict(loop_effects)
 
         if is_forming:
             # For forming reactions, loop_effects are calculated on the *previous* state.
@@ -1391,12 +1395,36 @@ class Complex(nx.MultiDiGraph):
             # For breaking reactions, loop_effects are calculated on the *current* state.
             assert loop_effects['complex_state_fingerprint'] == self._state_fingerprint
             assert loop_effects['complex_loop_ensemble_fingerprint'] == self.loop_ensemble_fingerprint
+
+            # It seems when we are breaking we should update the index:
+            self.rebuild_ifnode_by_hash_index()
+
+        # Add/remove loop:
         if is_forming:
             # 1a. Add new loop:
-            new_loop = loop_effects['new_loop']
+            new_loop_values = dict(loop_effects['new_loop'])
+            # new_loop_values is the "new loop template" from the cached loop_effects directive.
+            # We create a new loop (instance) and add the cached result values to it
+            new_loop = {
+                'path': None,
+                'loop_hash': None,
+                'activity': None,
+                'dS': None, # TODO: Rename to "loop_entropy",
+                # TODO: Remove loop debug_info when done debugging
+                'debug_info': {
+                    'update_history': []
+                }
+            }
+            # new_loop['debug_info'] = dict(new_loop.get('debug_info', []))
+            # new_loop.update(new_loop_values)
+            # only update specific keys:
+            new_loop['loop_hash'] = new_loop_hash = new_loop_values['loop_hash']
+            new_loop['activity'] = new_loop_values['activity']
+            new_loop['dS'] = new_loop_values['dS']
+            new_loop['debug_info']['update_history'].append(new_loop_values)
+            # if 'debug_info' in new_loop:
             new_loop_id = next(loopid_sequential_number_generator)
-            new_loop_hash = new_loop['loop_hash']
-            if -598104243721766330 in new_loop['path_spec']:
+            if -598104243721766330 in new_loop_values['path_spec']:
                 print("Special case (-598104243721766330 in new_loop['path_spec']) encountered!")
                 pdb.set_trace()
             self.loops[new_loop_id] = new_loop
@@ -1408,10 +1436,20 @@ class Complex(nx.MultiDiGraph):
             # Even if most ifnode state hashes haven't changed, the ifnode delegation may have changed,
             # and we use THAT when re-building the index.
             # self.rebuild_ifnode_by_hash_index()
+            # Edit: We need an up to date index when re-building after loop breakage (=ifnode splitting)
+            # To know the hash for the recently-undelegated ifnode.
+            # Then again, maybe for loop-breakage, we should first assert the complex state change and THEN
+            # effectuate the loop_breakage_effects directive. In this also makes sense considering the order
+            # of when the directives are calculated:
+            #   loop_formation_effects directives are calculated BEFORE the any actual reaction is done. (predictively)
+            #   loop_breakage_effects directives are calculated AFTER a reaction has been done.
+            # TODO: Split this method into two separate methods to highlight difference in when the methods are used.
+
 
             # Update loop path to use this Complex's ifnodes (instances):
-            new_loop_template_path = new_loop['path']
-            new_loop['path'] = self.recreate_loop_ifnodes_from_spec(new_loop['path_spec'])
+            # new_loop_template_path = new_loop['path']
+            new_loop['path'] = self.recreate_loop_ifnodes_from_spec(new_loop_values['path_spec'])
+            new_loop['debug_info']['path_before_ifnode_processing'] = tuple(new_loop['path'])
 
             # Testing for changes in ifnode delegation:
             assert new_loop['path'][0].top_delegate() == new_loop['path'][-1].top_delegate()
@@ -1419,7 +1457,8 @@ class Complex(nx.MultiDiGraph):
             new_loop['path'].pop() # Remove the last ifnode (which is also the first after reaction)
             # Make sure path consists of top_delegates only:
             assert [ifnode.top_delegate() for ifnode in new_loop['path']] == new_loop['path']
-            new_loop['path'] = tuple(new_loop['path'])
+            # new_loop['path'] = tuple(new_loop['path'])
+            new_loop['debug_info']['path_after_ifnode_processing'] = tuple(new_loop['path'])
             if max(Counter(ifnode.top_delegate() for ifnode in new_loop['path']).values()) > 1:
                 print("\n\nWARNING: new_loop['path'] has duplicate top_delegate ifnodes:")
                 print(new_loop['path'])
@@ -1443,7 +1482,7 @@ class Complex(nx.MultiDiGraph):
             # if you have performed a reaction because then the ifnode's delegation scheme will have changed
             # and that is used when calling src/tgt.state_fingerprint().
             # If you want to rely on a cached hash, you have to use self.loops[loopid]['loop_hash']
-            assert new_loop['loop_hash'] == self.calculate_loop_hash(new_loop['path_spec'])
+            assert new_loop['loop_hash'] == self.calculate_loop_hash(new_loop_values['path_spec'])
             for ifnode in new_loop['path']:
                 self.loopids_by_interface[ifnode].add(new_loop_id)
         else:
@@ -1467,7 +1506,7 @@ class Complex(nx.MultiDiGraph):
                     # ifnode delegation should probably be made deterministic based on state fingerprints..
                     # Although that might be hard because delegation can take different paths.
                     assert ifnode.state_fingerprint() in (
-                        loop_effects['previous_top_delegate_spec'], loop_effects['newly_undelegated_ifnode_spec'])
+                        loop_effects['previous_top_delegates_specs'] | loop_effects['newly_undelegated_ifnodes_specs'])
                     # pdb.set_trace()
                     # print("This was unexpected! - no, not really.")
             assert not any(del_loop_id in loopids_set for loopids_set in self.loopids_by_interface.values())
@@ -1478,17 +1517,35 @@ class Complex(nx.MultiDiGraph):
             # self.rebuild_ifnode_by_hash_index()
 
         # 2. Update changed existing loops:
-        for loop_hash, loop_info in loop_effects['changed_loops_by_hash'].items():
+        for loop_hash, loop_updated_values in loop_effects['changed_loops_by_hash']: #.items():  # edit, using immutable tuples
+            new_loop_values = dict(loop_updated_values)
+
             if loop_hash is None:
                 # None is used to indicate a new loop. but only when used as loop_id, not hash.
                 print("\n\nThis shouldn't happen!!\n")
                 pdb.set_trace()
 
+            # Find the loop instance from hash
             loop_id = self.loopid_by_hash[loop_hash]
-            old_loop_info = self.loop_by_loopid[loop_id]
+            loop = self.loop_by_loopid[loop_id]
 
-            # Update loop path:
-            old_loop_nodes = set(old_loop_info['path'])
+            # Update the loop instance with new values
+            #loop.update(loop_info)
+            # Edit: Explicitly update values:
+            loop['loop_hash'] = new_loop_values['loop_hash']
+            loop['activity'] = new_loop_values['activity']
+            loop['dS'] = new_loop_values['dS']
+            loop['debug_info']['update_history'].append(new_loop_values)
+
+            ## Update path (instances)
+            loop['debug_info']['path_before_update'] = tuple(loop['path'])
+            # Uh, there is a problem re-creating path ifnodes after a breaking reaction:
+            # The newly_undelegated_ifnode isn't present in the ifnode_by_hash index.
+            # Maybe make sure both top-delegates *and* constituent (electorate/delegator) ifnodes?
+            # Edit: the problem is more that the ifnode_by_hash index wasn't up to date:
+            loop['path'] = self.recreate_loop_ifnodes_from_spec(new_loop_values['path_spec'])
+            loop['debug_info']['path_after_update_before_ifnode_processing'] = tuple(loop['path'])
+            old_loop_nodes = set(loop['path'])
             # As with the new loop, we should update the path to reflect current ifnode delegation:
             # I think it is guaranteed that the first and last ifnodes in the new_loop path above
             # (before removing the last ifnode of the path) will be merged into a single ifnode.
@@ -1496,40 +1553,48 @@ class Complex(nx.MultiDiGraph):
             if is_forming:
                 # Should be the easy part, just check for merged ifnodes by raising to t
                 # How is the updated path? e3a+e2+e3b or e2+e3b+e3a or ..?
-                updated_loop_path = tuple(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
+                updated_loop_path = list(unique_gen((ifnode.top_delegate() for ifnode in loop['path'])))
+                loop['path'] = updated_loop_path
+                loop['debug_info']['path_after_ifnode_processing'] = tuple(loop['path'])
                 print("Loop %s path changes after forming a new intra-complex connection:" % loop_id)
-                print("Old      loop path:", old_loop_info['path'])
-                print("Changed  loop path:", loop_info['path'])
-                print("Delegate loop path:", updated_loop_path)
-                loop_info['path'] = updated_loop_path
+                print("Old      loop path:", loop['debug_info']['path_before_update'])
+                print("Changed  loop path:", loop['debug_info']['path_after_update_before_ifnode_processing'])
+                print("Delegate loop path:", loop['debug_info']['path_after_ifnode_processing'])
             else:
                 # This is probably a bit harder. Except if the new loop path starts and ends with the node that
                 # is being split/expanded. Then it is just about the same:
-                updated_loop_path = tuple(unique_gen((ifnode.top_delegate() for ifnode in loop_info['path'])))
-                print("Loop %s path changes after breaking:" % loop_id)
-                print("Old      loop path:", old_loop_info['path'])
-                print("Changed  loop path:", loop_info['path'])
-                print("Delegate loop path:", updated_loop_path)
-                loop_info['path'] = updated_loop_path
-            new_loop_nodes = set(loop_info['path'])
+                # Note: This really should not be needed for loop breakage directives
+                # where the path_spec was created *after* breaking the connection,
+                # and so the path_spec already reflects the *current* state.
+                updated_loop_path = list(unique_gen(ifnode.top_delegate() for ifnode in loop['path']))
+                # Assert that ifnode delegatio doesn't change path:
+                assert loop['path'] == updated_loop_path
+                loop['debug_info']['path_after_ifnode_processing'] = tuple(loop['path'])
+                print("Loop %s path changes after forming a new intra-complex connection:" % loop_id)
+                print("Old      loop path:", loop['debug_info']['path_before_update'])
+                print("Changed  loop path:", loop['debug_info']['path_after_update_before_ifnode_processing'])
+                print("Delegate loop path:", loop['debug_info']['path_after_ifnode_processing'])
+
+            # Update loopids_by_ifnode index:
+            new_loop_nodes = set(loop['path'])
             # Update loopids_by_ifnode index:
             # Remove old ifnode entries from self.loopids_by_interface and add new:
-            for ifnode in (old_loop_nodes - new_loop_nodes):
-                self.loopids_by_interface[ifnode].remove(loop_id)
-            for ifnode in (new_loop_nodes - old_loop_nodes):
+            for ifnode in old_loop_nodes - new_loop_nodes:
+                self.loopids_by_interface[ifnode].discard(loop_id)
+            for ifnode in new_loop_nodes - old_loop_nodes:
                 self.loopids_by_interface[ifnode].add(loop_id)
 
             # At this point we haven't updated the loop indexes, so new loop ifnodes will not be present yet.
             # New ifnodes will typically be present for breaking reactions (is_forming=False)
+            # TODO: You should probably make a broader more general check that the loopids_by_interface index is up-to-date
             if is_forming:
                 assert all(ifnode in self.loopids_by_interface and loop_id in self.loopids_by_interface[ifnode]
-                           for ifnode in loop_info['path'])
-            old_loop_info.update(loop_info)
+                           for ifnode in loop['path'])
 
 
         ## Check all loops - DEBUG - TODO: Remove excessive assertion.
         for loop in self.loops.values():
-            top_delegate_path = tuple([ifnode.top_delegate() for ifnode in loop['path']])
+            top_delegate_path = [ifnode.top_delegate() for ifnode in loop['path']]
             assert top_delegate_path == loop['path']
             assert max(Counter(top_delegate_path).values()) == 1
 

@@ -681,8 +681,8 @@ class GraphManager(object):
                 end2_loops = d1end3p_loops
                 end2_former_delegate = d1end3p.ifnode
                 end2_new_delegate = d2end5p.ifnode
-            ends_former_top_delegates = (end1_former_delegate, end2_former_delegate)
-            ends_new_delegates = (end1_new_delegate, end2_new_delegate)
+            previous_top_delegates = ends_former_top_delegates = (end1_former_delegate, end2_former_delegate)
+            newly_undelegated_ifnodes = ends_new_delegates = (end1_new_delegate, end2_new_delegate)
             affected_loopids = set.union(*[cmplx.loopids_by_interface[ifnode] for ifnode in reactant_nodes])
         else:
             # For STACKING (and probably backbone ligation/nicking) we can do it simpler:
@@ -690,12 +690,16 @@ class GraphManager(object):
             elem2_loops = cmplx.loopids_by_interface[elem2_ifnode]
             if len(elem1_loops) > 0:
                 previous_top_delegate = elem1_ifnode    # Or maybe there just wasn't any loops?
+                previous_top_delegates = [elem1_ifnode]    # Or maybe there just wasn't any loops?
                 newly_undelegated_ifnode = elem2_ifnode
+                newly_undelegated_ifnodes = [elem2_ifnode]
                 assert len(elem2_loops) == 0
                 affected_loopids = elem1_loops
             else:
                 previous_top_delegate = elem2_ifnode
                 newly_undelegated_ifnode = elem1_ifnode
+                previous_top_delegates = [elem2_ifnode]
+                newly_undelegated_ifnodes = [elem1_ifnode]
                 assert len(elem1_loops) == 0
                 affected_loopids = elem2_loops
         if len(affected_loopids) == 0:
@@ -725,7 +729,7 @@ class GraphManager(object):
         print("\n".join(str(tup) for tup in affected_loop_tuples))
         for activity, loop_old_hash, path_spec, path, loopid in affected_loop_tuples:
             # path = affected_loop['path']
-            cmplx.loops[loopid]['path_tuple_before_breakage_preprocessing'] = tuple(path)  # TODO: Remove debug
+            cmplx.loops[loopid]['debug_info']['path_before_breakage_preprocessing'] = tuple(path)  # TODO: Remove debug
             path_node_index = {ifnode: idx for idx, ifnode in enumerate(path)}
             # TODO, FIX: For duplex dehybridization, we should perhaps pre-process the path such that if
             # the previous_top_delegate ifnode is no longer connected to the next ifnode in the path,
@@ -878,25 +882,34 @@ class GraphManager(object):
         affected_loop_tups_iter = iter(affected_loop_tuples)
         activity, del_loop_hash, del_loop_path_spec, del_loop_path, del_loop_id = next(affected_loop_tups_iter)
 
-        changed_loops = {del_loop_id: None}
+        # changed_loops = {del_loop_id: None}
         changed_loops_by_hash = {}
         changed_loops_hash_by_id = {}
         alternative_loop_paths = [del_loop_path]
+        # reaction loop_effects directive = the collection of loop changes;
+        # loop_update info = how to update each affected loop
         loop_effects = {
+            'is_forming': False,
             'del_loop_id': del_loop_id,
             'del_loop_hash': del_loop_hash,
             'del_loop_path_spec': del_loop_path_spec, # for debugging
             'del_loop_activity': activity,
             # 'changed_loops': changed_loops,
             'changed_loops_by_hash': changed_loops_by_hash,
-            'changed_loops_hash_by_id': changed_loops_hash_by_id,
-            'previous_top_delegate': previous_top_delegate,         # Do not use, for debugging only
-            'newly_undelegated_ifnode': newly_undelegated_ifnode,   # Do not use, for debugging only
-            'previous_top_delegate_spec': previous_top_delegate.state_fingerprint(),
-            'newly_undelegated_ifnode_spec': newly_undelegated_ifnode.state_fingerprint(),
+            'newly_undelegated_ifnodes_specs': {ifnode.state_fingerprint() for ifnode in newly_undelegated_ifnodes},
+            'previous_top_delegates_specs': {ifnode.state_fingerprint() for ifnode in previous_top_delegates},
+            # It is nice to permanently save complex state fingerprints to ensure that the complex
+            # that tries to apply this loop_effects change directive has the same state
             'complex_loop_ensemble_fingerprint': cmplx.loop_ensemble_fingerprint,
             'complex_state_fingerprint': cmplx.state_fingerprint(),
-
+            'directive_debug_info': {
+                # Instance-specific debug info and other unused values
+                'changed_loops_hash_by_id': changed_loops_hash_by_id,
+                # 'previous_top_delegate': previous_top_delegate,         # Do not use, for debugging only
+                # 'newly_undelegated_ifnode': newly_undelegated_ifnode,   # Do not use, for debugging only
+                # 'previous_top_delegate_spec': previous_top_delegate.state_fingerprint(),
+            },
+            'description': "loop_breakage_effects directive",
         }
 
         # unprocesses_affected_loopids.remove(loop1_id) # changed_loopids
@@ -958,27 +971,33 @@ class GraphManager(object):
                 new_path_length, new_loop_path, e1, e2, e3, loop0_path = self.find_alternative_shortest_path(
                     path, alternative_loop_paths)
                 a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=None)
-            # [ifnode.state_fingerprint() for ifnode in loop2_path]
-            new_loop_path_spec = tuple(new_loop_path_spec) # TODO: Remove cast
+            # [ifnode.state_fingerprint() for ifnode in new_loop_path]
             new_loop_path_spec = cmplx.calculate_loop_path_spec(new_loop_path)
+            new_loop_hash = cmplx.calculate_loop_hash(new_loop_path_spec)
+            # new_loop_path_spec = tuple(new_loop_path_spec) # TODO: Remove cast
             loop_change_factor = a2/old_activity
-            replacement_loop = {
-                'path_is_broken': path_is_broken,
-                'path_tuple': tuple(new_loop_path), # Only for debugging; the result is cached and uses between complexes
-                'path_spec': tuple(new_loop_path_spec),
-                'loop_hash': cmplx.calculate_loop_hash(new_loop_path_spec),
+            loop_update_info = {
+                'loop_hash': new_loop_hash,
+                'path_spec': tuple(new_loop_path_spec), # We need the path-spec to re-create re-built loop
                 'activity': a2,
-                'dS': ln(a2), # in units of R
-                'loop_change_factor': loop_change_factor, # = a2/a0
+                'dS': ln(a2), # loop_entropy in units of R
                 # Values for the original loop (mostly for debugging)
-                'a0': old_activity,
-                'loop_old_hash': loop_old_hash, # so we can relate this to the original/parent loop.
-                'old_path_spec': loop_old_path_spec,
-                'description': 'loop_breakage_effects() modified/rebuilt loop',
-                'old_loop_id': loopid,
+                # 'a0': old_activity,
+                # debug info for the last loop change:
+                'loop_update_debug_info': {
+                    'path_is_broken': path_is_broken,
+                    'description': 'loop_breakage_effects() %s loop' % ("rebuilt" if path_is_broken else "modified"),
+                    'new_path_tuple': tuple(new_loop_path), # Only for debugging; the result is cached and uses between complexes
+                    'new_path_spec': tuple(new_loop_path_spec),
+                    'loop_change_factor': loop_change_factor, # = a2/a0
+                    'old_activity': old_activity,
+                    'old_loop_hash': loop_old_hash, # so we can relate this to the original/parent loop.
+                    'old_path_spec': loop_old_path_spec,
+                    'source_loop_id': loopid,
+                },
             }
-            changed_loops[loopid] = replacement_loop
-            changed_loops_by_hash[loop_old_hash] = replacement_loop
+            # changed_loops[loopid] = loop_update_info
+            changed_loops_by_hash[loop_old_hash] = loop_update_info
             changed_loops_hash_by_id[loopid] = loop_old_hash
             # unprocesses_affected_loopids.remove(loop1_id)
         # assert len(unprocesses_affected_loopids) == 0  # TODO: Remove debug check
@@ -986,7 +1005,7 @@ class GraphManager(object):
 
 
     def find_alternative_shortest_path(self, loop1_path, alternative_loop_paths):
-        """
+        r"""
         Again,
             loop1 is the "old" loop that no longer works because it is broken.
             alternative_loops are other loop paths that are also broken, but should be usable...
@@ -1267,7 +1286,7 @@ class GraphManager(object):
             slice_start, slice_end = 0, None
 
 
-        # activity for shortest_path aka "a1":
+        # activity for shortest_path aka "a1" aka "new_loop_activity":
         activity = self.calculate_loop_activity(new_loop_path, simulate_reaction=reaction_type)
         if activity == 0:
             return 0, None
@@ -1275,7 +1294,8 @@ class GraphManager(object):
         new_loop_nodes = set(new_loop_path)
         processed_secondary_loopids = set()
         all_affected_loops = set()
-        changed_loops = {}   # old_id => [new_loop1_dict, new_loop2_dict, ...]
+        # changed_loops = {}   # old_id => [new_loop1_dict, new_loop2_dict, ...]
+        changed_loop_paths = {} # # lookup of loopid: new_loop_path for all changed loops
         changed_loops_by_hash = {} # old_loop_hash: {dict with new loop info.}
         # It would be nice to also have the activities for the new loops created (not just the shortest-loop)
         # Maybe have a 'changed_loops' old_loopid => [list of dicts describing new loops]
@@ -1295,26 +1315,35 @@ class GraphManager(object):
         print(" - new_loop_path_spec:", path_spec)
         ## TODO: Remove until here <<
         new_loop = {
-            'path': tuple(new_loop_path), # Use immutable tuples to avoid mutation bugs
+            'loop_hash': cmplx.calculate_loop_hash(path_spec),
             'path_spec': tuple(path_spec),
             'activity': activity,
-            'loop_hash': cmplx.calculate_loop_hash(path_spec),
-            'description': "loop_formation_effects new loop"
+            'dS': ln(activity),
+            'new_loop_debug_info': {
+                'path': tuple(new_loop_path), # Use immutable tuples to avoid mutation bugs
+                'description': "loop_formation_effects new loop"
+            },
         }
         print(" - new_loop info: %s" % (new_loop,))
-        changed_loops[None] = new_loop # Should we add new_loop here or not?
+        changed_loop_paths[None] = new_loop_path
+
         changed_loops_hash_by_id = {}
         new_stacking_loops = {}
         loop_effects = {
             # total loop formation activity; Product of shortest-path activity and any/all loop_change_factors:
             'activity': 0,
+            'is_forming': True,
             # 'shortest_path': tuple(new_loop_path), # use ['new_loop']['path'] instead.
             # 'shortest_path_spec': path_spec, # use ['new_loop']['path_spec'] instead.
             # 'shortest_path_activity': activity, # use ['new_loop']['activity'] instead.
             'new_loop': new_loop,
             # 'changed_loops': changed_loops, # old_loopid => [list of new loop dicts]
             'changed_loops_by_hash': changed_loops_by_hash, # old_loop_hash:  {dict with new loop info.}
-            'changed_loops_hash_by_id': changed_loops_hash_by_id,
+            'directive_debug_info': {
+                # Instance-specific debug info and other unused values
+                'changed_loops_hash_by_id': changed_loops_hash_by_id,
+            },
+            # 'changed_loops_hash_by_id': changed_loops_hash_by_id,
             # changed_loops is a list of dicts, each representing the new loop formed, with keys 'path' and activity.
             # 'loops_considered': processed_secondary_loopids, # for debugging
             # 'loops_affected': all_affected_loops,  # Obsoleted by changed_loops
@@ -1327,7 +1356,7 @@ class GraphManager(object):
             'stacking_side_effects_factors': side_effects_factors,
             'complex_loop_ensemble_fingerprint': cmplx.loop_ensemble_fingerprint,
             'complex_state_fingerprint': cmplx.state_fingerprint(),
-            'description': "loop_formation_effects",
+            'description': "loop_formation_effects directive",
         }
 
         if not cmplx.loops:
@@ -1496,8 +1525,11 @@ class GraphManager(object):
             # It is not appropriate to use "loop0" to describe this; you can use "loop1" or "new_loop"
             # pdb.set_trace()
             loop1_id = changed_loops_deque.popleft()
-            loop1_info = changed_loops[loop1_id]
-            loop1_shortest_path = loop1_info['path']
+            # loop1_info = changed_loops[loop1_id]
+            # loop1_info = cmplx.loops[loop1_id]
+            # loop1_shortest_path = tuple(loop1_info['path'])
+            loop1_shortest_path = tuple(changed_loop_paths[loop1_id])
+
 
             # loops_with_both_nodes = cmplx.loopids_by_interface[path[0]] & cmplx.loopids_by_interface[path[-1]]
             loop1_path_nodes = set(loop1_shortest_path)
@@ -1537,15 +1569,15 @@ class GraphManager(object):
                 # Makes lookup faster for long loop0 but with constant overhead.
                 ## TODO (optimization): If path[0] and path[-1] are both in the loop, then this can be optimized,
                 ##  because you don't have to group, but can simply calculate the e1, e2 paths directly.
-                loop0_path = loop0['path']
+                loop0_path = tuple(loop0['path'])
                 # When stacking backbone-connected duplex-ends, we form (self-)loops with a single node and no edge.
                 # Do not consider these for optimization.
                 if len(loop0_path) < 2:
                     continue
+                # TODO: Remove loop_hash assertion:
                 loop0_path_spec = cmplx.calculate_loop_path_spec(loop0_path)
                 loop0_hash = cmplx.calculate_loop_hash(loop0_path_spec)
                 assert loop0['loop_hash'] == loop0_hash  # TODO: Remove recalculation check of loop0_hash
-                #loop0_nodes = loop0['ifnodes']
                 loop0_nodes = set(loop0_path)
                 assert len(loop0_nodes) > 1  # If path has more than 1 elems, the set should as well.
                 # Casting group_iter to list: (TODO: Check if that is really needed...)
@@ -1561,6 +1593,7 @@ class GraphManager(object):
                     # New loops Λ₁ and Λ₂ are independent, multiply activity by factor a₁/a₀:
                     # TODO: Account for cases where e3a == [] or e3b == [] or both (e3==0) !
                     a0 = loop0['activity']
+
                     # Find e2:
                     e2_nodes = loop0_nodes - set(e1)
                     e2_or_e1 = [(is_shared, list(group_iter)) for is_shared, group_iter
@@ -1583,7 +1616,7 @@ class GraphManager(object):
                         assert e3a[-1] in self.interface_graph[e2[0]]
                         assert e2[-1] in self.interface_graph[e3b[0]]
                         assert e3b[0] in self.interface_graph[e2[-1]]
-                        loop2_path = e3a + e2 + e3b
+                        new_loop_path = e3a + e2 + e3b
                     else:
                         # Connection between last node of first part of e3 and the last  node of e2,
                         # and between        first node of last part of e3 and the first node of e2:
@@ -1593,10 +1626,10 @@ class GraphManager(object):
                         assert e2[0] in self.interface_graph[e3b[0]]
                         # Need to reverse direction of e3 or e2 before joining them:
                         # e3 is e3b extended by e3a (list performs best by extending at the end)
-                        loop2_path = e3a + e2[::-1] + e3b
-                    print(" - The new loop produced a shorter path for existing loop0 %s, loop2_path = %s" % (
-                        loop0_id, loop2_path))
-                    a2 = self.calculate_loop_activity(loop2_path, simulate_reaction=reaction_type)
+                        new_loop_path = e3a + e2[::-1] + e3b
+                    print(" - The new loop produced a shorter path for existing loop0 %s, new_loop_path = %s" % (
+                        loop0_id, new_loop_path))
+                    a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=reaction_type)
                     if a2 == 0:
                         return 0, None
                     loop_split_factor = a2/a0
@@ -1605,31 +1638,36 @@ class GraphManager(object):
                     ## The 'e1' and 'e2' edges may be different for different loop0s,
                     ## but loop1 should always be the same (PROVIDED THAT THE SHORTEST PATH IS ON loop0)
                     ## Note that this is NOT the always the case below where I'm considering loops on the full ds helix.
-                    # [ifnode.state_fingerprint() for ifnode in loop2_path]
-                    loop2_path_spec = cmplx.calculate_loop_path_spec(loop2_path)
+                    # [ifnode.state_fingerprint() for ifnode in new_loop_path]
+                    new_loop_path_spec = cmplx.calculate_loop_path_spec(new_loop_path)
                     # DEBUG: Test that the path_spec doesn't change if updating ifnode_by_hash index:
                     cmplx.rebuild_ifnode_by_hash_index()
                     cmplx.rebuild_loopid_by_hash_index()
-                    assert loop2_path_spec == cmplx.calculate_loop_path_spec(loop2_path) # TODO: Remove assertion
-                    assert cmplx.calculate_loop_hash(loop2_path_spec) == cmplx.calculate_loop_hash(tuple(loop2_path_spec))
-                    replacement_loop = {
-                        'path': tuple(loop2_path), # Use immutable tuples to prevent mutation bugs.
-                        'path_spec': tuple(loop2_path_spec),
-                        'loop_hash': cmplx.calculate_loop_hash(loop2_path_spec),
+                    assert new_loop_path_spec == cmplx.calculate_loop_path_spec(new_loop_path) # TODO: Remove assertion
+                    assert cmplx.calculate_loop_hash(new_loop_path_spec) == cmplx.calculate_loop_hash(tuple(new_loop_path_spec))
+                    # TODO: Remove index re-calculation and assertions above
+                    loop_update_info = {
+                        'loop_hash': cmplx.calculate_loop_hash(new_loop_path_spec), # Used to identify the loop instance
+                        'path_spec': tuple(new_loop_path_spec), # Is used to re-create the loop path ifnodes
                         'activity': a2,
                         'dS': ln(a2), # in units of R
-                        'loop_change_factor': loop_split_factor, # = a2/a0
-                        'description': "loop_formation_effects updated loop found by breath-first search starting at new loop.",
                         # Values for the original loop (mostly for debugging)
-                        'a0': a0,
-                        'loop0_hash': loop0_hash, # so we can relate this to the original/parent loop.
-                        'old_loop0_id': loop0_id,
+                        'loop_update_debug_info': {
+                            'description': "loop_formation_effects updated loop found by breath-first search starting at new loop.",
+                            'new_path_tuple': tuple(new_loop_path), # Only for debugging; the result is cached and uses between complexes
+                            'loop_change_factor': loop_split_factor, # = a2/a0
+                            'old_activity': a0,
+                            'old_loop_hash': loop0_hash, # so we can relate this to the original/parent loop.
+                            'old_path_spec': loop0_path_spec,
+                            'source_loop_id': loop0_id,
+                        },
                     }
-                    print(" - New info (path, hash, activity) for loop0 %s: %s\n" % (loop0_id, replacement_loop))
-                    assert loop0_id not in changed_loops
-                    changed_loops[loop0_id] = replacement_loop
+                    print(" - New info (path, hash, activity) for loop0 %s: %s\n" % (loop0_id, loop_update_info))
+                    assert loop0_id not in changed_loop_paths
+                    # changed_loops[loop0_id] = loop_update_info
+                    changed_loop_paths[loop0_id] = new_loop_path
                     assert loop0_hash not in changed_loops_by_hash
-                    changed_loops_by_hash[loop0_hash] = replacement_loop
+                    changed_loops_by_hash[loop0_hash] = loop_update_info
                     changed_loops_hash_by_id[loop0_id] = loop0_hash
                     loop_split_factors.append(loop_split_factor)
                     # Add loop0_id to deque so we can check if loop0 has any affected neighboring loops:
@@ -1972,27 +2010,8 @@ class GraphManager(object):
         #     'stacking_side_effects_activities': side_effects_activities,
         #     'stacking_side_effects_factors': side_effects_factors,
         # }
-        ## Make paths using ifnode state fingerprints:
-        ## TODO: loopids should be based on either the path edges or some cyclic hash of the nodes (not tuple nor set).
-        ##       such that loopids are invariant between instances and the same for the same state.
-        ##       ...but then, it would not be easy to have a constant loopid... it would constantly change.
-        ##       OK then, have a loop_spec fingerprint, and map it to loopids as-needed.
-        # changed_loops_specs = {}
-        for loop0_id, replacement_loop in changed_loops.items():
-            # Edit: There should only be one replacement loop in changed_loops {loop_id: {new dict}, ...}
-            # for replacement_loop in replacement_loops:
-            # replacement_loop['path_spec'] = [ifnode.state_fingerprint() for ifnode in replacement_loop['path']]
-            assert 'path_spec' in replacement_loop
-            assert 'loop_hash' in replacement_loop
-            # changed_loops_specs[cmplx.calculate_loop_hash(None, loopid=old_id)] = replacement_loops
-        # changed_loops_specs = {
-        #     cmplx.calculate_loop_hash(None, loopid=old_id): [
-        #         [ifnode.state_fingerprint() for ifnode in new_path] for new_path in changed_loops_paths
-        #     ] for old_id, replacement_loops in changed_loops.items()
-        # }
-        # loop_effects['changed_loops_specs'] = changed_loops_specs  # loop_hash => [list of new loop_path_specs]
 
-        # The activity here is just for possible reactions.
+        # "activity" variable is loop activity for the newly-created loop.
         # How to get the actual path and side-effects when performing the reaction?
         # Return activity *and* loop info with path and side_effects (dict?) - for caching?
         if loop_split_factors:
@@ -2002,7 +2021,7 @@ class GraphManager(object):
 
 
     def find_maybe_shorter_e1_e3_subpaths(self, loop0_nodes, loop1_path, reaction_type):
-        """
+        r"""
         Arguments:
             loop0_nodes: Nodes in a current loop for which we are considering there might be shorter path.
             loop1_path: A recently created or updated loop forming a new shortest path.
