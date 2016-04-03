@@ -915,10 +915,10 @@ class ComponentMgr(GraphManager):
                 # Update individual energy contributions (hybridization, stacking, volume and loops)
                 c_major.hybridization_energies.update(c_minor.hybridization_energies)
                 c_major.stacking_energies.update(c_minor.stacking_energies)
-                c_major.loop_energies.update(c_minor.loop_energies)
+                # c_major.loop_energies.update(c_minor.loop_energies) # Is updated from values in Complex.loops
                 # self.volume_entropy is the entropy of *releasing* a fixed component into the system volume.
                 print("c_major volume entropy before merging:", c_major.volume_entropy)
-                # c_major.energies_dHdS['volume'][1] = -self.volume_entropy * (len(c_major.strands) - 1)
+                # c_major.energy_subtotals['volume'][1] = -self.volume_entropy * (len(c_major.strands) - 1)
                 c_major.volume_entropy += c_minor.volume_entropy  # we add entropy of formation for this reaction later.
                 print("c_major volume entropy  after merging:", c_major.volume_entropy,
                       "(%s strands)" % len(c_major.strands))
@@ -926,7 +926,7 @@ class ComponentMgr(GraphManager):
                 # c_major.volume_energies.update(c_minor.volume_energies)
                 c_minor.hybridization_energies.clear()
                 c_minor.stacking_energies.clear()
-                c_minor.loop_energies.clear()
+                # c_minor.loop_energies.clear()
                 c_minor.volume_entropy = 0
                 ## Re-calculate energy totals: Done elsewhere by invoking Complex.recalculate_complex_energy()
                 ## We just have to make sure that we update the individual energy contributions (e.g. stacking_energies)
@@ -935,10 +935,10 @@ class ComponentMgr(GraphManager):
                 # for cmplx in (c_major, c_minor):
                 #     for contrib_key, entries in cmplx.energy_contributions.items():
                 #         # e.g. contribution = 'hybridization', dHdS_vals = {frozenset((d1, d2)): (dH, dS)}
-                #         cmplx.energies_dHdS[contrib_key] = ([sum(vals) for vals in zip(*entries.values())]
+                #         cmplx.energy_subtotals[contrib_key] = ([sum(vals) for vals in zip(*entries.values())]
                 #                                             if entries else [0., 0.])
-                #     cmplx.energy_total_dHdS = tuple([int(sum(vals)) for vals in zip(*cmplx.energies_dHdS.values())])
-                #     # (dH, dS) tuple to indicate immutable - should always be re-calculated from cmplx.energies_dHdS
+                #     cmplx.energy_total_dHdS = tuple([int(sum(vals)) for vals in zip(*cmplx.energy_subtotals.values())])
+                #     # (dH, dS) tuple to indicate immutable - should always be re-calculated from cmplx.energy_subtotals
                 # assert sum(c_minor.energy_total_dHdS) == 0
 
                 # Complex.add_strands takes care of updating counters:
@@ -1210,8 +1210,16 @@ class ComponentMgr(GraphManager):
             ## c.remove_strands should have taken care of removing energy contributions from c
             c_new.hybridization_energies.update(removed_hybridization_energy)
             c_new.stacking_energies.update(removed_stacking_energy)
-            c_new.loop_energies.update(removed_loop_energy)
+            # c_new.loop_energies.update(removed_loop_energy)  # is updated based on Complex.loops
+            # Uh, this won't work.. or maybe it will, keys are globally-unique.
+            # As long as you reset all indexes..
             c_new.loops.update(removed_loops)
+            # TODO: Determine how and where to do this:
+            c_new.ifnode_by_hash = None
+            c_new.loopid_by_hash = None
+            c_new.ifnode_loopids_index = None
+            # c_new.reset_and_recalculate()  # This is probably not a good idea; we want tight control with state reset
+            # c.reset_and_recalculate()
 
             ## Re-calculate energy totals: Done elsewhere by invoking Complex.recalculate_complex_energy()
             ## We just have to make sure that we update the individual energy contributions (e.g. stacking_energies)
@@ -1522,141 +1530,142 @@ class ComponentMgr(GraphManager):
 
 
 
-    def get_reaction_energy_contribs(self, reacted_pair, reaction_attr, reaction_spec_pair, reaction_result):
-        """
-        Calculate reaction energy.
-        Return:
-            dH, dS, dHdS_contribs
-        Where dH, dS are total enthalpy and entropy and
-            dHdS_contribs = {'hybridization': [dH_hyb, dS_hyb], 'stacking': [...], 'shape': ..., 'volume': ...}
-        """
-        if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-            domain1, domain2 = tuple(reacted_pair)
-        elif reaction_attr.reaction_type is STACKING_INTERACTION:
-            (h1end3p, h2end5p), (h2end3p, h1end5p) = elem1, elem2 = tuple(reacted_pair)
-        elif reaction_attr.reaction_type is PHOSPHATEBACKBONE_INTERACTION:
-            h1end3p, h1end5p = tuple(reacted_pair)
-
-        dH, dS = 0, 0  # Total reaction enthalpy and entropy
-        dHdS_contribs = {'hybridization': [0., 0.],
-                         'stacking': [0., 0.],
-                         'shape': [0., 0.],
-                         'volume': [0., 0.],
-                        }
-        # In theory we could get reaction energy using reaction_spec_pair (source state) and
-        # edge_key = (reacted_spec_pair, reaction_attr).
-        # dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume = None, None, None, None, None, None # Starting values
-        if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-            #dH, dS = self.domain_dHdS[(domain1, domain2)]
-            dH_hyb, dS_hyb = self.dHdS_from_state_cache(domain1, domain2, state_spec_pair=reaction_spec_pair)
-            # The dHdS in the cache are energy/entropy of FORMATION. Negate values if we are dehybridizing:
-            if not reaction_attr.is_forming:
-                dH_hyb, dS_hyb = -dH_hyb, -dS_hyb
-            dH += dH_hyb
-            dS += dS_hyb
-            dHdS_contribs['hybridization'] = [dH_hyb, dS_hyb]
-        elif reaction_attr.reaction_type is STACKING_INTERACTION:
-            # h1end3p.stack_string is only set when the DomainEnd is actually stacked.
-            stack_string = "%s%s/%s%s" % (h1end3p.base, h1end5p.base, h2end5p.base, h2end3p.base)
-            if stack_string not in DNA_NN4_R:
-                stack_string = stack_string[::-1]
-            dH_stack, dS_stack = DNA_NN4_R[stack_string]
-            if not reaction_attr.is_forming:
-                dH_stack, dS_stack = -dH_stack, -dS_stack
-            dH += dH_stack
-            dS += dS_stack
-            dHdS_contribs['hybridization'] = [dH_stack, dS_stack]
-        else:
-            raise NotImplementedError("Only HYBRIDIZATION and STACKING interactions implemented ATM.")
-        # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
-        # use result['case'] to determine if the volume energy of the complex is changed.
-        # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
-        # has been called. Also: Is this really state dependent? Can't we just let de-hybridization and unstacking
-        # be independent of complex state?
-        #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
-        if reaction_attr.is_forming:
-            # Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
-            # Case 2/3/4: IntER-complex hybridization between two complexes/strands.
-            if reaction_result['case'] <= 1:
-                # IntRA-complex reaction
-                assert reaction_attr.is_intra
-                activity = self.cache['intracomplex_activity'][reaction_spec_pair]
-                if activity == 0:
-                    print(("\n\nActivity %s for %s reaction between %s and %s is <= 0; "
-                           "shape/loop energy is infinite; reaction should revert.\n\n") %
-                          (activity, reaction_attr.reaction_type, elem1, elem2))
-                    dS_shape = 100000
-                else:
-                    ## Activity is in implicit unit of Molar, so loop entropy is just -R*ln(activity)
-                    ## However, the "-R*ln(activity)" change in entropy is when releasing the loop.
-                    ## When we are forming the loop, the entropy is reduced; activity is << 1, so ln(activity) < 0.
-                    dS_shape = ln(activity)
-                dS += dS_shape
-                dHdS_contribs['shape'][0] += dS_shape
-            else:
-                # IntER-strand/complex reaction; Two strands/complexes coming together.
-                assert reaction_attr.is_intra is False
-                # dS_volume = ln(self.specific_bimolecular_activity) # Multiply by -R*T to get dG.
-                # self.volume_entropy is the (positive) increase in entropy (in units of R) when a
-                # volume restriction is lifted. Here it's negative because the restriction is formed.
-                activity = self.specific_bimolecular_activity
-                dS_volume = -self.volume_entropy  # Minus because we are forming; Multiply by -R*T to get dG.
-                dS += dS_volume
-                dHdS_contribs['volume'][0] += dS_volume
-        else:
-            ## Dehybridize/unstack reaction: (is always "intra-molecular" with activity=1)
-            assert reaction_attr.is_intra is True
-            activity = 1  # Used for edge attrs
-
-            ## TODO: Re-work this so that dS_shape is calculated using complex shape entropy difference:
-            ##          dS_shape = S_shape_before - S_shape_after
-            ##       (state entropies rather than reaction activity...)
-            ## Note: This is only really needed for annotating reaction graph edges.
-
-            if reaction_result['case'] <= 1:
-                # We still have just a single complex:
-                # How to get the gained loop entropy?
-                # Using self.cache['intracomplex_activity'] won't work
-                #   activity = self.cache['intracomplex_activity'][reacted_spec_pair]
-                # as activities are for formation reactions.
-                # The reaction (the reacted_spec_pair) we are processing is for breaking a loop,
-                # and thus a uni-molecular reaction.
-                # But we want to find the activity for the opposite reaction, so we can subtract the energies.
-                # We could try to find the activity in the reaction graph, assuming the opposite
-                # "forming" reaction has already occurred, but there is no guarantee of that.
-                # Instead, we can simply use
-                if reaction_attr.reaction_type is STACKING_INTERACTION:
-                    reverse_reaction_spec_pair = frozenset(
-                        ((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
-                         (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
-                else:
-                    assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
-                    reverse_reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
-                reverse_activity = self.intracomplex_activity(elem1, elem2, reaction_attr.reaction_type,
-                                                              reverse_reaction_spec_pair)
-                # This should work just fine, since we have just asserted state fingerprint change,
-                # and so it should be OK to re-calculate the activity.
-                # We are going to be calculating the activity when we update possible reactions,
-                # so might as well do it here.
-                # Note that one side-effect of invoking intracomplex_activity here is that the domain's
-                # fingerprint will have been calculated, and so the check in update_possible_hybridization_reactions
-                # that the domain's fingerprint has actually changed will not work.
-
-                if reverse_activity <= 0:
-                    print(("\n\nActivity for %s reaction between %s and %s is <= 0, reaction_attr %s"
-                           "shape/loop energy is infinite; reaction should revert.\n\n") %
-                          (reverse_activity, elem1, elem2, reaction_attr))
-                    dS_shape = 1000
-                else:
-                    # The loop restriction is lifted, so shape entropy should increase.
-                    # activity is << 1, so -ln(activity) (with the minus) is positive.
-                    dS_shape = -ln(reverse_activity)
-                dS += dS_shape
-                dHdS_contribs['shape'][0] += dS_shape
-            else:
-                # Case > 1: complex is broken up into two complexes/molecules.
-                # Increase in entropy (in units of R) when a volume restriction is lifted.
-                dS_volume = self.volume_entropy  # Multiply by -R*T to get dG.
-                dS += dS_volume
-                dHdS_contribs['volume'][0] += dS_volume
-        assert (dS_shape is None) != (dS_volume is None)
+    ## OLD, OBSOLETE:
+    # def get_reaction_energy_contribs(self, reacted_pair, reaction_attr, reaction_spec_pair, reaction_result):
+    #     """
+    #     Calculate reaction energy.
+    #     Return:
+    #         dH, dS, dHdS_contribs
+    #     Where dH, dS are total enthalpy and entropy and
+    #         dHdS_contribs = {'hybridization': [dH_hyb, dS_hyb], 'stacking': [...], 'shape': ..., 'volume': ...}
+    #     """
+    #     if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+    #         domain1, domain2 = tuple(reacted_pair)
+    #     elif reaction_attr.reaction_type is STACKING_INTERACTION:
+    #         (h1end3p, h2end5p), (h2end3p, h1end5p) = elem1, elem2 = tuple(reacted_pair)
+    #     elif reaction_attr.reaction_type is PHOSPHATEBACKBONE_INTERACTION:
+    #         h1end3p, h1end5p = tuple(reacted_pair)
+    #
+    #     dH, dS = 0, 0  # Total reaction enthalpy and entropy
+    #     dHdS_contribs = {'hybridization': [0., 0.],
+    #                      'stacking': [0., 0.],
+    #                      'shape': [0., 0.],
+    #                      'volume': [0., 0.],
+    #                     }
+    #     # In theory we could get reaction energy using reaction_spec_pair (source state) and
+    #     # edge_key = (reacted_spec_pair, reaction_attr).
+    #     # dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume = None, None, None, None, None, None # Starting values
+    #     if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+    #         #dH, dS = self.domain_dHdS[(domain1, domain2)]
+    #         dH_hyb, dS_hyb = self.dHdS_from_state_cache(domain1, domain2, state_spec_pair=reaction_spec_pair)
+    #         # The dHdS in the cache are energy/entropy of FORMATION. Negate values if we are dehybridizing:
+    #         if not reaction_attr.is_forming:
+    #             dH_hyb, dS_hyb = -dH_hyb, -dS_hyb
+    #         dH += dH_hyb
+    #         dS += dS_hyb
+    #         dHdS_contribs['hybridization'] = [dH_hyb, dS_hyb]
+    #     elif reaction_attr.reaction_type is STACKING_INTERACTION:
+    #         # h1end3p.stack_string is only set when the DomainEnd is actually stacked.
+    #         stack_string = "%s%s/%s%s" % (h1end3p.base, h1end5p.base, h2end5p.base, h2end3p.base)
+    #         if stack_string not in DNA_NN4_R:
+    #             stack_string = stack_string[::-1]
+    #         dH_stack, dS_stack = DNA_NN4_R[stack_string]
+    #         if not reaction_attr.is_forming:
+    #             dH_stack, dS_stack = -dH_stack, -dS_stack
+    #         dH += dH_stack
+    #         dS += dS_stack
+    #         dHdS_contribs['hybridization'] = [dH_stack, dS_stack]
+    #     else:
+    #         raise NotImplementedError("Only HYBRIDIZATION and STACKING interactions implemented ATM.")
+    #     # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
+    #     # use result['case'] to determine if the volume energy of the complex is changed.
+    #     # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
+    #     # has been called. Also: Is this really state dependent? Can't we just let de-hybridization and unstacking
+    #     # be independent of complex state?
+    #     #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
+    #     if reaction_attr.is_forming:
+    #         # Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
+    #         # Case 2/3/4: IntER-complex hybridization between two complexes/strands.
+    #         if reaction_result['case'] <= 1:
+    #             # IntRA-complex reaction
+    #             assert reaction_attr.is_intra
+    #             activity = self.cache['intracomplex_activity'][reaction_spec_pair]
+    #             if activity == 0:
+    #                 print(("\n\nActivity %s for %s reaction between %s and %s is <= 0; "
+    #                        "shape/loop energy is infinite; reaction should revert.\n\n") %
+    #                       (activity, reaction_attr.reaction_type, elem1, elem2))
+    #                 dS_shape = 100000
+    #             else:
+    #                 ## Activity is in implicit unit of Molar, so loop entropy is just -R*ln(activity)
+    #                 ## However, the "-R*ln(activity)" change in entropy is when releasing the loop.
+    #                 ## When we are forming the loop, the entropy is reduced; activity is << 1, so ln(activity) < 0.
+    #                 dS_shape = ln(activity)
+    #             dS += dS_shape
+    #             dHdS_contribs['shape'][0] += dS_shape
+    #         else:
+    #             # IntER-strand/complex reaction; Two strands/complexes coming together.
+    #             assert reaction_attr.is_intra is False
+    #             # dS_volume = ln(self.specific_bimolecular_activity) # Multiply by -R*T to get dG.
+    #             # self.volume_entropy is the (positive) increase in entropy (in units of R) when a
+    #             # volume restriction is lifted. Here it's negative because the restriction is formed.
+    #             activity = self.specific_bimolecular_activity
+    #             dS_volume = -self.volume_entropy  # Minus because we are forming; Multiply by -R*T to get dG.
+    #             dS += dS_volume
+    #             dHdS_contribs['volume'][0] += dS_volume
+    #     else:
+    #         ## Dehybridize/unstack reaction: (is always "intra-molecular" with activity=1)
+    #         assert reaction_attr.is_intra is True
+    #         activity = 1  # Used for edge attrs
+    #
+    #         ## TODO: Re-work this so that dS_shape is calculated using complex shape entropy difference:
+    #         ##          dS_shape = S_shape_before - S_shape_after
+    #         ##       (state entropies rather than reaction activity...)
+    #         ## Note: This is only really needed for annotating reaction graph edges.
+    #
+    #         if reaction_result['case'] <= 1:
+    #             # We still have just a single complex:
+    #             # How to get the gained loop entropy?
+    #             # Using self.cache['intracomplex_activity'] won't work
+    #             #   activity = self.cache['intracomplex_activity'][reacted_spec_pair]
+    #             # as activities are for formation reactions.
+    #             # The reaction (the reacted_spec_pair) we are processing is for breaking a loop,
+    #             # and thus a uni-molecular reaction.
+    #             # But we want to find the activity for the opposite reaction, so we can subtract the energies.
+    #             # We could try to find the activity in the reaction graph, assuming the opposite
+    #             # "forming" reaction has already occurred, but there is no guarantee of that.
+    #             # Instead, we can simply use
+    #             if reaction_attr.reaction_type is STACKING_INTERACTION:
+    #                 reverse_reaction_spec_pair = frozenset(
+    #                     ((elem1[0].state_fingerprint(), elem1[1].state_fingerprint()),
+    #                      (elem2[0].state_fingerprint(), elem2[1].state_fingerprint())))
+    #             else:
+    #                 assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
+    #                 reverse_reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
+    #             reverse_activity = self.intracomplex_activity(elem1, elem2, reaction_attr.reaction_type,
+    #                                                           reverse_reaction_spec_pair)
+    #             # This should work just fine, since we have just asserted state fingerprint change,
+    #             # and so it should be OK to re-calculate the activity.
+    #             # We are going to be calculating the activity when we update possible reactions,
+    #             # so might as well do it here.
+    #             # Note that one side-effect of invoking intracomplex_activity here is that the domain's
+    #             # fingerprint will have been calculated, and so the check in update_possible_hybridization_reactions
+    #             # that the domain's fingerprint has actually changed will not work.
+    #
+    #             if reverse_activity <= 0:
+    #                 print(("\n\nActivity for %s reaction between %s and %s is <= 0, reaction_attr %s"
+    #                        "shape/loop energy is infinite; reaction should revert.\n\n") %
+    #                       (reverse_activity, elem1, elem2, reaction_attr))
+    #                 dS_shape = 1000
+    #             else:
+    #                 # The loop restriction is lifted, so shape entropy should increase.
+    #                 # activity is << 1, so -ln(activity) (with the minus) is positive.
+    #                 dS_shape = -ln(reverse_activity)
+    #             dS += dS_shape
+    #             dHdS_contribs['shape'][0] += dS_shape
+    #         else:
+    #             # Case > 1: complex is broken up into two complexes/molecules.
+    #             # Increase in entropy (in units of R) when a volume restriction is lifted.
+    #             dS_volume = self.volume_entropy  # Multiply by -R*T to get dG.
+    #             dS += dS_volume
+    #             dHdS_contribs['volume'][0] += dS_volume
+    #     assert (dS_shape is None) != (dS_volume is None)

@@ -82,6 +82,7 @@ from .constants import R, N_AVOGADRO # N_AVOGADRO in /mol, R universal Gas const
 from .constants import PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION
 from .constants import REACTION_NAMES
 from .constants import ReactionAttrs, RA_HYB_INTRA, RA_HYB_INTER, RA_DEHYB_INTRA
+from .constants import I_DH, I_DS, I_HYBRIDIZATION, I_STACKING, I_LOOP, I_VOLUME
 # from .complex import Complex
 from .componentmgr import ComponentMgr
 from .nx_utils import draw_graph_and_save, layout_graph, draw_with_graphviz
@@ -2014,32 +2015,33 @@ class ReactionMgr(ComponentMgr):
         ## and then use reaction dH, dS to check the *change* in complex energy (before vs after).
 
         ### 2a: Calculate reaction energy dH, dS totals:
-        dH, dS = 0, 0  # Total reaction enthalpy and entropy
-        dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume = None, None, None, None, None, None # Starting values
-        dHdS_contribs = {'hybridization': [0., 0.],
-                         'stacking': [0., 0.],
-                         'shape': [0., 0.],
-                         'volume': [0., 0.],
-                        }
+        # Note: The energies here are for the "system total". We check them by
+        # summing over all complexes. This can thus not be done on a per-complex basis.
+        # dHdS = np.array((0., 0.))  # Total reaction enthalpy and entropy
+        # dHdS_hyb, dHdS_stack, dHdS_shape, dHdS_volume = None, None, None, None
+        # dH_hyb, dS_hyb, dH_stack, dS_stack, = None, None, None, None # Starting values
+        dS_loop, dS_volume = None, None
+
+        # dHdS_changes = {'hybridization': [0., 0.], 'stacking': [0., 0.], 'loop': [0., 0.], 'volume': [0., 0.]}
+        reaction_dHdS_changes = np.zeros((4, 2), dtype=float)  # 4 types of dH, dS
+        # sum with: dHdS_reaction_total = dHdS_changes.sum(axis=1)
         if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
             dH_hyb, dS_hyb = self.dHdS_from_state_cache(domain1, domain2, state_spec_pair=reacted_spec_pair)
             # The dHdS in the cache are energy/entropy of FORMATION. Negate values if we are dehybridizing:
             if not reaction_attr.is_forming:
                 dH_hyb, dS_hyb = -dH_hyb, -dS_hyb
-            dH += dH_hyb
-            dS += dS_hyb
-            dHdS_contribs['hybridization'] = [dH_hyb, dS_hyb]
+            # dHdS_changes['hybridization'] = [dH_hyb, dS_hyb]
+            reaction_dHdS_changes[I_HYBRIDIZATION, :] = [dH_hyb, dS_hyb]
+
         elif reaction_attr.reaction_type is STACKING_INTERACTION:
             # h1end3p.stack_string is only set when the DomainEnd is actually stacked.
             stack_string = "%s%s/%s%s" % (h1end3p.base, h1end5p.base, h2end5p.base, h2end3p.base)
-            if stack_string not in DNA_NN4_R:
-                stack_string = stack_string[::-1]
+            # if stack_string not in DNA_NN4_R:
+            #     stack_string = stack_string[::-1]
             dH_stack, dS_stack = DNA_NN4_R[stack_string]
             if not reaction_attr.is_forming:
                 dH_stack, dS_stack = -dH_stack, -dS_stack
-            dH += dH_stack
-            dS += dS_stack
-            dHdS_contribs['stacking'] = [dH_stack, dS_stack]
+            reaction_dHdS_changes[I_STACKING, :] = [dH_stack, dS_stack]
         else:
             raise NotImplementedError("Only HYBRIDIZATION and STACKING interactions implemented ATM.")
         # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
@@ -2049,34 +2051,34 @@ class ReactionMgr(ComponentMgr):
         # be independent of complex state?
         #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
         if reaction_attr.is_forming:
-            # Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
-            # Case 2/3/4: IntER-complex hybridization between two complexes/strands.
+            # Case 0/1: IntRA-STRAND/COMPLEX hybridization.
+            # Case 2:   IntER-complex hybridization between two complexes
+            # Case 3:   Hybridization between a complex and a free strand.
+            # Case 4:   Hybridization between two free strands.
             if reaction_result['case'] <= 1:
                 # IntRA-complex reaction
                 assert reaction_attr.is_intra
-                cmplx = reaction_result['changed_complexes'][0]
+                # cmplx = reaction_result['changed_complexes'][0]
                 activity = self.cache['intracomplex_activity'][cmplx_loop_effects_cache_key]
                 if activity == 0:
                     print(("\n\nActivity %s for %s reaction between %s and %s is <= 0; "
                            "shape/loop energy is infinite; reaction should revert.\n\n") %
                           (activity, reaction_attr.reaction_type, elem1, elem2))
-                    dS_shape = 100000
+                    dS_loop = 100000
                 else:
                     ## Activity is in implicit unit of Molar, so loop entropy is just -R*ln(activity)
                     ## However, the "-R*ln(activity)" change in entropy is when releasing the loop.
                     ## When we are forming the loop, the entropy is reduced; activity is << 1, so ln(activity) < 0.
-                    dS_shape = ln(activity)
-                dS += dS_shape
-                dHdS_contribs['shape'][0] += dS_shape
+                    dS_loop = ln(activity)
+                reaction_dHdS_changes[I_LOOP, I_DS] = dS_loop
             else:
-                # IntER-strand/complex reaction; Two strands/complexes coming together.
+                # IntER-strand/complex reaction; Two strands or a strand+complexes coming together.
                 assert reaction_attr.is_intra is False
                 # self.volume_entropy is the (positive) increase in entropy (in units of R) when a
                 # volume restriction is lifted. Here it's negative because the restriction is formed.
                 activity = self.specific_bimolecular_activity # set activity for later use
                 dS_volume = -self.volume_entropy  # Minus because we are forming; Multiply by -R*T to get dG.
-                dS += dS_volume
-                dHdS_contribs['volume'][0] += dS_volume
+                reaction_dHdS_changes[I_VOLUME, I_DS] = dS_volume
         else:
             ## Dehybridize/unstack reaction: (is always "intra-molecular" with activity=1)
             assert reaction_attr.is_intra is True
@@ -2102,20 +2104,18 @@ class ReactionMgr(ComponentMgr):
                     print(("\n\nActivity for %s reaction between %s and %s is <= 0, reaction_attr %s"
                            "shape/loop energy is infinite; reaction should revert.\n\n") %
                           (reverse_activity, elem1, elem2, reaction_attr))
-                    dS_shape = 1000
+                    dS_loop = 100000
                 else:
                     # The loop restriction is lifted, so shape entropy should increase.
                     # activity is << 1, so -ln(activity) (with the minus) is positive.
-                    dS_shape = -ln(reverse_activity)
-                dS += dS_shape
-                dHdS_contribs['shape'][0] += dS_shape
+                    dS_loop = -ln(reverse_activity)
+                reaction_dHdS_changes[I_LOOP, I_DS] = dS_loop
             else:
                 # Case > 1: complex is broken up into two complexes/molecules.
                 # Increase in entropy (in units of R) when a volume restriction is lifted.
                 dS_volume = self.volume_entropy  # Multiply by -R*T to get dG.
-                dS += dS_volume
-                dHdS_contribs['volume'][0] += dS_volume
-        assert (dS_shape is None) != (dS_volume is None)
+                reaction_dHdS_changes[I_VOLUME, I_DS] = dS_volume
+        assert (dS_loop is None) != (dS_volume is None) # We cannot have both loop and volume changes (system total).
 
         ### 2b. Check energies for new/changed complexes:
         # (I've temporarily separated this from the "update reaction graph for all new/changed complexes" to
@@ -2123,6 +2123,8 @@ class ReactionMgr(ComponentMgr):
         ## TODO/EDIT: Complex energy should be updated by ComponentMgr; you just need to verify that:
         ##      dH, dS = sum(all complexes' dHdS after reaction) - sum(all complexes' dHdS before reaction)
         ## and optionally also for individual contributions (hyb, stack, shape, volume)..
+        cmplx_subtotals_before = np.zeros((4, 2), dtype=float) # always use np.zeros unless you explicitly initialize yourself.
+        cmplx_subtotals_after = np.zeros((4, 2), dtype=float)
         for cmplx in new_or_changed_complexes:
             ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
             ## TODO: ^^ Perhaps just move energy updates to componentmgr.hybridize (etc) ?
@@ -2130,9 +2132,18 @@ class ReactionMgr(ComponentMgr):
             # cmplx.update_complex_energy(dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume,
             #                             reaction_attr=reaction_attr, reacted_pair=reacted_pair)
             # EDIT: Complex energies are updated by ComponentMgr when the reaction is done.
-            cmplx.recalculate_complex_energy(self.volume_entropy, dS_shape)
-            cmplx.check_complex(self.volume_entropy)
-            assert cmplx._state_fingerprint == cmplx._historic_fingerprints[-1]
+            print("\n%s energy_subtotals before vs after:" % cmplx)
+            print(cmplx.energy_subtotals)
+            cmplx_subtotals_before += cmplx.energy_subtotals
+            cmplx.recalculate_complex_energy(self.volume_entropy)
+            cmplx_subtotals_after += cmplx.energy_subtotals
+            print(cmplx.energy_subtotals)
+            # pdb.set_trace()
+            # cmplx.assert_complex_energy_change(self.volume_entropy, total=(dH, dS), **dHdS_changes)
+
+            # Checks
+            # cmplx.check_complex(self.volume_entropy)  # Currently commented out
+            assert cmplx._state_fingerprint == cmplx._historic_fingerprints[-1] # (before update..)
             assert cmplx._historic_fingerprints[-1] in asserted_target_states
             ## Make sure that cmplx.assert_state_change has been invoked before using _historic_fingerprints:
             #source, target = cmplx._historic_fingerprints[-2], cmplx._historic_fingerprints[-1]
@@ -2140,89 +2151,25 @@ class ReactionMgr(ComponentMgr):
             # If we are e.g. merging two complexes, then source_state will match src_state of the last complex
             # in changed_complexes.
 
-            # 2c: Check if complex energy matches the expected complex energy and correct if not.
-            ## TODO: Disabled; fix and re-enable
-            if cmplx._state_fingerprint in self.reaction_graph.node:
-                state_node = self.reaction_graph.node[cmplx._state_fingerprint]
-                expected_dHdS = state_node['dHdS']
-                expected_dHdS_contributions = state_node['dHdS_contributions']
-                actual_dHdS = cmplx.energy_total_dHdS
-                # if actual_dHdS != expected_dHdS:
-                if not all(np.isclose(actual_dHdS, expected_dHdS)):
-                    print("Complex %s (%s) energy %s does not equal expected energy %s from reaction_graph" %
-                          (cmplx, cmplx._state_fingerprint, actual_dHdS, expected_dHdS))
-                    print("Contributions:")
-                    print(" - Expected: %s" % expected_dHdS_contributions)
-                    print(" - Current : %s" % cmplx.energies_dHdS)
-                    print(" - Current energy contributions: %s" % cmplx.energy_contributions)
-                    # Find recent reaction cycle (reaction graph cycle):
-                    # if cmplx._state_fingerprint in cmplx._historic_fingerprints[::-1]:
-                    # Note: list.index(elem) is slower than "elem in list", but worth it if elem is likely in list.
-                    try:
-                        # n_reactions_since_last_state_encounter = right index:
-                        ridx = cmplx._historic_fingerprints[-2::-1].index(
-                            cmplx._state_fingerprint) + 1
-                    except ValueError:
-                        # Complex has not previously been in this state..
-                        pass
-                    else:
-                        # reaction, source, target:
-                        reactions_and_states = zip_longest(
-                            list(cmplx.reaction_deque)[-2:-ridx-1:-1],
-                            cmplx._historic_fingerprints[-3:-ridx-2:-1],
-                            cmplx._historic_fingerprints[-2:-ridx-1:-1])
-                        reactions_and_states = list(reactions_and_states)[::-1]
-                        # Note: cmplx._historic_fingerprints[0] == 0 is not in reaction graph!
-                        # Also, no edge between cmplx._historic_fingerprints[-2] and cmplx._historic_fingerprints[-1]
-                        # in reaction_graph yet!
-                        print("Reactions since we were last in this state (not including this reaction):")
-                        print("\n".join(
-                            " %s %s -(%s %s)-> %s %s" % (
-                                source, self.reaction_graph.node[source]['dHdS'],
-                                self.reaction_graph.adj[source][target]['reaction_str'],
-                                (self.reaction_graph.adj[source][target]['dH'], self.reaction_graph.adj[source][target]['dS']),
-                                target, self.reaction_graph.node[target].get('dHdS'))
-                            for reaction, source, target in reactions_and_states))
-                        # Find simple cycle (no repeated nodes or edges):
-                        state_idx = {} # state: idx
-                        simple_reaction_cycle = [] # No repeated nodes or edges
-                        for reaction, state, endstate in reactions_and_states:
-                            if endstate in state_idx:
-                                # We've previously been here, revert to simple_reaction_cycle
-                                # as it was when we were here last.
-                                simple_reaction_cycle = simple_reaction_cycle[:state_idx[endstate]+1]
-                                # print(simple_reaction_cycle)
-                            else:
-                                simple_reaction_cycle.append((reaction, state, endstate))
-                                state_idx[endstate] = len(simple_reaction_cycle) - 1
-                                # print(simple_reaction_cycle)
-                        reaction, source, target = simple_reaction_cycle[0]
-                        src_attrs = self.reaction_graph.node[source]
-                        print("\nSimple reaction cycle (no edge traversed more than once):")
-                        print("%s %s" % (source, src_attrs['dHdS']))
-                        for reaction, source, target in simple_reaction_cycle:
-                            src_attrs = self.reaction_graph.node[source] if source is not None else {}
-                            tgt_attrs = self.reaction_graph.node[target] if target is not None else {}
-                            edge_attrs = (self.reaction_graph.adj[source][target]
-                                          if source is not None and target is not None else
-                                          {'reaction_str': "(no edge attrs)", 'dH': '?', 'dS': '?'})
-                            # TODO: Rename dHdS for states to HS to make it easier to distinguish
-                            # reaction energies from complex state energies.
-                            print("  -(%s, %0.02f %0.05f)-> %s %s" % (
-                                edge_attrs['reaction_str'], edge_attrs['dH'], edge_attrs['dS'],
-                                target, tgt_attrs.get('dHdS')))
-                    # Done printing reaction cycle info...
-                    # pdb.set_trace()
-                    # print("Resetting complex %s@%s energy to %s." % (cmplx, cmplx._state_fingerprint, expected_dHdS))
-                    # Edit: No reason to re-set complex energy, it is always calculated by summning the individual
-                    # energy contributions (domain hybridization, stacking, loop formation and strand volume entropy).
-                    # cmplx.energies_dHdS = expected_dHdS_contributions
-                    # cmplx.energy_total_dHdS = expected_dHdS
-                # end if actual_dHdS != expected_dHdS
-            # end if cmplx._state_fingerprint in self.reaction_graph.node
+        if reaction_result['obsolete_complexes']:
+            for cmplx in reaction_result['obsolete_complexes']:
+                # Should be empty; released strands are available in 'free_strands'.
+                assert len(cmplx.strands) == 0
+                # self.state_counter is updated using asserted_target_states_list and reaction_spec_source_states_list
+            cmplx_subtotals_before += cmplx.energy_subtotals
+            cmplx.recalculate_complex_energy(self.volume_entropy)
+            cmplx_subtotals_after += cmplx.energy_subtotals
+
+        cmplx_subtotals_diff = cmplx_subtotals_after-cmplx_subtotals_before
+        reaction_dHdS = reaction_dHdS_changes.sum(axis=0)
+        print("cmplx_subtotals_after, cmplx_subtotals_before, cmplx_subtotals_diff, reaction_dHdS_changes:")
+        print(cmplx_subtotals_after, cmplx_subtotals_before, cmplx_subtotals_diff, reaction_dHdS_changes, sep="\n")
+        assert np.all(np.isclose(cmplx_subtotals_diff, reaction_dHdS_changes))
+        assert np.all(np.isclose(cmplx_subtotals_diff.sum(axis=0), reaction_dHdS))
+
         # end for cmplx in new_or_changed_complexes
 
-
+        dH, dS = dHdS = tuple(reaction_dHdS)
 
 
 
@@ -2303,10 +2250,11 @@ class ReactionMgr(ComponentMgr):
                 assert count == 1
                 self.reaction_graph.add_node(
                     target_state,
-                    dHdS=tuple(cmplx.energy_total_dHdS), # total complex enthalpy and entropy.
-                    dHdS_contributions={k: tuple(v) for k, v in cmplx.energies_dHdS.items()},
-                    # cmplx.energies_dHdS dict with hyb, stack, loops and volume energy sub-totals
-                    # Note: cmplx.energies_dHdS have list elements, so a deeper copy is required.
+                    dHdS=tuple(cmplx.energy_total_dHdS.round(1)), # total complex enthalpy and entropy.
+                    # dHdS_contributions={k: tuple(v) for k, v in cmplx.energy_subtotals.items()},
+                    dHdS_contributions=cmplx.energy_subtotals.round(1).tolist(),
+                    # cmplx.energy_subtotals dict with hyb, stack, loops and volume energy sub-totals
+                    # Note: cmplx.energy_subtotals have list elements, so a deeper copy is required.
                     dG_std=dG_std,
                     n_strands=n_strands,
                     size=sqrt(n_strands),
@@ -2334,7 +2282,7 @@ class ReactionMgr(ComponentMgr):
                 encounters = self.reaction_graph.node[target_state].get('encounters', 1)
                 self.reaction_graph.change_node(
                     target_state,
-                    dHdS=tuple(cmplx.energy_total_dHdS),
+                    dHdS=tuple(cmplx.energy_total_dHdS.round(1)),
                     encounters=encounters,
                     count=count,
                     loop_ensemble_fingerprint=loop_ensemble_fingerprint
@@ -2354,11 +2302,6 @@ class ReactionMgr(ComponentMgr):
                 assert target_state in self.endstates_by_reaction[source_state][edge_key]
         # end for cmplx in changed_complexes:
 
-        if reaction_result['obsolete_complexes']:
-            for cmplx in reaction_result['obsolete_complexes']:
-                # Should be empty; released strands are available in 'free_strands'.
-                assert len(cmplx.strands) == 0
-                # self.state_counter is updated using asserted_target_states_list and reaction_spec_source_states_list
 
 
         ### 3b. For all freed strands: Update reaction graph: ###

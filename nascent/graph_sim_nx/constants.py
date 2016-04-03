@@ -28,6 +28,11 @@ from math import pi
 from collections import namedtuple
 
 
+# Named energy indices (so I can use numpy arrays instead of dicts), e.g. contributions[I_HYBRIDIZATION][dH]
+I_HYBRIDIZATION, I_STACKING, I_LOOP, I_VOLUME = tuple(range(4))
+I_DH, I_DS = 0, 1
+
+
 PHOSPHATEBACKBONE_INTERACTION = 'b'     # 1, b, pb, p, backbone,
 HYBRIDIZATION_INTERACTION = 'h'         # 2, h, hh, hyb, hybridization, hybridized
 STACKING_INTERACTION = 's'              # 3, s, ss, bs, stacked, stacking, basestacking

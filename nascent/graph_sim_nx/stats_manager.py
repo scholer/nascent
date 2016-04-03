@@ -36,6 +36,8 @@ from collections import Counter, defaultdict
 from itertools import chain
 import yaml
 import networkx as nx
+from .constants import I_DH, I_DS, I_HYBRIDIZATION, I_STACKING, I_LOOP, I_VOLUME
+
 try:
     import msgpack
 except ImportError as e:
@@ -384,7 +386,7 @@ class StatsWriter():
 
         Will, for each complex, write a line with:
             <complex uuid>, system_time, N_strands, N_hybridized_domains, N_stacked_domains,
-                and all fields from complex.energies_dHdS
+                and all fields from complex.energy_subtotals
         This should be easy. The tricky part is parsing the result...
         You will have to create a table *for each complex* before you start calculating the duration
         of each complex state.
@@ -413,10 +415,10 @@ class StatsWriter():
                 "%s" % len(cmplx.strands), "%s" % len(list(cmplx.domains())),
                 "%s" % len(cmplx.hybridized_pairs), "%s" % len(list(cmplx.stacked_pairs)),
                 "%0.04f" % cmplx.energy_total_dHdS[0], "%0.04f" % cmplx.energy_total_dHdS[1],
-                "%0.02f" % cmplx.energies_dHdS['volume'][0],        "%0.03f" % cmplx.energies_dHdS['volume'][1],
-                "%0.02f" % cmplx.energies_dHdS['shape'][0],         "%0.03f" % cmplx.energies_dHdS['shape'][1],
-                "%0.02f" % cmplx.energies_dHdS['hybridization'][0], "%0.03f" % cmplx.energies_dHdS['hybridization'][1],
-                "%0.02f" % cmplx.energies_dHdS['stacking'][0],      "%0.03f" % cmplx.energies_dHdS['stacking'][1],
+                "%0.02f" % cmplx.energy_subtotals[I_VOLUME][0],        "%0.03f" % cmplx.energy_subtotals[I_VOLUME][1],
+                "%0.02f" % cmplx.energy_subtotals[I_LOOP][0],         "%0.03f" % cmplx.energy_subtotals[I_LOOP][1],
+                "%0.02f" % cmplx.energy_subtotals[I_HYBRIDIZATION][0], "%0.03f" % cmplx.energy_subtotals[I_HYBRIDIZATION][1],
+                "%0.02f" % cmplx.energy_subtotals[I_STACKING][0],      "%0.03f" % cmplx.energy_subtotals[I_STACKING][1],
             ))
             self.stats_complex_state_file.write(line+"\n")
 

@@ -60,6 +60,7 @@ from .constants import (
     PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
     DIRECTION_SYMMETRIC, DIRECTION_UPSTREAM, DIRECTION_DOWNSTREAM,
 )
+from .constants import I_DH, I_DS, I_HYBRIDIZATION, I_STACKING, I_LOOP, I_VOLUME
 from .debug import printd, pprintd, do_print
 
 # Module-level constants and variables:
@@ -202,34 +203,36 @@ class Complex(nx.MultiDiGraph):
         ### Complex energy: ###
         # Includes: Volume energies (for every bi-molecular reaction), Shape/Loop energy and of course,
         # stacking- and hybridization energies. For each, we have both dH and dS.
-        # self.energies_dHdS = {'volume': [0, 0], 'shape': [0, 0],
+        # self.energy_subtotals = {'volume': [0, 0], 'shape': [0, 0],
         #                       'stacking': [0, 0], 'hybridization': [0, 0]}
-        # Enthalpies in self.energies_dHdS[0], entropies in self.energies_dHdS[1]
-        # self.energies_dHdS = [{'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0},
+        # Enthalpies in self.energy_subtotals[0], entropies in self.energy_subtotals[1]
+        # self.energy_subtotals = [{'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0},
         #                       {'volume': 0.0, 'shape': 0.0, 'stacking': 0.0, 'hybridization': 0.0}]
         # Ordered by contribution then enthalpy/entropy:
-        self.energies_dHdS = {'volume': [0., 0.], 'shape': [0., 0.], 'stacking': [0., 0.], 'hybridization': [0., 0.]}
-        # Sum with:[sum(vals) for vals in zip(*cmplx.energies_dHdS.values())]
+        # Sum with:[sum(vals) for vals in zip(*cmplx.energy_subtotals.values())]
+        # self.energy_subtotals = {'volume': [0., 0.], 'loop': [0., 0.], 'stacking': [0., 0.], 'hybridization': [0., 0.]}
+        self.energy_subtotals = np.zeros((4, 2))  # self.energy_subtotals[I_HYBRIDIZATION, I_DH] = dH_hyb
+        # Sum simply with self.energy_subtotals.sum(axis=1)
 
-        self.energy_total_dHdS = [0, 0]
-        # energies_dHdS = np.array([(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)],
+        self.energy_total_dHdS = np.zeros((2, ))  # [0., 0.]
+        # energy_subtotals = np.array([(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)],
         #     dtype=[('volume', float), ('shape', float), ('stacking', float), ('hybridization', float)])
         # Edit: numpy's "structured array" is almost useless. Use ndarray if you want speed.
-        # energies_dHdS = np.ndarray((4,2))  # energies_dHdS[<contribution_idx>, <dH or dS>]
+        # energy_subtotals = np.ndarray((4,2))  # energy_subtotals[<contribution_idx>, <dH or dS>]
 
         ## Per-interaction energies:
         # self.volume_energies = {}  # strand: (dH=0, dS) # Edit: Just asserting that dS_vol * n_strands = dS_vol_total
-        # self.volume_energy = # better to just use energies_dHdS['volume'] ?
+        # self.volume_energy = # better to just use energy_subtotals['volume'] ?
         ## TODO: Consolidate whether you are using the complex graph to store interactions or per-interaction-type dicts
         ## Note: You have a global domainend system graph which you could also use to store energies...
         self.hybridization_energies = {} # frozenset({dom1, dom2}): (dH, dS)   # Same as self.hybridized_pairs
         self.stacking_energies = {} # frozenset((h1end3p, h2end5p), (h1end3p, h2end5p)): (dH, dS) # self.stacked_pairs
-        self.loop_energies = {} # loopid: (dH, dS)
-        self.energy_contributions = {'hybridization': self.hybridization_energies,
-                                     'stacking': self.stacking_energies,
-                                     'shape': self.loop_energies,
+        # self.loop_energies = {} # loopid: (dH, dS) - is calculated by self.loops to avoid redundant data.
+        self.energy_contributions = [self.hybridization_energies, # I_HYBRIDIZATION
+                                     self.stacking_energies,      # I_STACKING
+                                     # 'shape': self.loop_energies,
                                      # 'volume': self.volume_energies,
-                                    }
+                                    ]
         # Note: Above energy contributions keys are instances, not fingerprints. Do not use in reaction graph.
 
         ## TODO: Use numpy arrays (or recarrays) for storing energies to make calculations easier.
@@ -404,17 +407,17 @@ class Complex(nx.MultiDiGraph):
 
     @property
     def volume_energy(self):
-        # return (self.energies_dHdS[0]['volume'], self.energies_dHdS[1]['volume'])
-        return self.energies_dHdS['volume']
+        # return (self.energy_subtotals[0]['volume'], self.energy_subtotals[1]['volume'])
+        return self.energy_subtotals[I_VOLUME]
 
     @property
     def volume_entropy(self):
-        # return self.energies_dHdS[1]['volume']
-        return self.energies_dHdS['volume'][1]
+        # return self.energy_subtotals[1]['volume']
+        return self.energy_subtotals[I_VOLUME][1]
 
     @volume_entropy.setter
     def volume_entropy(self, entropy):
-        self.energies_dHdS['volume'][1] = entropy
+        self.energy_subtotals[I_VOLUME][1] = entropy
 
 
     # def add_domain(self, domain, update_graph=False):
@@ -682,109 +685,90 @@ class Complex(nx.MultiDiGraph):
         self._state_fingerprint = None
 
 
-    def check_complex_energy_change(self, dH_hyb, dS_hyb, dH_stack, dS_stack, dS_shape, dS_volume,
-                                    reaction_attr, reacted_pair, volume_entropy):
-        """ Update complex energy sub-totals and energy_total_dHdS total. """
-        # Note: reaction_attr.is_intra is *always* true for dehybridize/unstack reactions;
-        # use result['case'] to determine if the volume energy of the complex is changed.
-        # reacted_spec_pair will only occour in self._statedependent_dH_dS when dehybridization_rate_constant
-        # has been called. Also: Is this really state dependent? Can't we just let de-hybridization and unstacking
-        # be independent of complex state?
-        #dH, dS = self._statedependent_dH_dS[reacted_spec_pair]
-        # Made this more simple by inverting values once depending on is_forming, when calculating dH_hyb etc.
-
-        # if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
-        #     cmplx.energies_dHdS[0]['hybridization'] += dH_hyb
-        #     cmplx.energies_dHdS[1]['hybridization'] += dS_hyb
-        # elif reaction_attr.reaction_type is STACKING_INTERACTION:
-        #     cmplx.energies_dHdS[0]['stacking'] += dH_stack
-        #     cmplx.energies_dHdS[1]['stacking'] += dS_stack
-        # else:
-        #     raise ValueError("Un-supported reaction type %s" % reaction_attr.reaction_type)
-        # # Cases:
-        # #   Formation Case 0/1:   IntRA-STRAND/COMPLEX hybridization.
-        # #   Formation Case 2/3/4: IntER-complex hybridization between two complexes/strands.
-        # #   Breaking  Case 0/1:   Complex is still intact.
-        # #   Breaking  Case 2/3/4: Complex is split in two.
-        # if reaction_result['case'] <= 1:
-        #     # IntRA-complex reaction. A single complex both before and after reaction.
-        #     cmplx.energies_dHdS[1]['shape'] += dS_shape
-        # else:
-        #     # IntER-strand/complex reaction; Two strands/complexes coming together or splitting up.
-        #     cmplx.energies_dHdS[1]['volume'] += dS_volume
-        subtotals_before = {k: tuple(v) for k, v in self.energies_dHdS.items()}  # {'volume': (dH, dS)}
-        total_before = tuple(self.energy_total_dHdS)  # (dH, dS)
-        if dH_hyb:
-            assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
-            # We group energies_dHdS first by enthalpy/entropy, then by contribution type
-            # because then it's easier to summarize total enthalpy/entropy.
-            # self.energies_dHdS[0]['hybridization'] += dH_hyb
-            # self.energies_dHdS[1]['hybridization'] += dS_hyb
-            self.energies_dHdS['hybridization'][0] += dH_hyb
-            self.energies_dHdS['hybridization'][1] += dS_hyb
-            if reacted_pair:
-                if reaction_attr.is_forming:
-                    self.hybridization_energies[reacted_pair] = (dH_hyb, dS_hyb)
-                else:
-                    del self.hybridization_energies[reacted_pair]
-        if dH_stack:
-            assert reaction_attr.reaction_type is STACKING_INTERACTION
-            self.energies_dHdS['stacking'][0] += dH_stack
-            self.energies_dHdS['stacking'][1] += dS_stack
-            if reacted_pair:
-                if reaction_attr.is_forming:
-                    self.stacking_energies[reacted_pair] = (dH_stack, dS_stack)
-                else:
-                    del self.stacking_energies[reacted_pair]
-        if dS_shape:
-            assert reaction_attr.is_intra is True
-            self.energies_dHdS['shape'][1] += dS_shape
-            # Need to update contributions from all loops... better to just keep them separate...
-        if dS_volume:
-            assert reaction_attr.is_intra is False or reaction_attr.is_forming is False
-            self.energies_dHdS['volume'][1] += dS_volume
-            assert (int(self.energies_dHdS['volume'][1] / dS_volume * (1 if reaction_attr.is_forming else -1))
-                    == len(self.strands)-1)
-
-        ## TODO: Use a more appropriate rounding, not just integer. Using tuple to indicate immutable.
-        # self.energy_total_dHdS = tuple([int(sum(d.values())) for d in self.energies_dHdS])
-        self.energy_total_dHdS = tuple([int(sum(vals)) for vals in zip(*self.energies_dHdS.values())]) # (dH, dS)
-
-
-    def recalculate_complex_energy(self, volume_entropy, dS_shape=None):
+    def recalculate_complex_energy(self, volume_entropy):
         """
         Re-calculate complex energy based on all individual energy contributions
         (hybridizations, stackings, loops and volume entropies)
         param :volume_entropy: is the entropy gained when *releasing* two components (should be positive).
         """
         # energy_contributions['hybridization'] = {domain_pair: [dH, dS], ...}
-        for contrib_key, entries in self.energy_contributions.items():
-            if contrib_key == 'shape':
-                # we currently do not track loops (TODO). Instead, we calculate shape entropy using reaction dS_shape:
-                if dS_shape:
-                    self.energies_dHdS[contrib_key][1] += dS_shape
-            else:
-                self.energies_dHdS[contrib_key] = [sum(vals) for vals in zip(*entries.values())] if entries else [0, 0]
-        # energies_dHdS = {'hybridization': [dH, dS], 'stacking': [dH, dS], ...}
-        self.volume_entropy = -volume_entropy * (len(self.strands) - 1)
-        self.energy_total_dHdS = [int(sum(vals)) for vals in zip(*self.energies_dHdS.values())]
+        # for contrib_key, entries in self.energy_contributions.items():
+        #     self.energy_subtotals[contrib_key] = [sum(vals) for vals in zip(*entries.values())] if entries else [0, 0]
+
+        self.energy_subtotals[I_HYBRIDIZATION] = (np.array(list(self.hybridization_energies.values())).sum(axis=0)
+                                                  if self.hybridization_energies else [0, 0])
+        self.energy_subtotals[I_STACKING] = (np.array(list(self.stacking_energies.values())).sum(axis=0)
+                                                  if self.stacking_energies else [0, 0])
+        # 'loop' vs 'shape' vs 'structure' - using the more descriptive 'loop'.
+        self.energy_subtotals[I_LOOP, 1] = sum(loop['dS'] for loop in self.loops.values())
+        # energy_subtotals = {'hybridization': [dH, dS], 'stacking': [dH, dS], ...}
+        self.energy_subtotals[I_VOLUME, 1] = (-volume_entropy * (len(self.strands) - 1)) if self.strands else 0.
+        # ^ aka self.volume_entropy
+        # self.energy_total_dHdS = [int(sum(vals)) for vals in zip(*self.energy_subtotals.values())]
+        self.energy_total_dHdS = self.energy_subtotals.sum(axis=0)
+        # print("%s energy subtotals and total after recalculation:" % self)
+        # print(self.energy_subtotals)
+        # print(self.energy_total_dHdS)
+        # print(" - dG297 = %s" % (self.energy_total_dHdS * [1, 297]).sum())
+        # Note - this is still faster: total_dHdS[0] + 297*total_dHdS[1]
+
+    # def assert_complex_energy_change(self, volume_entropy, total=None, hybridization=None, stacking=None, loop=None, volume=None, **dHdS_changes):
+    #     """ Update complex energy sub-totals and energy_total_dHdS total. """
+    #
+    #     total_expected_change = np.array((0., 0.))
+    #     subtotals_before = {k: tuple(v) for k, v in self.energy_subtotals.items()}  # {'volume': (dH, dS)}
+    #     total_before = tuple(self.energy_total_dHdS)  # (dH, dS)
+    #     self.recalculate_complex_energy(volume_entropy)
+    #     subtotals_after = {k: tuple(v) for k, v in self.energy_subtotals.items()}  # {'volume': (dH, dS)}
+    #     # total_after = tuple(self.energy_total_dHdS)  # (dH, dS)
+    #
+    #     # for contrib, dHdS in dHdS_changes.items():
+    #     #     diff = [after-before for after, before in zip(subtotals_after[contrib], subtotals_before[contrib])]
+    #     #     assert all(np.isclose(diff, dHdS))
+    #     #     total_expected_change += dHdS
+    #
+    #     if hybridization:
+    #         diff = [after-before for after, before in zip(subtotals_after['hybridization'], subtotals_before['hybridization'])]
+    #         assert all(np.isclose(diff, hybridization))
+    #         total_expected_change += hybridization
+    #     if stacking:
+    #         diff = [after-before for after, before in zip(subtotals_after['stacking'], subtotals_before['stacking'])]
+    #         assert all(np.isclose(diff, stacking))
+    #         total_expected_change += stacking
+    #     if loop:
+    #         diff = [after-before for after, before in zip(subtotals_after['loop'], subtotals_before['loop'])]
+    #         assert all(np.isclose(diff, loop))
+    #         total_expected_change += loop
+    #     if volume:
+    #         diff = [after-before for after, before in zip(subtotals_after['volume'], subtotals_before['volume'])]
+    #         assert all(np.isclose(diff, volume))
+    #         total_expected_change += volume
+    #
+    #     ## TODO: Use a more appropriate rounding, not just integer. Using tuple to indicate immutable.
+    #     # self.energy_total_dHdS = tuple([int(sum(d.values())) for d in self.energy_subtotals])
+    #     self.energy_total_dHdS = tuple([int(sum(vals)) for vals in zip(*self.energy_subtotals.values())]) # (dH, dS)
+    #     diff = [after-before for after, before in zip(subtotals_after['volume'], subtotals_before['volume'])]
+    #     all(np.isclose(diff, total_expected_change))
+    #     if total:
+    #         all(np.isclose(diff, total))
+    #
 
 
-    def check_complex(self, volume_entropy):
-        """
-        Check that complex is correct. Mostly for debugging.
-        param :volume_entropy: is the entropy gained when *releasing* two components (should be positive).
-        """
-        # energy_contributions['hybridization'] = {domain_pair: [dH, dS], ...}
-        for contrib_key, entries in self.energy_contributions.items():
-            # e.g. contribution = 'hybridization', dHdS_vals = {frozenset((d1, d2)): (dH, dS)}
-            if contrib_key == 'shape': # we currently do not track loops (TODO)
-                continue
-            assert all(np.isclose(self.energies_dHdS[contrib_key], ([sum(vals) for vals in zip(*entries.values())] if entries else [0, 0])))
-        # energies_dHdS = {'hybridization': [dH, dS], 'stacking': [dH, dS], ...}
-        # Check volume entropy:
-        assert np.isclose(self.volume_entropy, -volume_entropy*(len(self.strands)-1))
-        assert all(np.isclose(self.energy_total_dHdS, [int(sum(vals)) for vals in zip(*self.energies_dHdS.values())]))
+    # def check_complex(self, volume_entropy):
+    #     """
+    #     Check that complex is correct. Mostly for debugging.
+    #     param :volume_entropy: is the entropy gained when *releasing* two components (should be positive).
+    #     """
+    #     # energy_contributions['hybridization'] = {domain_pair: [dH, dS], ...}
+    #     for contrib_key, entries in self.energy_contributions.items():
+    #         # e.g. contribution = 'hybridization', dHdS_vals = {frozenset((d1, d2)): (dH, dS)}
+    #         if contrib_key == 'shape': # we currently do not track loops (TODO)
+    #             continue
+    #         assert all(np.isclose(self.energy_subtotals[contrib_key], ([sum(vals) for vals in zip(*entries.values())] if entries else [0, 0])))
+    #     # energy_subtotals = {'hybridization': [dH, dS], 'stacking': [dH, dS], ...}
+    #     # Check volume entropy:
+    #     assert np.isclose(self.volume_entropy, -volume_entropy*(len(self.strands)-1))
+    #     assert all(np.isclose(self.energy_total_dHdS, [int(sum(vals)) for vals in zip(*self.energy_subtotals.values())]))
 
 
     def state_fingerprint(self):
