@@ -35,7 +35,6 @@ import math
 import os
 import pdb
 from collections import deque
-from functools import reduce
 from itertools import groupby
 from math import log as ln
 from operator import itemgetter, mul
@@ -52,15 +51,12 @@ from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HELIX_XOVER_DIST, HELIX_WIDTH, HELIX_STACKING_DIST,
                         chain_model_gamma_exponent as gamma)
 from .domain import DomainEnd
+from .utils import prod
 
 
 ## Module constants:
 SEGMENT_STIFFNESS, SEGMENT_LENGTHS, SEGMENT_CONTOUR_LENGTH, SEGMENT_LENGTH_SQUARED = 0, 1, 0, 1
 
-
-def prod(sequence):
-    """ Return the product of all elements in sequence. """
-    return reduce(mul, sequence, 1)
 
 
 
@@ -473,22 +469,31 @@ class GraphManager(object):
 
 
 
-    def calculate_loop_activity(self, loop_path, simulate_reaction=None, reaction_elems=(0, None)):
+    def calculate_loop_activity(self, loop_path, simulate_reaction=None, reaction_elems=(0, None), circularize_path=False):
         """
         Returns
             activity - the "probability" that the loop ends are within a critical radius (relative to a 1 M solution).
         Arguments:
         :loop_path: List of ifnodes describing the full loop path.
             (InterfaceGraph is not a multigraph so adj[source][target] is unambiguous.)
+        NOTE: loop_path should describe the FULL path, i.e. it should start AND end on the same ifnode.
+        (simulate_reaction can be used to further TRIM AWAY overlapping path, but it will not extend the path).
         :simulate_reaction: Assume that the first and last path elements have undergone this type of reaction.
             Only valid argument is None or STACKING_INTERACTION.
         :reaction_elems: If the elements undergoing the reaction described by simulate_reaction,
             add them here. (NOT CURRENTLY SUPPORTED)
+        :circularize_path: If True, transform path so it starts and ends on the same element: path = path + path[0:1]
         """
+        # cyclize vs circularize?
         # path_segments is a list of (stiffness, [length, sum_length_squared]) tuples
         # where stiffness is (0 for ssDNA, 1 for dsDNA and 2 for helix-bundles).
+        print("\ncalculate_loop_activity called with %s, %s, %s" % (loop_path, simulate_reaction, reaction_elems))
+        # pdb.set_trace()
+        if circularize_path:
+            loop_path = loop_path + loop_path[0:1]
         try:
             path_segments = self.closed_loop_segments(loop_path, simulate_reaction, reaction_elems)
+            print(" - path_segments:", path_segments)
         except IndexError:
             return 0
 
@@ -522,6 +527,7 @@ class GraphManager(object):
         ## Minor corrections to SRE_len and SRE_len_sq:
         # SRE_len -= 0.25
         # SRE_len_sq -= 0.35
+        print(" - LRE_len, SRE_len:", LRE_len, SRE_len)
 
         ## Check if the contour-length is long enough for the elements to "touch":
         if LRE_len > SRE_len:
@@ -541,6 +547,7 @@ class GraphManager(object):
         else:
             mean_sq_ee_dist = LRE_len_sq + SRE_len_sq       # unit of nm
             activity = (3/(2*math.pi*mean_sq_ee_dist))**gamma * AVOGADRO_VOLUME_NM3
+        print(" - activity =", activity)
 
         ## Calculate mean end-to-end squared distance between the two domains, aka E_r_sq:
         # We already have the squared length, Nᵢbᵢ², so we just need to sum LRE and SRE:
@@ -713,15 +720,15 @@ class GraphManager(object):
         # Edit: TODO: Should this be described genericly? Otherwise, maybe move this function to Complex
         #       to indicate that this is actually modifying the loops, not just "calculating loop effects" !
         #       OTOH, I'm making use of self.interface_graph which is not available within Complex.
+        # TODO: Is it possible to do this as an OPTIONAL operation and perhaps split it to a separate method?
+        # - Pro: It would be convenient if this method was idempotent and only had side-effects if explicitly requested.
+        # - Con: Having paths reflecting current ifnode delegation makes it easier to query path edges' length.
+        # - Pro: We could maybe simulate these changes like we do in loop_formation_effects where we simulate the formation reaction.
+
         # We need to have the updated ifnodes in the paths because we query the edge length in
         # find_alternative_shortest_path using self.interface_graph[source][target]['len_contour']
-        # changed_loopids_lst = sorted(affected_loopids, key=lambda loopid: cmplx.loops[loopid]['activity'], reverse=True)
-        # changed_loopids_deque = deque(changed_loopids_lst)
-        affected_loop_tuples = sorted([(cmplx.loops[loopid]['activity'],
-                                        cmplx.loops[loopid]['loop_hash'],
-                                        cmplx.loops[loopid]['path_spec'],
-                                        cmplx.loops[loopid]['path'],
-                                        loopid)
+        affected_loop_tuples = sorted([(cmplx.loops[loopid]['activity'], cmplx.loops[loopid]['loop_hash'],
+                                        cmplx.loops[loopid]['path_spec'], cmplx.loops[loopid]['path'], loopid)
                                        for loopid in affected_loopids], reverse=True)
         # affected_loops = [cmplx.loops[loopid] for loopid in changed_loopids_lst]
         # for loopid, affected_loop in zip(changed_loopids_lst, affected_loops):
@@ -838,6 +845,8 @@ class GraphManager(object):
                         path.insert(ifnode_idx+1, newly_undelegated_ifnode)
                         print(("Inserted newly_undelegated_ifnode %s AFTER previous_top_delegate %s in loop %s path at "\
                                "position %s+1") % (newly_undelegated_ifnode, previous_top_delegate, loopid, ifnode_idx))
+                    # Edit: Shouldn't we ALWAYS make sure the two ifnodes are at opposite ends of the path, just to make sure??
+                    # Well: A loop is a loops and the path is cyclic, so it should never matter where the path stats and ends.
                 else:
                     # former_top_delegate is NO longer connected to ifnode_before (but should be to ifnode_after)
                     # newly_undelegated_ifnode should be connected to ifnode_before
@@ -894,6 +903,17 @@ class GraphManager(object):
             'del_loop_hash': del_loop_hash,
             'del_loop_path_spec': del_loop_path_spec, # for debugging
             'del_loop_activity': activity,
+            # TODO: Combine all 'del_loop_xxx' into a single entry, similar to 'new_loop' in loop_formation_effects()
+            'del_loop': {
+                'loop_id': del_loop_id,
+                'loop_hash': del_loop_hash,
+                'path_spec': del_loop_path_spec, # for debugging
+                'activity': activity,
+                'del_loop_debug_info': {
+                    'del_path_tuple': tuple(del_loop_path), # Use immutable tuples to avoid mutation bugs
+                    'description': "loop_breakage_effects delete this loop"
+                }
+            },
             # 'changed_loops': changed_loops,
             'changed_loops_by_hash': changed_loops_by_hash,
             'newly_undelegated_ifnodes_specs': {ifnode.state_fingerprint() for ifnode in newly_undelegated_ifnodes},
@@ -959,8 +979,14 @@ class GraphManager(object):
             if loopid in intact_path_loops:
                 # Just need to update loop's activity using the updated loop path:
                 path_is_broken = False
-                new_loop_path = path # We can use old path
-                a2 = self.calculate_loop_activity(path, simulate_reaction=None)
+                new_loop_path = path # We can use old path (but this should've been updated with new ifnodes)
+                # Note: self.calculate_loop_activity expects the path to START AND END on the same ifnode!
+                # I.e. the edges considered are zip(path, path[1:]), it does NOT automatically include the
+                # edge from path[-1] to path[0], unless circularize_path=True
+                a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=None, circularize_path=True)
+                if a2 == old_activity:
+                    print("\n\nUNEXPECTED: a2 == old_activity: %s vs %s" % (a2, old_activity))
+                    pdb.set_trace()
             else:
                 # loop1_info = cmplx.loops[loopid]
                 # loop_old_hash = loop1_info['loop_hash']
@@ -970,17 +996,19 @@ class GraphManager(object):
                 path_is_broken = True
                 new_path_length, new_loop_path, e1, e2, e3, loop0_path = self.find_alternative_shortest_path(
                     path, alternative_loop_paths)
-                a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=None)
+                a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=None, circularize_path=True)
             # [ifnode.state_fingerprint() for ifnode in new_loop_path]
             new_loop_path_spec = cmplx.calculate_loop_path_spec(new_loop_path)
             new_loop_hash = cmplx.calculate_loop_hash(new_loop_path_spec)
             # new_loop_path_spec = tuple(new_loop_path_spec) # TODO: Remove cast
-            loop_change_factor = a2/old_activity
+            activity_change_ratio = a2/old_activity
             loop_update_info = {
                 'loop_hash': new_loop_hash,
                 'path_spec': tuple(new_loop_path_spec), # We need the path-spec to re-create re-built loop
                 'activity': a2,
-                'dS': ln(a2), # loop_entropy in units of R
+                'loop_entropy': ln(a2), # loop_entropy in units of R
+                'activity_change_ratio': activity_change_ratio, # = a2/a0
+                'ddS': ln(activity_change_ratio),  # change in loop entropy
                 # Values for the original loop (mostly for debugging)
                 # 'a0': old_activity,
                 # debug info for the last loop change:
@@ -989,10 +1017,10 @@ class GraphManager(object):
                     'description': 'loop_breakage_effects() %s loop' % ("rebuilt" if path_is_broken else "modified"),
                     'new_path_tuple': tuple(new_loop_path), # Only for debugging; the result is cached and uses between complexes
                     'new_path_spec': tuple(new_loop_path_spec),
-                    'loop_change_factor': loop_change_factor, # = a2/a0
                     'old_activity': old_activity,
                     'old_loop_hash': loop_old_hash, # so we can relate this to the original/parent loop.
                     'old_path_spec': loop_old_path_spec,
+                    'old_path_tuple': tuple(path),
                     'source_loop_id': loopid,
                 },
             }
@@ -1001,6 +1029,10 @@ class GraphManager(object):
             changed_loops_hash_by_id[loopid] = loop_old_hash
             # unprocesses_affected_loopids.remove(loop1_id)
         # assert len(unprocesses_affected_loopids) == 0  # TODO: Remove debug check
+        loop_effects['total_loop_activity_change'] = (
+            prod(loop['activity_change_ratio'] for loop in loop_effects['changed_loops_by_hash'].values())
+            / loop_effects['del_loop']['activity']) # divide not multiply since we are DELETING not forming the loop.
+        loop_effects['total_loop_entropy_change'] = ln(loop_effects['total_loop_activity_change'])
         return loop_effects
 
 
@@ -1287,7 +1319,9 @@ class GraphManager(object):
 
 
         # activity for shortest_path aka "a1" aka "new_loop_activity":
-        activity = self.calculate_loop_activity(new_loop_path, simulate_reaction=reaction_type)
+        # elem1, elem2 ifnodes have not yet been joined, so shortest path effectively already starts and ends
+        # on the same ifnode, hence circularize_path=False. (This is NOT usually the case for existing loop paths!)
+        activity = self.calculate_loop_activity(new_loop_path, simulate_reaction=reaction_type, circularize_path=False)
         if activity == 0:
             return 0, None
 
@@ -1299,7 +1333,7 @@ class GraphManager(object):
         changed_loops_by_hash = {} # old_loop_hash: {dict with new loop info.}
         # It would be nice to also have the activities for the new loops created (not just the shortest-loop)
         # Maybe have a 'changed_loops' old_loopid => [list of dicts describing new loops]
-        loop_split_factors = []
+        activity_change_ratios = []
         side_effects_factor = 1
         side_effects_activities = []
         side_effects_factors = []
@@ -1311,16 +1345,18 @@ class GraphManager(object):
         ifnode_by_hash_index_after = set(cmplx.ifnode_by_hash.items())
         assert path_spec == cmplx.calculate_loop_path_spec(new_loop_path)
         assert ifnode_by_hash_index_before == ifnode_by_hash_index_after
-        print("new loop (shortest_path):", new_loop_path)
+        print("\nnew loop (shortest_path):", new_loop_path)
         print(" - new_loop_path_spec:", path_spec)
+        print(" - activity:", activity)
         ## TODO: Remove until here <<
         new_loop = {
             'loop_hash': cmplx.calculate_loop_hash(path_spec),
             'path_spec': tuple(path_spec),
             'activity': activity,
-            'dS': ln(activity),
+            'loop_entropy': ln(activity),
+            'ddS': 0,  # Change in loop entropy caused by this reaction.
             'new_loop_debug_info': {
-                'path': tuple(new_loop_path), # Use immutable tuples to avoid mutation bugs
+                'new_path_tuple': tuple(new_loop_path), # Use immutable tuples to avoid mutation bugs
                 'description': "loop_formation_effects new loop"
             },
         }
@@ -1331,7 +1367,8 @@ class GraphManager(object):
         new_stacking_loops = {}
         loop_effects = {
             # total loop formation activity; Product of shortest-path activity and any/all loop_change_factors:
-            'activity': 0,
+            # 'activity': 0, # Renamed to 'total_loop_formation_activity' to avoid confusing individual loop's activity with reaction activity
+            'total_loop_activity_change': activity,
             'is_forming': True,
             # 'shortest_path': tuple(new_loop_path), # use ['new_loop']['path'] instead.
             # 'shortest_path_spec': path_spec, # use ['new_loop']['path_spec'] instead.
@@ -1347,7 +1384,7 @@ class GraphManager(object):
             # changed_loops is a list of dicts, each representing the new loop formed, with keys 'path' and activity.
             # 'loops_considered': processed_secondary_loopids, # for debugging
             # 'loops_affected': all_affected_loops,  # Obsoleted by changed_loops
-            'loop_split_factors': loop_split_factors,
+            'activity_change_ratios': activity_change_ratios,
             # loops not reached by "neighbor-loop-propagation" algorithm but which should still be considered.
             # There may be additional loops that are relevant due to stacking (network-connected ends)
             # These are collected in new_stacking_loops:
@@ -1445,8 +1482,8 @@ class GraphManager(object):
         #     # a1 = self.calculate_loop_activity(path1, simulate_reaction=reaction_type)
         #     a2 = self.calculate_loop_activity(path2, simulate_reaction=reaction_type)
         #     a0 = loop0["activity"]
-        #     ## THIS SHOULD JUST BE APPENDED TO loop_split_factors:
-        #     loop_split_factors.append(a2/a0)
+        #     ## THIS SHOULD JUST BE APPENDED TO activity_change_ratios:
+        #     activity_change_ratios.append(a2/a0)
         #     processed_secondary_loopids.add(loop0id)
         #     pdb.set_trace()
         #     # If hybridization, special case where we account for the length of the newly-formed duplex.
@@ -1519,7 +1556,7 @@ class GraphManager(object):
         ## Can we view this as "the shortest-path activity modulated by the
         ## This is really non-obvious, but let's give it a try...
         ## First see if there is any overlap between the shortest path and existing loops:
-        loop_split_factor = 1
+        activity_change_ratio = 1
         while changed_loops_deque:
             # For the first round, the loop considered is Λ₁ with loop_id None.
             # It is not appropriate to use "loop0" to describe this; you can use "loop1" or "new_loop"
@@ -1629,10 +1666,16 @@ class GraphManager(object):
                         new_loop_path = e3a + e2[::-1] + e3b
                     print(" - The new loop produced a shorter path for existing loop0 %s, new_loop_path = %s" % (
                         loop0_id, new_loop_path))
-                    a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=reaction_type)
+                    # Should do we have to make sure new_loop_path starts and ends on the same ifnode by passing circularize_path=True?
+                    # I guess not: path starts and ends on elem1, elem2 ifnodes, which will be the same after the reaction has been done.
+                    # Again, this method works PREDICTIVELY before the reaction is performed.
+                    a2 = self.calculate_loop_activity(new_loop_path, simulate_reaction=reaction_type, circularize_path=False)
                     if a2 == 0:
                         return 0, None
-                    loop_split_factor = a2/a0
+                    if a2 == a0:
+                        print("\n\nUNEXPECTED: a2 == old_activity: %s vs %s" % (a2, a0))
+                        pdb.set_trace()
+                    activity_change_ratio = a2/a0
                     ## Question: Do we need to add loop1 = e1+e3 as replacement loop?
                     ## Current answer: No, loop1 will always be created as the shortest_path loop.
                     ## The 'e1' and 'e2' edges may be different for different loop0s,
@@ -1650,15 +1693,17 @@ class GraphManager(object):
                         'loop_hash': cmplx.calculate_loop_hash(new_loop_path_spec), # Used to identify the loop instance
                         'path_spec': tuple(new_loop_path_spec), # Is used to re-create the loop path ifnodes
                         'activity': a2,
-                        'dS': ln(a2), # in units of R
+                        'activity_change_ratio': activity_change_ratio, # = a2/a0
+                        'loop_entropy': ln(a2), # in units of R
+                        'ddS': ln(activity_change_ratio), # Change in loop entropy
                         # Values for the original loop (mostly for debugging)
                         'loop_update_debug_info': {
                             'description': "loop_formation_effects updated loop found by breath-first search starting at new loop.",
                             'new_path_tuple': tuple(new_loop_path), # Only for debugging; the result is cached and uses between complexes
-                            'loop_change_factor': loop_split_factor, # = a2/a0
                             'old_activity': a0,
                             'old_loop_hash': loop0_hash, # so we can relate this to the original/parent loop.
                             'old_path_spec': loop0_path_spec,
+                            'old_path_tuple': tuple(loop0_path),
                             'source_loop_id': loop0_id,
                         },
                     }
@@ -1669,7 +1714,7 @@ class GraphManager(object):
                     assert loop0_hash not in changed_loops_by_hash
                     changed_loops_by_hash[loop0_hash] = loop_update_info
                     changed_loops_hash_by_id[loop0_id] = loop0_hash
-                    loop_split_factors.append(loop_split_factor)
+                    activity_change_ratios.append(activity_change_ratio)
                     # Add loop0_id to deque so we can check if loop0 has any affected neighboring loops:
                     changed_loops_deque.append(loop0_id)
                 # end if use_e3 (loop0 should be updated)
@@ -1785,7 +1830,7 @@ class GraphManager(object):
                         idx1, idx2 = idx2, idx1
                     new_path1 = loop0["path"][idx2:] + loop0["path"][:idx1+1]  # +1 to include the node.
                     # new_paths.append(new_path1)  # new_paths = [new_path1, new_path2] aka [e1, e2]
-                    a1 = self.calculate_loop_activity(new_path1, simulate_reaction=reaction_type)
+                    a1 = self.calculate_loop_activity(new_path1, simulate_reaction=reaction_type, circularize_path=False)
                     if a1 == 0:
                         return a1, None
                     a1a2.append(a1)
@@ -1796,7 +1841,7 @@ class GraphManager(object):
                     replacement_loop1['loop0_hash'] = loop0_hash
                     replacement_loop1['old_loop0_id'] = loop0id
                     replacement_loop1['activity'] = a1
-                    replacement_loop1['loop_change_factor'] = a1/a0
+                    replacement_loop1['activity_change_ratio'] = a1/a0
                     replacement_loop1['description'] = "loop_formation_effects updated loop (stacked helices).",
 
                     if idx2-idx1 == 1:
@@ -1816,7 +1861,7 @@ class GraphManager(object):
                         # We have already split out one of the loops, just need the other:
                         new_path2 = loop0["path"][idx1:] + loop0["path"][:idx2+1]
                         # new_paths.append(new_path2)
-                        a2 = self.calculate_loop_activity(new_path2, simulate_reaction=reaction_type)
+                        a2 = self.calculate_loop_activity(new_path2, simulate_reaction=reaction_type, circularize_path=False)
                         if a2 == 0:
                             return 0, None
                         a1a2.append(a2)
@@ -1828,7 +1873,7 @@ class GraphManager(object):
                         replacement_loop2['loop0_hash'] = loop0_hash
                         replacement_loop2['old_loop0_id'] = loop0id
                         replacement_loop2['activity'] = a2
-                        replacement_loop2['loop_change_factor'] = a2/a0
+                        replacement_loop2['activity_change_ratio'] = a2/a0
                         replacement_loop2['description'] = "Case 0: shared loop splitted by duplex stacking."
                         new_stacking_loops[loop0_hash] = [replacement_loop1, replacement_loop2]
                 else:
@@ -1893,7 +1938,7 @@ class GraphManager(object):
                         # Also, usually I would say a = a₁ * prod(a₂/a₀ for a₀, a₂ in independent loops)
                         # However, here I am not including a₀ in my side-effect factor,
                         # but only including it at the end. Not sure that is right.
-                        a2 = self.calculate_loop_activity(new_path, simulate_reaction=reaction_type)
+                        a2 = self.calculate_loop_activity(new_path, simulate_reaction=reaction_type, circularize_path=False)
                         if a2 == 0:
                             return 0, None
                         # side_effects_new_loop_activities.append(a2)
@@ -1904,7 +1949,7 @@ class GraphManager(object):
                         replacement_loop['a0'] = a0
                         replacement_loop['old_loop_id'] = loop0id
                         replacement_loop['activity'] = a2
-                        replacement_loop['loop_change_factor'] = a2/a0
+                        replacement_loop['activity_change_ratio'] = a2/a0
                         replacement_loop['description'] = "Case 1+stack: shared loop on shortest_path from stacking."
                         new_stacking_loops[loop0id].append(replacement_loop)
                     side_effects_activities.append(a1a2[0]*a1a2[1]/a0)
@@ -1936,17 +1981,17 @@ class GraphManager(object):
             side_effects_factor = prod(side_effects_factors)
 
 
-        ## TODO: Compare stacking side_effect_factors and loop_split_factors
-        # if any(factor == 0 for factor in loop_split_factors):
+        ## TODO: Compare stacking side_effect_factors and activity_change_ratios
+        # if any(factor == 0 for factor in activity_change_ratios):
         #     return 0
-        if loop_split_factors:
-            loop_split_factor = prod(loop_split_factors)
-            print("Shortest-loop activity: %0.05g" % activity)
-            print("Loop split factors:",
-                  " * ".join("%0.02g" % v for v in loop_split_factors),
-                  " = %0.03g" % loop_split_factor)
-            print("Activity incl. loop split factors: %0.02g * %0.02g = %0.03g" %
-                  (activity, loop_split_factor, activity*loop_split_factor))
+        if activity_change_ratios:
+            activity_change_ratio = prod(activity_change_ratios)
+            print("New loop shortests-path activity: %0.05g" % activity)
+            print("Changed loops' activity change ratios and total:",
+                  " * ".join("%0.03g" % v for v in activity_change_ratios),
+                  " = %0.03g" % activity_change_ratio)
+            print("Activity incl. changed loops' activity change ratios: %0.03g * %0.03g = %0.03g" %
+                  (activity, activity_change_ratio, activity*activity_change_ratio))
         if side_effects_factors:
             # Stacking side-effect factors include a0 for all loops; a = a1/a0 * a2/a0
             print("Stacking side-effects activities: ",
@@ -2006,7 +2051,7 @@ class GraphManager(object):
         #     'changed_loops_specs': changed_loops_specs, # loop_state_hash => [path of ifnodes_state_fingerprints]
         #     'loops_considered': processed_secondary_loopids,
         #     'loops_affected': all_affected_loops,
-        #     'loop_split_factors': loop_split_factors,
+        #     'activity_change_ratios': activity_change_ratios,
         #     'stacking_side_effects_activities': side_effects_activities,
         #     'stacking_side_effects_factors': side_effects_factors,
         # }
@@ -2014,9 +2059,16 @@ class GraphManager(object):
         # "activity" variable is loop activity for the newly-created loop.
         # How to get the actual path and side-effects when performing the reaction?
         # Return activity *and* loop info with path and side_effects (dict?) - for caching?
-        if loop_split_factors:
-            activity *= loop_split_factor
-        loop_effects['activity'] = activity
+        if activity_change_ratios:
+            activity *= activity_change_ratio
+        # loop_effects['activity'] = activity # Obsoleted, caused confusion between individual loop's activity and
+        # "reaction effects" activity; use total_loop_activity_change instead (or "total_loop_formation_activity")
+        loop_effects['total_loop_activity_change'] = (
+            loop_effects['new_loop']['activity'] *
+            prod(loop['activity_change_ratio'] for loop in loop_effects['changed_loops_by_hash'].values()))
+        loop_effects['total_loop_entropy_change'] = ln(loop_effects['total_loop_activity_change'])
+        # assert loop_effects['total_loop_activity_change'] == loop_effects['activity']
+
         return activity, loop_effects
 
 

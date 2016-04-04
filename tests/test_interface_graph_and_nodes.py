@@ -99,9 +99,9 @@ def test_ifnode_state_fingerprint_1():
     update_and_assert()
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
     update_and_assert()
-    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    res = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     update_and_assert()
 
     # print("state_ifnode_spec_counts:")
@@ -152,10 +152,10 @@ def test_ifnode_state_fingerprint_1():
     i += 1
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
     update_and_assert(i)
     i += 1
-    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    res = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     update_and_assert(i)
     i += 1
 
@@ -204,10 +204,10 @@ def test_ifnode_state_fingerprint_1():
     i += 1
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     update_and_assert(i, assert_true=False)  # Stacking switched around
     i += 1
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
     update_and_assert(i)
     i += 1
 
@@ -243,8 +243,8 @@ def test_intracomplex_activity_1():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    res = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     cmplx = res['changed_complexes'][0]
 
     ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):

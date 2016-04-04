@@ -83,16 +83,9 @@ from .debug import printd, pprintd
  # Enthalpies in units of R*K, entropies in units of R = 1.987 cal/mol/K
 from nascent.energymodels.biopython import DNA_NN4_R, hybridization_dH_dS
 from .utils import (sequential_number_generator, sequential_uuid_gen)
-from .reaction_graph import reaction_to_str
+from .utils import tupleify
+from nascent.graph_sim_nx.reaction_utils import reaction_to_str
 from .reaction_utils import get_reaction_spec_pair
-
-
-def tupleify(val):
-    if isinstance(val, dict):
-        return tuple((k, tupleify(v)) for k, v in val.items())
-    if isinstance(val, (list, tuple)):
-        return tuple(tupleify(v) for v in val)
-    return val
 
 
 
@@ -247,6 +240,9 @@ class ComponentMgr(GraphManager):
 
 
     def loop_breakage_effects_cached(self, elem1, elem2, reaction_spec_pair, reaction_attr, loop_ensemble_fingerprint):
+        """
+        Must be called AFTER performing the loop-breaking reaction, but BEFORE resetting/asserting state change.
+        """
         cache_key = (reaction_spec_pair, loop_ensemble_fingerprint)
         if cache_key not in self.cache['loop_breakage_effects']:
             loop_effects = self.loop_breakage_effects(
@@ -377,7 +373,7 @@ class ComponentMgr(GraphManager):
             print("print('- hybridize complete.')", file=self.hyb_dehyb_file)
 
         self.N_domains_hybridized += 2
-        print("hybridize(%s, %s) - hybridized!")
+        print("hybridize(%s, %s) - hybridized!\n" % (domain1, domain2))
 
         return result
 
@@ -520,14 +516,14 @@ class ComponentMgr(GraphManager):
 
         if self.hyb_dehyb_file:
             print("print('- dehybridize complete.')", file=self.hyb_dehyb_file)
-        print("dehybridize(%s, %s) - dehybridized!")
+        print("dehybridize(%s, %s) - dehybridized!\n" % (domain1, domain2))
 
         self.N_domains_hybridized -= 2
 
         return result
 
 
-    def stack(self, h1end3p, h2end5p, h2end3p, h1end5p, join_complex=True):
+    def stack(self, duplex_end1, duplex_end2, join_complex=True):
         """
         Form a stacking interaction.
                     h1end3p         h1end5p
@@ -539,6 +535,7 @@ class ComponentMgr(GraphManager):
         E.g. you could have a hinge, where one helix is backbone-connected and the other one not.
         This is probably the most common case, e.g. in N-way junctions.
         """
+        (h1end3p, h2end5p), (h2end3p, h1end5p) = duplex_end1, duplex_end2
         if self.hyb_dehyb_file:
             print("h1end3p, h2end5p, h2end3p, h1end5p =",
                   "getattr(domains_by_duid[%s], 'end%s')," % (h1end3p.domain.duid, h1end3p.end),
@@ -554,7 +551,7 @@ class ComponentMgr(GraphManager):
                   file=self.hyb_dehyb_file)
             print("assert h2end5p.domain.domain_strand_specie == ", h2end5p.domain.domain_strand_specie,
                   file=self.hyb_dehyb_file)
-            print("sysmgr.stack(h1end3p, h2end5p, h2end3p, h1end5p, join_complex=%s)" % join_complex,
+            print("sysmgr.stack(duplex_end1, duplex_end2, join_complex=%s)" % join_complex,
                   file=self.hyb_dehyb_file)
         stacking_tuple = ((h1end3p, h2end5p), (h2end3p, h1end5p))
         stacking_pair = frozenset(stacking_tuple)
@@ -648,11 +645,11 @@ class ComponentMgr(GraphManager):
 
         if self.hyb_dehyb_file:
             print("print('- stacking complete.')", file=self.hyb_dehyb_file)
-        print("stack(%s, %s, %s, %s) - stacked!" % (h1end3p, h2end5p, h2end3p, h1end5p))
+        print("stack((%s, %s), (%s, %s)) - stacked!\n" % (h1end3p, h2end5p, h2end3p, h1end5p))
         return result
 
 
-    def unstack(self, h1end3p, h2end5p, h2end3p, h1end5p, break_complex=True):
+    def unstack(self, duplex_end1, duplex_end2, break_complex=True):
         """
         Break a stacking interaction.
                     h1end3p         h1end5p
@@ -660,6 +657,7 @@ class ComponentMgr(GraphManager):
         Helix 2   ----------5' : 3'----------
                     h2end5p         h2end3p
         """
+        (h1end3p, h2end5p), (h2end3p, h1end5p) = duplex_end1, duplex_end2
         if self.hyb_dehyb_file:
             print("h1end3p, h2end5p, h2end3p, h1end5p =",
                   "getattr(domains_by_duid[%s], 'end%s')," % (h1end3p.domain.duid, h1end3p.end),
@@ -675,7 +673,7 @@ class ComponentMgr(GraphManager):
                   file=self.hyb_dehyb_file)
             print("assert h2end5p.domain.domain_strand_specie ==", h2end5p.domain.domain_strand_specie,
                   file=self.hyb_dehyb_file)
-            print("sysmgr.unstack(h1end3p, h2end5p, h2end3p, h1end5p, break_complex=%s)" % break_complex,
+            print("sysmgr.unstack(self, duplex_end1, duplex_end2, break_complex=%s)" % break_complex,
                   file=self.hyb_dehyb_file)
 
         stacking_tuple = ((h1end3p, h2end5p), (h2end3p, h1end5p))
@@ -773,7 +771,7 @@ class ComponentMgr(GraphManager):
 
         if self.hyb_dehyb_file:
             print("print('- un-stacking complete.')", file=self.hyb_dehyb_file)
-        print("unstack(%s, %s, %s, %s) - unstacked!" % (h1end3p, h2end5p, h2end3p, h1end5p))
+        print("unstack((%s, %s), (%s, %s)) - unstacked!\n" % (h1end3p, h2end5p, h2end3p, h1end5p))
 
         return result
 
@@ -1463,9 +1461,9 @@ class ComponentMgr(GraphManager):
         # activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
         activity, loop_effects = self.loop_formation_effects(elem1, elem2, reaction_type)
         loop_effects = tupleify(loop_effects)
-        print("\nloop_formation_effects(%s, %s, %s) (cstate %s) returned:" %
-              (elem1, elem2, reaction_type, d1.strand.complex._state_fingerprint))
-        pprint((activity, loop_effects))
+        # print("\nloop_formation_effects(%s, %s, %s) (cstate %s) returned:" %
+        #       (elem1, elem2, reaction_type, d1.strand.complex._state_fingerprint))
+        # pprint((activity, loop_effects))
 
         # print("Intracomplex activity %0.04f for %s+ reaction between %s and %s" % (
         #     activity, reaction_type, elem1, elem2))

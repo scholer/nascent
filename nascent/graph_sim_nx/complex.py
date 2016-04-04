@@ -54,7 +54,7 @@ import traceback
 
 # Relative imports
 from .connected_multigraph import ConnectedMultiGraph
-from .utils import (sequential_number_generator, sequential_uuid_gen)
+from .utils import (sequential_number_generator, sequential_uuid_gen, tupleify)
 from .nx_utils import draw_graph_and_save
 from .constants import (
     PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION,
@@ -700,9 +700,12 @@ class Complex(nx.MultiDiGraph):
         self.energy_subtotals[I_STACKING] = (np.array(list(self.stacking_energies.values())).sum(axis=0)
                                                   if self.stacking_energies else [0, 0])
         # 'loop' vs 'shape' vs 'structure' - using the more descriptive 'loop'.
-        self.energy_subtotals[I_LOOP, 1] = sum(loop['dS'] for loop in self.loops.values())
+        self.energy_subtotals[I_LOOP, 1] = sum(loop['loop_entropy'] for loop in self.loops.values())
         # energy_subtotals = {'hybridization': [dH, dS], 'stacking': [dH, dS], ...}
-        self.energy_subtotals[I_VOLUME, 1] = (-volume_entropy * (len(self.strands) - 1)) if self.strands else 0.
+        dS_volume = (-volume_entropy * (len(self.strands) - 1)) if self.strands else 0.
+        assert dS_volume <= 0 # Volume entropy should always be negative (reduction in entropy), never positive.
+        self.energy_subtotals[I_VOLUME, 1] = dS_volume
+
         # ^ aka self.volume_entropy
         # self.energy_total_dHdS = [int(sum(vals)) for vals in zip(*self.energy_subtotals.values())]
         self.energy_total_dHdS = self.energy_subtotals.sum(axis=0)
@@ -1075,7 +1078,7 @@ class Complex(nx.MultiDiGraph):
         ### Edit: We no longer detect micro-cycles, only reaction invocations ###
 
         """
-        print("DEBUG: reset_state_fingerprint called with %s\nFROM:" % (locals(),))
+        # print("DEBUG: assert_state_change called with %s\nFROM:" % (locals(),))
         # traceback.print_stack(limit=4)
         if reset: ## TODO: Determine if we should always reset here
             ## We could reset state fingerprints (strands, hybridizations, stackings);
@@ -1083,34 +1086,40 @@ class Complex(nx.MultiDiGraph):
             ## but we would need to probe result['case'] in order to know whether to reset
             ## strands/backbone fingerprint.
             self.reset_state_fingerprint()
-        try:
-            assert reaction_spec_pair != self.reaction_deque[-1] != None
-        except IndexError:
-            pass
-        state_fingerprint = self.state_fingerprint()
-        assert state_fingerprint != self._historic_fingerprints[-1] != None
-        if expected_state_fingerprint is not None:
-            assert state_fingerprint == expected_state_fingerprint
-        self._historic_fingerprints.append(state_fingerprint)
-        # print("assert_state_change invoked for %r with reaction_spec_pair %s" % (self, reaction_spec_pair))
-        # pprint(locals())
-        # print("historic fingerprints:", self._historic_fingerprints)
-        # print("reaction deque: ", self.reaction_deque)
 
-        ## Check reaction_attrs:
-        if reaction_spec_pair in self.previous_reaction_attrs:
-            assert self.previous_reaction_attrs[reaction_spec_pair] == reaction_attr
-        else:
-            self.previous_reaction_attrs[reaction_spec_pair] = reaction_attr
+        if reaction_spec_pair:
+            try:
+                assert reaction_spec_pair != self.reaction_deque[-1] != None
+            except IndexError:
+                pass
+            state_fingerprint = self.state_fingerprint()
+            assert state_fingerprint != self._historic_fingerprints[-1] != None
+            if expected_state_fingerprint is not None:
+                assert state_fingerprint == expected_state_fingerprint
+            self._historic_fingerprints.append(state_fingerprint)
+            # print("assert_state_change invoked for %r with reaction_spec_pair %s" % (self, reaction_spec_pair))
+            # pprint(locals())
+            # print("historic fingerprints:", self._historic_fingerprints)
+            # print("reaction deque: ", self.reaction_deque)
 
-        ## Increment reaction count:
-        self.reaction_invocation_count[reaction_spec_pair] += 1
+            ## Check reaction_attrs:
+            if reaction_spec_pair in self.previous_reaction_attrs:
+                assert self.previous_reaction_attrs[reaction_spec_pair] == reaction_attr
+            else:
+                self.previous_reaction_attrs[reaction_spec_pair] = reaction_attr
+
+            ## Increment reaction count:
+            self.reaction_invocation_count[reaction_spec_pair] += 1
+
+            self.reaction_deque.append((reaction_spec_pair, reaction_attr))
+
 
         # Update ifnode_by_hash cache (doing it here for now, should be done lazily eventually...)
         if rebuild_indexes:
             self.rebuild_ifnode_by_hash_index()
             self.rebuild_loopid_by_hash_index()
         self._historic_loop_ensemble_fingerprints.append(self.loop_ensemble_fingerprint)
+
 
         # pdb.set_trace()
         ## Detect reaction cycle:  (obsolete)
@@ -1133,7 +1142,6 @@ class Complex(nx.MultiDiGraph):
         #     self.reaction_deque.append(reaction_spec_pair)
         #     return self.reaction_deque[highest_idx:]
         # else:
-        self.reaction_deque.append((reaction_spec_pair, reaction_attr))
         #     return None
         return state_fingerprint, None
 
@@ -1163,8 +1171,10 @@ class Complex(nx.MultiDiGraph):
         #            frameinfo.filename, frameinfo.lineno))
         #     frameinfo = getframeinfo(currentframe().f_back.f_back)
         #     print(" -- Previous frameinfo file and line: %s:%s" % (frameinfo.filename, frameinfo.lineno))
-        print("DEBUG: reset_state_fingerprint called with %s\nFROM:" % (locals(),))
-        traceback.print_stack(limit=4)
+
+        # print("DEBUG: reset_state_fingerprint called with %s\nFROM:" % (locals(),))
+        # traceback.print_stack(limit=4)
+
         self._state_fingerprint = None
         if reset_strands:
             self._strands_fingerprint = None
@@ -1264,6 +1274,12 @@ class Complex(nx.MultiDiGraph):
         return hash(edges)
 
 
+    def get_complex_ifnodes(self, top_delegates_only=False):
+        if top_delegates_only:
+            return [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p) if end.ifnode.delegatee is None]
+        else:
+            return [end.ifnode for d in self.domains() for end in (d.end5p, d.end3p)]
+
     def rebuild_ifnode_by_hash_index(self):
         """ Rebuild ifnode_by_hash index/dict. """
         # Go over all non-delegated, i.e. top_delegate, cmplx ifnodes (for all domain ends):
@@ -1335,7 +1351,9 @@ class Complex(nx.MultiDiGraph):
         it should contain a 'changed_loops_by_hash' entry which is a dict with:
         loop_hash:
 
-        Note: The loop hashes applies to the state *before* the loop is formed.
+        Note: The loop hashes applies to the state *before* the loop is formed, so in order to re-create
+        loops, this method should be called BEFORE asserting state change (but AFTER the reaction has
+        actually been performed, i.e. the interaction has been broken).
 
         The timing of this needs to be exactly right. Make sure you keep track of when and where
         hashes (state specs) are re-calculated for ifnodes and loops:
@@ -1389,6 +1407,9 @@ class Complex(nx.MultiDiGraph):
             http://blog.jetbrains.com/pycharm/2015/05/pycharm-4-5-eap-build-141-988-introducing-python-profiler/
 
         """
+        if isinstance(loop_effects, dict):
+            loop_effects = tupleify(loop_effects)
+
         # pdb.set_trace()
         # TODO: WAAIT a moment, are you modifying the loop_effects directive??
         # TODO: Separate mutable vs immutable (and cachable) parts of the loop info!! Only add immutables to cache!
@@ -1416,7 +1437,7 @@ class Complex(nx.MultiDiGraph):
                 'path': None,
                 'loop_hash': None,
                 'activity': None,
-                'dS': None, # TODO: Rename to "loop_entropy",
+                'loop_entropy': None, # TODO: Rename to "loop_entropy",
                 # TODO: Remove loop debug_info when done debugging
                 'debug_info': {
                     'update_history': []
@@ -1427,7 +1448,7 @@ class Complex(nx.MultiDiGraph):
             # only update specific keys:
             new_loop['loop_hash'] = new_loop_hash = new_loop_values['loop_hash']
             new_loop['activity'] = new_loop_values['activity']
-            new_loop['dS'] = new_loop_values['dS']
+            new_loop['loop_entropy'] = new_loop_values['loop_entropy']
             new_loop['debug_info']['update_history'].append(new_loop_values)
             # if 'debug_info' in new_loop:
             new_loop_id = next(loopid_sequential_number_generator)
@@ -1535,7 +1556,7 @@ class Complex(nx.MultiDiGraph):
             # loop.update(loop_info) # Edit: Explicitly updating entries:
             loop['loop_hash'] = new_loop_values['loop_hash']
             loop['activity'] = new_loop_values['activity']
-            loop['dS'] = new_loop_values['dS']
+            loop['loop_entropy'] = new_loop_values['loop_entropy']
             loop['debug_info']['update_history'].append(new_loop_values)
 
             ## Update path (instances)

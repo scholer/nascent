@@ -117,7 +117,7 @@ class Strand(nx.MultiDiGraph):
         # connect nodes from the 5p end to the 3p end:
         # edge colors: backbone=blue, hyb=red, stack=green/cyan,
         edge_attrs = {'interaction': PHOSPHATEBACKBONE_INTERACTION,
-                      'R': 0, 'G': 0, 'B': 1,  # pygephi colors
+                      # 'R': 0, 'G': 0, 'B': 1,  # pygephi colors
                       #'type': PHOSPHATEBACKBONE_INTERACTION,
                       #'direction': None
                      }

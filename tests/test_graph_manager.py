@@ -92,8 +92,8 @@ def two_duplex_loop_case2a():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
 
     domains = {name: val for name, val in locals().items() if isinstance(val, Domain)}
     strands = {name: val for name, val in locals().items() if isinstance(val, Strand)}
@@ -127,8 +127,8 @@ def test_calculate_loop_activity_2():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
 
     ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
     # t2 - E2 - t1 - E1
@@ -208,8 +208,8 @@ def test_calculate_loop_activity_3():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
 
     ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
     # t2 - E2 - t1 - E1
@@ -305,8 +305,8 @@ def test_loop_formation_effects_1():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    res = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     cmplx = res['changed_complexes'][0]
 
     ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
@@ -386,8 +386,8 @@ def test_loop_formation_effects_2():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    res = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     cmplx = res['changed_complexes'][0]
 
     ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
@@ -467,8 +467,8 @@ def test_loop_formation_effects_3():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    res = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     cmplx = res['changed_complexes'][0]
 
     ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):
@@ -547,8 +547,8 @@ def test_loop_formation_effects_4():
     mgr.hybridize(E3, e3)
     mgr.hybridize(E4, e4)
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
-    res = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
+    res = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     cmplx = res['changed_complexes'][0]
 
     ## ACTIVITY FOR THE OUTER LOOP (calculated as though it was not connected):

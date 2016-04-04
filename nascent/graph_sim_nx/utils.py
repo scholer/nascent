@@ -18,6 +18,38 @@
 
 from __future__ import absolute_import, print_function, division
 import os
+from functools import reduce
+from operator import mul
+
+
+WC = dict(zip("ATGC", "TACG"))
+def rcompl(seq):
+    return "".join(WC[b] for b in seq[::-1])
+
+def prod(sequence):
+    """ Return the product of all elements in sequence. """
+    return reduce(mul, sequence, 1)
+
+
+def tupleify(val):
+    """ Make val immutable by converting lists and dicts to tuples. """
+    if isinstance(val, dict):
+        return tuple((k, tupleify(v)) for k, v in val.items())
+    if isinstance(val, (list, tuple)):
+        return tuple(tupleify(v) for v in val)
+    return val
+
+
+class AttrDict(dict):
+    """ Allows you to use AttrDict.key instead of AttrDict["key"] """
+    def __getattribute__(self, key):
+        try:
+            return dict.__getattribute__(self, key)
+        except AttributeError:
+            return self[key]
+
+    def __setattribute__(self, key, value):
+        self[key] = value
 
 
 def sequential_number_generator(start=0, exclude=None):

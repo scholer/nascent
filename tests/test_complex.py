@@ -96,9 +96,9 @@ def test_asymmetric_complex_01():
     result = mgr.hybridize(E4, e4)
     update_and_assert()
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
-    result = mgr.stack(E4.end3p, e4.end5p, e1.end3p, E1.end5p)
+    result = mgr.stack((E4.end3p, e4.end5p), (e1.end3p, E1.end5p))
     update_and_assert()
-    result = mgr.stack(E2.end3p, e2.end5p, e3.end3p, E3.end5p)
+    result = mgr.stack((E2.end3p, e2.end5p), (e3.end3p, E3.end5p))
     update_and_assert()
 
     assert Counter(cstates).most_common(1)[0][1] == 1
@@ -165,13 +165,13 @@ def test_symmetric_complex_01():
     assert cmplx in result["changed_complexes"]
     update_and_assert()
 
-    print("\n\nmgr.stack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)")
-    result = mgr.stack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)
+    print("\n\nmgr.stack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))")
+    result = mgr.stack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))
     assert cmplx in result["changed_complexes"]
     update_and_assert()
 
-    print("\n\nmgr.stack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)")
-    result = mgr.stack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)
+    print("\n\nmgr.stack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))")
+    result = mgr.stack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))
     assert cmplx in result["changed_complexes"]
     update_and_assert()
 
@@ -190,14 +190,14 @@ def test_symmetric_complex_01():
 
     print("\n\nDe-constructing, same order as constructing...")
     i = -1  # Current fingerprints should match
-    print("\n\nmgr.unstack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)")
-    result = mgr.unstack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)
+    print("\n\nmgr.unstack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))")
+    result = mgr.unstack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))
     assert cmplx in result["changed_complexes"]
     i -= 1
     update_and_assert(i)
 
-    print("\n\nmgr.unstack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)")
-    result = mgr.unstack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)
+    print("\n\nmgr.unstack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))")
+    result = mgr.unstack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))
     assert cmplx in result["changed_complexes"]
     i -= 1
     update_and_assert(i)
@@ -280,13 +280,13 @@ def test_symmetric_complex_02():
     assert cmplx in result["changed_complexes"]
     update_and_assert()
 
-    print("\n\nmgr.stack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)")
-    result = mgr.stack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)
+    print("\n\nmgr.stack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))")
+    result = mgr.stack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))
     assert cmplx in result["changed_complexes"]
     update_and_assert()
 
-    print("\n\nmgr.stack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)")
-    result = mgr.stack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)
+    print("\n\nmgr.stack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))")
+    result = mgr.stack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))
     assert cmplx in result["changed_complexes"]
     update_and_assert()
 
@@ -317,14 +317,14 @@ def test_symmetric_complex_02():
     i -= 1
     update_and_assert(i)
 
-    print("\n\nmgr.unstack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)")
-    result = mgr.unstack(A2.end3p, a1.end5p, B1.end3p, B2.end5p)
+    print("\n\nmgr.unstack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))")
+    result = mgr.unstack((A2.end3p, a1.end5p), (B1.end3p, B2.end5p))
     assert cmplx in result["changed_complexes"]
     i -= 1
     update_and_assert(i)
 
-    print("\n\nmgr.unstack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)")
-    result = mgr.unstack(A1.end3p, a2.end5p, B2.end3p, B1.end5p)
+    print("\n\nmgr.unstack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))")
+    result = mgr.unstack((A1.end3p, a2.end5p), (B2.end3p, B1.end5p))
     assert cmplx in result["changed_complexes"]
     i -= 1
     update_and_assert(i)

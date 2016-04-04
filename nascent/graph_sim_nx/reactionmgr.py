@@ -89,9 +89,11 @@ from .nx_utils import draw_graph_and_save, layout_graph, draw_with_graphviz
 from .debug import printd, pprintd
 from .domain import Domain, DomainEnd
 from .utils import sequential_number_generator
-from .reaction_graph import ReactionGraph, reaction_attr_to_str, reaction_to_str, reaction_spec_pair_to_str
-from .reaction_utils import get_reaction_spec_pair
+from .reaction_graph import ReactionGraph
+# from nascent.graph_sim_nx.reaction_utils import reaction_attr_to_str, reaction_spec_pair_to_str, reaction_to_str
+from .reaction_utils import get_reaction_spec_pair, reaction_to_str, reaction_spec_pair_to_str
 
+# Constants and module-level singletons:
 reaction_graph_sequantial_number_generator = sequential_number_generator()  # Used for reaction_graph filenames.
 cmplx_state_sequential_number_generator = sequential_number_generator()     # Used for enumerating complex states
 # Using sequential numbers instead of hashes might be a little easier on the eyes but otherwise have no effect.
@@ -1377,6 +1379,7 @@ class ReactionMgr(ComponentMgr):
         ## TODO: Consolidate normal order of reaction_pair vs reaction_attr vs reaction_spec_pair.
         # printd("\nreact_and_process invoked with args: domain_pair = %s, reaction_attr = %s" % (domain_pair, reaction_attr))
         # printd("domain domspecs/fingerprints (before reaction):", [d.state_fingerprint() for d in domain_pair])
+        assert reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION
         if self.invoked_reactions_file:
             print("domain_pair = frozenset((domains_by_duid[%s], domains_by_duid[%s]))" %
                   tuple([d.duid for d in domain_pair]),
@@ -1562,6 +1565,7 @@ class ReactionMgr(ComponentMgr):
                     h2end5p         h2end3p
         Returns stacking_pair, result
         """
+        assert reaction_attr.reaction_type is STACKING_INTERACTION
         # TODO: Consolidate stack_and_process and hybridize_and_process
         # TODO: Make reaction_pair argument consistently either a frozenset or tuple.
         #       if reaction_pair is a tuple, then maybe reaction_2tup to make it explicit?
@@ -1625,10 +1629,10 @@ class ReactionMgr(ComponentMgr):
 
         if reaction_attr.is_forming:
             assert all(e.stack_partner is None for e in (h1end3p, h2end5p, h2end3p, h1end5p))
-            result = self.stack(h1end3p, h2end5p, h2end3p, h1end5p)
+            result = self.stack((h1end3p, h2end5p), (h2end3p, h1end5p))
         else:
             assert all(e.stack_partner is not None for e in (h1end3p, h2end5p, h2end3p, h1end5p))
-            result = self.unstack(h1end3p, h2end5p, h2end3p, h1end5p)
+            result = self.unstack((h1end3p, h2end5p), (h2end3p, h1end5p))
         # printd("stack_and_process: Completed %s of h1end3p, h2end5p, h2end3p, h1end5p - %s %s and %s %s" % (reaction_str, h1end3p, h2end5p, h2end3p, h1end5p))
 
         # printd("stack_and_process: %s result:" % reaction_str)
@@ -1903,6 +1907,7 @@ class ReactionMgr(ComponentMgr):
                 # I'm adding cmplx.loop_ensemble_fingerprint to cache key, so this check is no longer effective:
                 assert reacted_spec_pair not in self.reaction_loop_effects
         elif reaction_result['case'] < 2:
+            # breaking reaction case 1: Complex still intact after breaking the interaction = loop change
             # TODO: Case 0 (intra-strand reaction) not yet supported.
             # TODO: Case 0 should be supported when moving to "One complex per strand using complex-delegation" scheme.
             # Check if we are breaking a loop:
@@ -1924,7 +1929,8 @@ class ReactionMgr(ComponentMgr):
             print("%s.ifnode_loopids_index BEFORE calculating loop breakage: %s" % (cmplx, cmplx.ifnode_loopids_index))
             # print("%s.loops BEFORE calculating loop breakage effects: %s" % (cmplx, cmplx.loops))
             # pdb.set_trace()
-
+            # loop_breakage_effects must be called AFTER performing the loop-breaking reaction,
+            # but BEFORE resetting/asserting state change (retaining the old state's fingerprint)
             loop_effects = self.loop_breakage_effects_cached(
                 elem1, elem2, reacted_spec_pair, reaction_attr, cmplx.loop_ensemble_fingerprint)
             # print("\nloop_breakage_effects_cached(%s, %s, %s,..,  %s) returned: %s" %
@@ -1941,6 +1947,7 @@ class ReactionMgr(ComponentMgr):
             print("%s.ifnode_loopids_index AFTER effectuating loop breakage: %s" % (cmplx, cmplx.ifnode_loopids_index))
             # print("%s.loops AFTER loop breakage: %s" % (cmplx, cmplx.loops))
         else:
+            # Breaking reaction case > 1: Two complexes or strands falling apart; no loops broken.
             assert reacted_spec_pair not in self.reaction_loop_effects
 
 
@@ -2156,6 +2163,7 @@ class ReactionMgr(ComponentMgr):
                 # Should be empty; released strands are available in 'free_strands'.
                 assert len(cmplx.strands) == 0
                 # self.state_counter is updated using asserted_target_states_list and reaction_spec_source_states_list
+            assert cmplx.energy_subtotals[I_VOLUME][I_DS] == 0
             cmplx_subtotals_before += cmplx.energy_subtotals
             cmplx.recalculate_complex_energy(self.volume_entropy)
             cmplx_subtotals_after += cmplx.energy_subtotals
