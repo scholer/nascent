@@ -85,7 +85,7 @@ def main():
     structure = "duplex_20bp_2d_4T-loop"
     # structure = "duplex_20bp_2d_2T-loop"
     structure = "circfb_1"
-    structure = "fourway_junction_1"
+    # structure = "fourway_junction_1"
 
     #n_strand_copies_default = 400
     #n_strand_copies_default = 100
@@ -324,9 +324,9 @@ def main():
                 # simulator.simulate(T=332, n_steps_max=200000, systime_max=2000)
                 # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
-                # simulator.simulate(T=330, n_steps_max=4000, systime_max=400)
+                simulator.simulate(T=330, n_steps_max=4000, systime_max=400)
                 # simulator.simulate(T=330, n_steps_max=2000, systime_max=200)
-                simulator.simulate(T=330, n_steps_max=1000, systime_max=100)
+                # simulator.simulate(T=330, n_steps_max=1000, systime_max=100)
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
                 # simulator.simulate(T=330, n_steps_max=n_steps_per_T, systime_max=time_per_T)
 

@@ -119,7 +119,7 @@ reaction h+ :  s3_D >_< s4_d    (73404)
     assert cmplx == result['changed_complexes'][0]
 
 
-    # Unstack C-D, then stack again:
+    # Unstack C-d, then stack again:
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
@@ -131,49 +131,49 @@ reaction h+ :  s3_D >_< s4_d    (73404)
     assert cmplx == result['changed_complexes'][0]
 
 
-    # Stack A-B then unstack A-B:
+    # Stack A-b then unstack A-b:
     # result = mgr.stack(A.end3p, a.end5p, b.end3p, B.end5p)
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
-    # Unstack A-B:
+    # Unstack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
 
-    # Unstack C-D
+    # Unstack C-d
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
 
 
-    # Stack A-B, stack C-D, unstack A-B, unstack C-D:
-    # Stack A-B:
+    # Stack A-b, stack C-d, unstack A-b, unstack C-d:
+    # Stack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
-    # Stack C-D
+    # Stack C-d
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
-    # Unstack A-B:
+    # Unstack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
-    # Unstack C-D
+    # Unstack C-d
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
     reaction_pair = frozenset(reaction_pair)
     reacted_pair, result = mgr.stack_and_process(reaction_pair, reaction_attr=reaction_attr)
     assert cmplx == result['changed_complexes'][0]
 
 
-    # Stack A-B, stack C-D, unstack A-B, unstack C-D, again:
+    # Stack A-b, stack C-d, unstack A-b, unstack C-d, again:
     for reaction_pair, reaction_attr in (
         (((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA),
         (((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA),
@@ -190,7 +190,7 @@ reaction h+ :  s3_D >_< s4_d    (73404)
 
 
 
-def form_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reaction=False):
+def form_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reactions=False):
 
     reaction_str = reaction_to_str(None, reaction_attr, reaction_pair)
     print("\n\nPerforming form_and_check: ", reaction_str)
@@ -253,7 +253,7 @@ def form_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reaction=Fal
 
 
     # 5. update_possible_reactions (optional, if you want to retain reactionmgr possible_reactions data integrity:
-    if update_reaction:
+    if update_reactions:
         changed_domains = cmplx.domains()
         mgr.update_possible_hybridization_reactions(
             changed_domains, reaction_pair, reaction_attr, reaction_spec_pair)
@@ -278,7 +278,7 @@ def check_complex_ifnodes(cmplx, mgr=None):
     return set1
 
 
-def break_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reaction=False):
+def break_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reactions=False):
     # Note: loop_breakage_effects HAS SIDE-EFFECTS and is NOT an idempotent operation.
     # That is, it WILL update existing paths to make them reflect the current ifnode top delegation.
     # However, the following hybridize will not update the loop paths, not even if you invoke loop_formation_effects(),
@@ -324,7 +324,7 @@ def break_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reaction=Fa
     cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming) # returns (0, None) if reaction is impossible.
 
     ## 3b: Calculate reaction energy:
-    assert (loop_effects['total_loop_activity_change'] == (
+    assert isclose(loop_effects['total_loop_activity_change'], (
         1/loop_effects['del_loop']['activity'] * # inverted value since we DELETE, not form the loop
         np.prod([loop['activity_change_ratio'] for loop in loop_effects['changed_loops_by_hash'].values()])))
     dS_loop = ln(loop_effects['total_loop_activity_change'])
@@ -345,7 +345,7 @@ def break_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reaction=Fa
     cmplx.recalculate_complex_energy(mgr.volume_entropy)
 
     # 5. update_possible_reactions (optional, if you want to retain reactionmgr possible_reactions data integrity:
-    if update_reaction:
+    if update_reactions:
         changed_domains = cmplx.domains()
         mgr.update_possible_hybridization_reactions(
             changed_domains, reaction_pair, reaction_attr, reaction_spec_pair)
@@ -372,7 +372,7 @@ def break_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reaction=Fa
     return loop_effects
 
 
-def react(reaction_pair, reaction_attr, cmplx, mgr, loop_effects=None, update_reaction=False):
+def react(reaction_pair, reaction_attr, cmplx, mgr, loop_effects=None, update_reactions=False):
     """ Perform reaction and assert complex state change incl energy re-calculation. """
 
     elem1, elem2 = tuple(reaction_pair)
@@ -400,7 +400,7 @@ def react(reaction_pair, reaction_attr, cmplx, mgr, loop_effects=None, update_re
     cmplx.recalculate_complex_energy(mgr.volume_entropy)
 
     # 5. update_possible_reactions (optional, if you want to retain reactionmgr possible_reactions data integrity:
-    if update_reaction:
+    if update_reactions:
         changed_domains = cmplx.domains()
         mgr.update_possible_hybridization_reactions(
             changed_domains, reaction_pair, reaction_attr, reaction_spec_pair)
@@ -409,6 +409,28 @@ def react(reaction_pair, reaction_attr, cmplx, mgr, loop_effects=None, update_re
 
     print("-completed reaction: ", reaction_str, '\n')
     return result
+
+
+reaction_name_by_reaction_attr = {
+    RA_STACK_INTRA: "stacking",
+    RA_UNSTACK_INTRA: "unstacking",
+    RA_HYB_INTRA: "hybridizing",
+    RA_DEHYB_INTRA: "dehybridizing",
+}
+
+def get_reaction_desc(reaction_pair, reaction_attr, state_desc):
+
+    rev_reaction_attr = ReactionAttrs(reaction_attr.reaction_type, not reaction_attr.is_forming, reaction_attr.is_intra)
+    if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
+        pair_desc = "-".join(d.name for d in reaction_pair)
+    else:
+        assert reaction_attr.reaction_type is STACKING_INTERACTION
+        pair_desc = "-".join(dupend[0].domain.name for dupend in reaction_pair)
+    desc = " ".join([reaction_name_by_reaction_attr[reaction_attr], pair_desc,
+                     state_desc.format("form" if reaction_attr.is_forming else "break")])
+    reverse_desc = " ".join([reaction_name_by_reaction_attr[rev_reaction_attr], pair_desc,
+                             state_desc.format("form" if reaction_attr.is_forming else "break")])
+    return desc, reverse_desc
 
 
 
@@ -456,46 +478,88 @@ reaction h+ :  s3_D >_< s4_d    (73404)
     reaction_pair, reaction_attr = (c, C), RA_HYB_INTER
     reaction_pair = frozenset(reaction_pair) # I guess I'm still using frozensets
     # reacted_pair, result = mgr.hybridize_and_process(reaction_pair, reaction_attr=reaction_attr)
-    result = react(reaction_pair, reaction_attr, None, mgr, loop_effects=None, update_reaction=False)
+    result = react(reaction_pair, reaction_attr, None, mgr, loop_effects=None, update_reactions=False)
     cmplx0 = result['new_complexes'][0]
 
     # result = mgr.hybridize(a, A)
     reaction_pair, reaction_attr = (a, A), RA_HYB_INTER
     reaction_pair = frozenset(reaction_pair)
     # reacted_pair, result = mgr.hybridize_and_process(reaction_pair, reaction_attr=reaction_attr)
-    result = react(reaction_pair, reaction_attr, None, mgr, loop_effects=None, update_reaction=False)
+    result = react(reaction_pair, reaction_attr, None, mgr, loop_effects=None, update_reactions=False)
     cmplx1 = result['new_complexes'][0]
 
     # result = mgr.hybridize(B, b)
     reaction_pair, reaction_attr = (B, b), RA_HYB_INTER
     reaction_pair = frozenset(reaction_pair)
     # reacted_pair, result = mgr.hybridize_and_process(reaction_pair, reaction_attr=reaction_attr)
-    result = react(reaction_pair, reaction_attr, None, mgr, loop_effects=None, update_reaction=False)
+    result = react(reaction_pair, reaction_attr, None, mgr, loop_effects=None, update_reactions=False)
     cmplx = result['changed_complexes'][0]
     assert cmplx == cmplx0 or cmplx == cmplx1
 
 
     loop_effects_cache = {}
+    reaction_activities = {}
+    desc_cstates = {}   # desc => cstate, reaction_pair, reaction_attr
+
+    def loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc=None):
+        """
+        # To debug:
+        pp reaction_pair, reaction_attr, desc, reverse_desc, activity, 1/activity, reaction_activities[desc], reaction_activities.get(reverse_desc)
+        pp reaction_pair, reaction_attr, desc, cstate, desc_cstates[desc], cstate_by_desc.get((cstate, reaction_pair, reaction_attr)), desc_cstates
+        """
+        print([str(v) for v in (reaction_pair, reaction_attr, desc, reverse_desc)])
+        assert desc.split()[0] == reaction_name_by_reaction_attr[reaction_attr]
+        rev_reaction_attr = ReactionAttrs(reaction_attr.reaction_type, not reaction_attr.is_forming, reaction_attr.is_intra)
+        assert reverse_desc.split()[0] == reaction_name_by_reaction_attr[rev_reaction_attr]
+        if reaction_attr.is_forming:
+            loop_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+        else:
+            loop_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+        activity = loop_effects['total_loop_activity_change']
+        cstate_by_desc = {v: k for k, v in desc_cstates.items()}
+        cstate = cmplx.state_fingerprint()
+        if desc in loop_effects_cache:
+            # assert loop_effects_cache[desc] == tupleify(loop_effects)
+            assert desc_cstates[desc] == (cstate, reaction_pair, reaction_attr)
+            assert reaction_activities[desc] == activity  # exact or just "close"?
+        else:
+            loop_effects_cache[desc] = tupleify(loop_effects)
+            reaction_activities[desc] = activity
+            assert desc not in desc_cstates
+            desc_cstates[desc] = (cstate, reaction_pair, reaction_attr)
+        if reverse_desc:
+            if reverse_desc in reaction_activities:
+                assert isclose(reaction_activities[reverse_desc], 1/activity)
+            else:
+                print(reverse_desc, "not in reaction_activities")
+
 
     ## Forming the first loop by hybridization:
     reaction_pair, reaction_attr = (d, D), RA_HYB_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["hybridizing d-D to form loop"] = loop_formation_effects
+    desc, reverse_desc = "hybridizing d-d to form loop", "dehybridizing d-d to break loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # loop_effects_cache[desc] = loop_formation_effects
+
 
     ## BREAKING the first loop by hybridization:
     reaction_pair, reaction_attr = (d, D), RA_DEHYB_INTRA
-    loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["dehybridizing d-D to break loop"] = loop_formation_effects
-    # We are currently inverting the activity for breaking reactions:
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   1/loop_breakage_effects['total_loop_activity_change'])
+    desc, reverse_desc = "dehybridizing d-d to break loop", "hybridizing d-d to form loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # loop_effects_cache["dehybridizing d-d to break loop"] = loop_formation_effects
+    # # We are currently inverting the activity for breaking reactions:
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                1/loop_breakage_effects['total_loop_activity_change'])
 
 
     ## Re-Forming the first loop by hybridization:
     reaction_pair, reaction_attr = (d, D), RA_HYB_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   loop_effects_cache["hybridizing d-D to form loop"]['total_loop_activity_change'])
+    desc, reverse_desc = "hybridizing d-d to form loop", "dehybridizing d-d to break loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                loop_effects_cache["hybridizing d-d to form loop"]['total_loop_activity_change'])
 
 
 
@@ -504,140 +568,442 @@ reaction h+ :  s3_D >_< s4_d    (73404)
 
 
 
-    # STACK C-D:
+    # STACK C-d:
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["stacking C-D with A-B unstacked"] = loop_formation_effects
+    desc, reverse_desc = "stacking C-d with A-b unstacked", "unstacking C-d with A-b unstacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # loop_effects_cache["stacking C-d with A-b unstacked"] = loop_formation_effects
 
-    # Unstack C-D, then stack again:
+
+    # Unstack C-d, then stack again:
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   1/loop_breakage_effects['total_loop_activity_change'])
-    loop_effects_cache["unstacking C-D with A-B unstacked"] = loop_breakage_effects
+    desc, reverse_desc = "unstacking C-d with A-b unstacked", "stacking C-d with A-b unstacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                1/loop_breakage_effects['total_loop_activity_change'])
+    # loop_effects_cache["unstacking C-d with A-b unstacked"] = loop_breakage_effects
 
-    # STACK C-D:
+    # STACK C-d:
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   1/loop_breakage_effects['total_loop_activity_change'])
+    desc, reverse_desc = "stacking C-d with A-b unstacked", "unstacking C-d with A-b unstacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                1/loop_breakage_effects['total_loop_activity_change'])
 
 
-    # Stack A-B then unstack A-B:
+    # Stack A-b then unstack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["stacking A-B with C-D stacked"] = loop_formation_effects
+    desc, reverse_desc = "stacking A-b with C-d stacked", "unstacking A-b with C-d stacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # loop_effects_cache["stacking A-b with C-d stacked"] = loop_formation_effects
 
-    # Unstack A-B:
+    # Unstack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   1/loop_breakage_effects['total_loop_activity_change'])
-    loop_effects_cache["unstacking A-B with C-D stacked"] = loop_breakage_effects
+    desc, reverse_desc = "unstacking A-b with C-d stacked", "stacking A-b with C-d stacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                1/loop_breakage_effects['total_loop_activity_change'])
+    # loop_effects_cache["unstacking A-b with C-d stacked"] = loop_breakage_effects
 
 
-    # Unstack C-D
+    # Unstack C-d
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    # assert loop_breakage_effects == loop_effects_cache["unstacking C-D with A-B unstacked"]
+    desc, reverse_desc = "unstacking C-d with A-b unstacked", "stacking C-d with A-b unstacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert loop_breakage_effects == loop_effects_cache["unstacking C-d with A-b unstacked"]
     # Edit: Hard to compare dicts, even if we tupleify them, so just comparing total_loop_activity_change values for now.
-    assert isclose(loop_breakage_effects['total_loop_activity_change'],
-                   loop_effects_cache["unstacking C-D with A-B unstacked"]['total_loop_activity_change'])
+    # assert isclose(loop_breakage_effects['total_loop_activity_change'],
+    #                loop_effects_cache["unstacking C-d with A-b unstacked"]['total_loop_activity_change'])
 
 
 
-    # Stack A-B, stack C-D, unstack A-B, unstack C-D:
-    # Stack A-B:
+    # Stack A-b, stack C-d, unstack A-b, unstack C-d:
+    # Stack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   1/loop_breakage_effects['total_loop_activity_change']) # A-B should be identical to C-D
+    desc, reverse_desc = "stacking A-b with C-d unstacked", "unstacking A-b with C-d unstacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                1/loop_breakage_effects['total_loop_activity_change']) # A-b should be identical to C-d
 
-    # Stack C-D
+    # Stack C-d
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert "stacking C-D with A-B stacked" not in loop_effects_cache
-    loop_effects_cache["stacking C-D with A-B stacked"] = loop_formation_effects
+    desc, reverse_desc = "stacking C-d with A-b stacked", "unstacking C-d with A-b stacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert "stacking C-d with A-b stacked" not in loop_effects_cache
+    # loop_effects_cache["stacking C-d with A-b stacked"] = loop_formation_effects
     # Assert symmetry:
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   loop_effects_cache["stacking A-B with C-D stacked"]['total_loop_activity_change'])
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                loop_effects_cache["stacking A-b with C-d stacked"]['total_loop_activity_change'])
 
-    # Unstack A-B:
+
+    # Unstack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert isclose(loop_formation_effects['total_loop_activity_change'],
-                   1/loop_breakage_effects['total_loop_activity_change'])
-    assert isclose(loop_breakage_effects['total_loop_activity_change'],
-                   loop_effects_cache["unstacking A-B with C-D stacked"]['total_loop_activity_change'])
+    desc, reverse_desc = "unstacking A-b with C-d stacked", "stacking A-b with C-d stacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert isclose(loop_formation_effects['total_loop_activity_change'],
+    #                1/loop_breakage_effects['total_loop_activity_change'])
+    # assert isclose(loop_breakage_effects['total_loop_activity_change'],
+    #                loop_effects_cache["unstacking A-b with C-d stacked"]['total_loop_activity_change'])
 
-    # Unstack C-D
+    # Unstack C-d
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    assert isclose(loop_breakage_effects['total_loop_activity_change'],
-                   loop_effects_cache["unstacking C-D with A-B unstacked"]['total_loop_activity_change'])
+    desc, reverse_desc = "unstacking C-d with A-b unstacked", "stacking C-d with A-b unstacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    # assert isclose(loop_breakage_effects['total_loop_activity_change'],
+    #                loop_effects_cache["unstacking C-d with A-b unstacked"]['total_loop_activity_change'])
+
+
+
+    # TODO:  Maybe use "with all hybridized None stacked" as state_desc? But that wouldn't work for the reversible reaction....
+    # Then you would indeed have to describe the state in full, and differently for forward vs reverse reaction.
+
+
+    ### Stack non-neighboring helices:
+
+    # Stack A-C:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_STACK_INTRA
+    desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with b-d unstacked")
+    assert (desc, reverse_desc) == ("stacking A-C with b-d unstacked", "unstacking A-C with b-d unstacked")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Unstack A-C:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_UNSTACK_INTRA
+    desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with b-d unstacked")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+
+    ## Stack A-C, stack b-d, unstack A-C, unstack b-d
+
+    if False:
+        # Stack A-C:
+        reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_STACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with b-d unstacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+        # Stack b-d: -- THIS CURRENTLY GIVES AN ERROR!
+        reaction_pair, reaction_attr = ((b.end3p, B.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with A-C stacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+        # Unstack A-C:
+        reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_UNSTACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with b-d stacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+        # Unstack b-d:
+        reaction_pair, reaction_attr = ((b.end3p, B.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with A-C unstacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+
+    ## Stack A-C, stack b-d, unstack b-d, unstack A-C
+
+    if False:  # disabled, gives an error because loop degeneracy (I think)
+        # Stack A-C:
+        reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_STACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with b-d unstacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+        # Stack b-d: -- THIS CURRENTLY GIVES AN ERROR!
+        reaction_pair, reaction_attr = ((b.end3p, B.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with A-C stacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+        # Unstack b-d:
+        reaction_pair, reaction_attr = ((b.end3p, B.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with A-C stacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+        # Unstack A-C:
+        reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_UNSTACK_INTRA
+        desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with b-d unstacked")
+        loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
 
 
 
     ## BREAKING the loop by hybridization:
     reaction_pair, reaction_attr = (d, D), RA_DEHYB_INTRA
-    desc = "dehybridizing d-D to break loop"
-    loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+    desc = "dehybridizing d-d to break loop"
+    desc, reverse_desc = "dehybridizing d-d to break loop", "hybridizing d-d to form loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+    # loop_breakage_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
     # assert desc not in loop_effects_cache
-    # loop_effects_cache["dehybridizing d-D to break loop"] = loop_formation_effects
+    # loop_effects_cache["dehybridizing d-d to break loop"] = loop_formation_effects
     # We are currently inverting the activity for breaking reactions:
-    assert isclose(loop_breakage_effects['total_loop_activity_change'],
-                   loop_effects_cache[desc]['total_loop_activity_change'])
-    assert isclose(1/loop_breakage_effects['total_loop_activity_change'],
-                   loop_effects_cache["hybridizing d-D to form loop"]['total_loop_activity_change'])
+    # assert isclose(loop_breakage_effects['total_loop_activity_change'],
+    #                loop_effects_cache[desc]['total_loop_activity_change'])
+    # assert isclose(1/loop_breakage_effects['total_loop_activity_change'],
+    #                loop_effects_cache["hybridizing d-d to form loop"]['total_loop_activity_change'])
+
+
+
 
 
 
     # TODO: Continue, forming loops by stacking without all strands being hybridized:
-    # You can still stack/unstack: A-B, A-C, B-C in all order permutations
+    # You can still stack/unstack: A-b, A-C, b-C in all order permutations
 
-    # Stack A-B:
+
+    ## Produce the "pure" stacking loop formation/breaking data:
+
+    # Stack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["stacking A-B to form loop"] = loop_formation_effects
+    desc, reverse_desc = "stacking A-b to form loop", "unstacking A-b to break loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
 
-    # Unstack A-B:
+    # Unstack A-b:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["unstacking A-B to break loop"] = loop_formation_effects
-    assert isclose(1/loop_breakage_effects['total_loop_activity_change'],
-                   loop_formation_effects['total_loop_activity_change'])
-
+    desc, reverse_desc = "unstacking A-b to break loop", "stacking A-b to form loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
 
     # Stack A-C:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["stacking A-C to form loop"] = loop_formation_effects
+    desc, reverse_desc = "stacking A-C to form loop", "unstacking A-C to break loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
 
     # Unstack A-C:
     reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["unstacking A-C to break loop"] = loop_formation_effects
-    assert isclose(1/loop_breakage_effects['total_loop_activity_change'],
-                   loop_formation_effects['total_loop_activity_change'])
+    desc, reverse_desc = "unstacking A-C to break loop", "stacking A-C to form loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
 
 
-    # Stack C-B:
+    # Stack C-b:
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
-    loop_formation_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["stacking B-C to form loop"] = loop_formation_effects
+    desc, reverse_desc = "stacking b-C to form loop", "unstacking b-C to break loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
 
-    # Unstack C-B:
+    # Unstack C-b:
     reaction_pair, reaction_attr = ((C.end3p, c.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
-    loop_breakage_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
-    loop_effects_cache["unstacking B-C to break loop"] = loop_formation_effects
-    assert isclose(1/loop_breakage_effects['total_loop_activity_change'],
-                   loop_formation_effects['total_loop_activity_change'])
+    desc, reverse_desc = "unstacking b-C to break loop", "stacking b-C to form loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
 
 
 
+    ### Mixed stacking + hybridization loop formation/breakage permuations:
 
+    ## Permutation 1: stack, hybridize, dehybridize, unstack
+
+    # Stack A-b:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
+    desc, reverse_desc = "stacking A-b to form loop", "unstacking A-b to break loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Hybridize d-d:
+    reaction_pair, reaction_attr = (d, D), RA_HYB_INTRA
+    desc, reverse_desc = "hybridizing d-d with A-b stacked", "dehybridizing d-d with A-b stacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Dehybridize d-d:
+    reaction_pair, reaction_attr = (d, D), RA_DEHYB_INTRA
+    desc, reverse_desc = "dehybridizing d-d with A-b stacked", "hybridizing d-d with A-b stacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Unstack A-b:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
+    desc, reverse_desc = "unstacking A-b to break loop", "stacking A-b to form loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+
+    ## Permutation 2: stack, hybridize, unstack, dehybridize
+
+    # Stack A-b:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
+    desc, reverse_desc = "stacking A-b to form loop", "unstacking A-b to break loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Hybridize d-d:
+    reaction_pair, reaction_attr = (d, D), RA_HYB_INTRA
+    desc, reverse_desc = "hybridizing d-d with A-b stacked", "dehybridizing d-d with A-b stacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Unstack A-b:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
+    desc, reverse_desc = "unstacking A-b with C-d unstacked", "stacking A-b with C-d unstacked"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Dehybridize d-d:
+    reaction_pair, reaction_attr = (d, D), RA_DEHYB_INTRA
+    desc, reverse_desc = "dehybridizing d-d to break loop", "hybridizing d-d to form loop"
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+
+    ## Permutation 3: stack A-b, hybridize D, stack C-d, unstack A-b, unstack C-d, dehybridize D
+
+
+    # Stack A-b:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_STACK_INTRA
+    desc, reverse_desc = "stacking A-b to form loop", "unstacking A-b to break loop"
+    assert desc, reverse_desc == get_reaction_desc(reaction_pair, reaction_attr, "to {} loop")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Hybridize D:
+    reaction_pair, reaction_attr = (d, D), RA_HYB_INTRA
+    desc, reverse_desc = "hybridizing d-d with A-b stacked", "dehybridizing d-d with A-b stacked"
+    assert desc, reverse_desc == get_reaction_desc(reaction_pair, reaction_attr, "with A-b stacked")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Stack C-d:
+    reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_STACK_INTRA
+    desc, reverse_desc = "stacking C-d with A-b stacked", "unstacking C-d with A-b stacked"
+    assert desc, reverse_desc == get_reaction_desc(reaction_pair, reaction_attr, "with A-b stacked")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Unstack A-b:
+    reaction_pair, reaction_attr = ((A.end3p, a.end5p), (b.end3p, B.end5p)), RA_UNSTACK_INTRA
+    desc, reverse_desc = "unstacking A-b with C-d stacked", "stacking A-b with C-d stacked"
+    assert (desc, reverse_desc) == get_reaction_desc(reaction_pair, reaction_attr, "with C-d stacked")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Unstack C-d:
+    reaction_pair, reaction_attr = ((C.end3p, c.end5p), (d.end3p, D.end5p)), RA_UNSTACK_INTRA
+    desc, reverse_desc = "unstacking C-d with A-b unstacked", "stacking C-d with A-b unstacked"
+    assert desc, reverse_desc == get_reaction_desc(reaction_pair, reaction_attr, "with A-b unstacked")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+    # Dehybridize d-d:
+    reaction_pair, reaction_attr = (d, D), RA_DEHYB_INTRA
+    desc, reverse_desc = "dehybridizing d-d to break loop", "hybridizing d-d to form loop"
+    assert desc, reverse_desc == get_reaction_desc(reaction_pair, reaction_attr, "to {} loop")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+
+    # print("\n\nReturning pre-maturely...\n\n")
+    # return
 
     # Now you can do all sorts of cross comparison with the cache...
+
+def test_circfb_01():
+    """
+    Design from ./examples/single_duplex/circfb_1.txt
+####          Circfb design (Circular FoldBack):        ####
+#                            E          A          T
+# 5' .---------------------------3'5'---------------------.
+#    |                 .----------------------.            |
+#    |                (                        )           |
+#    |                 \_____c___3'5'___b_____/            |
+#    |_____________________________________________________|
+#            D               C          B
+# Domains:
+# - A, a	CGACTGGAAAGCGGGC, GCCCGCTTTCCAGTCG
+# - T, TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT
+# - B, b	TGACCATGATTACGAA, TTCGTAATCATGGTCA
+# - C, c	TGGCGCCCAATACGCA, TGCGTATTGGGCGCCA
+# - D	TGATTTATAAGGGATTTTGCCGATTTCGGAAC
+# - E, h2b	GGCACGACAGGTTTCC, GGAAACCTGTCGTGCC
+
+    """
+    ## Case fourway_junction_1 reaction path 01:
+    a = Domain("a", seq="GCTA"*4)
+    A = Domain("A", seq="TAGC"*4)
+    T = Domain("T", seq="T"*20)
+    b = Domain("b", seq="CGTA"*4)
+    B = Domain("B", seq="TACG"*4)
+    c = Domain("c", seq="TA"*8)
+    C = Domain("C", seq="TA"*8)
+    # d = Domain("d", seq="GCTT"*4)
+    D = Domain("D", seq="AAGC"*4)
+    E = Domain("E", seq="GGCACGACAGGTTTCC")
+    e = Domain("e", seq="GGAAACCTGTCGTGCC")
+    # domain_pairs = # No need to specify domain_pairs; will use upper/lower pairing scheme if not given.
+
+    s1 = Strand("templ", [A, T, B, C, D, E])
+    s2 = Strand("splint", [b, a, e, c]) # Make sure domains are ordered 5'->3' !
+    # s3 = Strand("s3", [C, D])
+    # s4 = Strand("s4", [d, a])
+
+    # We use ComponentMgr because that has what we need to prepare the complex assembly:
+    mgr = ReactionMgr([s1, s2], params={}, volume=1e-12, init_reactions=True)
+    # Use a ReactionMgr if you want to use hybridize_and_process
+
+    reaction_pair, reaction_attr = (A, a), RA_HYB_INTER
+    reaction_pair = frozenset(reaction_pair) # I guess I'm still using frozensets
+    # reacted_pair, result = mgr.hybridize_and_process(reaction_pair, reaction_attr=reaction_attr)
+    result = react(reaction_pair, reaction_attr, None, mgr, loop_effects=None, update_reactions=False)
+    cmplx = result['new_complexes'][0]
+
+
+    # reaction_pair, reaction_attr = (b, B), RA_HYB_INTRA
+    # reaction_pair = frozenset(reaction_pair) # I guess I'm still using frozensets
+    # # reacted_pair, result = mgr.hybridize_and_process(reaction_pair, reaction_attr=reaction_attr)
+    # result = react(reaction_pair, reaction_attr, cmplx, mgr, loop_effects=None, update_reactions=False)
+    # assert cmplx == result['changed_complexes'][0]
+    #
+    #
+    # reaction_pair, reaction_attr = (c, C), RA_HYB_INTRA
+    # reaction_pair = frozenset(reaction_pair) # I guess I'm still using frozensets
+    # # reacted_pair, result = mgr.hybridize_and_process(reaction_pair, reaction_attr=reaction_attr)
+    # result = react(reaction_pair, reaction_attr, cmplx, mgr, loop_effects=None, update_reactions=False)
+    # assert cmplx == result['changed_complexes'][0]
+
+    loop_effects_cache = {}
+    reaction_activities = {}
+    desc_cstates = {}   # desc => cstate, reaction_pair, reaction_attr
+
+    def loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc=None):
+        """
+        Usage:
+            loop_and_check((domain_A, domain_a),
+                            RA_HYB_INTRA,
+                            "hybridize A-a to form loop",
+                            "dehybridize A-a to break loop")
+        # To debug:
+        pp reaction_pair, reaction_attr, desc, reverse_desc, activity, 1/activity, reaction_activities[desc], reaction_activities.get(reverse_desc)
+        pp reaction_pair, reaction_attr, desc, cstate, desc_cstates[desc], cstate_by_desc.get((cstate, reaction_pair, reaction_attr)), desc_cstates
+        """
+        print([str(v) for v in (reaction_pair, reaction_attr, desc, reverse_desc)])
+        assert desc.split()[0] == reaction_name_by_reaction_attr[reaction_attr]
+        rev_reaction_attr = ReactionAttrs(reaction_attr.reaction_type, not reaction_attr.is_forming, reaction_attr.is_intra)
+        assert reverse_desc.split()[0] == reaction_name_by_reaction_attr[rev_reaction_attr]
+        if reaction_attr.is_forming:
+            loop_effects = form_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+        else:
+            loop_effects = break_and_check(reaction_pair, reaction_attr, cmplx, mgr)
+        activity = loop_effects['total_loop_activity_change']
+        cstate_by_desc = {v: k for k, v in desc_cstates.items()}
+        cstate = cmplx.state_fingerprint()
+        if desc in loop_effects_cache:
+            # assert loop_effects_cache[desc] == tupleify(loop_effects)
+            assert desc_cstates[desc] == (cstate, reaction_pair, reaction_attr)
+            assert reaction_activities[desc] == activity  # exact or just "close"?
+        else:
+            loop_effects_cache[desc] = tupleify(loop_effects)
+            reaction_activities[desc] = activity
+            assert desc not in desc_cstates
+            desc_cstates[desc] = (cstate, reaction_pair, reaction_attr)
+        if reverse_desc:
+            if reverse_desc in reaction_activities:
+                assert isclose(reaction_activities[reverse_desc], 1/activity)
+            else:
+                print(reverse_desc, "not in reaction_activities")
+
+    # Hybridize B-b
+    reaction_pair, reaction_attr = (c, C), RA_HYB_INTRA
+    desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "to {} loop")
+    loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+
+
+
+    # Stack A-C:
+    # reaction_pair, reaction_attr = ((A.end3p, a.end5p), (C.end3p, c.end5p)), RA_UNSTACK_INTRA
+    # desc, reverse_desc = get_reaction_desc(reaction_pair, reaction_attr, "with b-d unstacked")
+    # loop_and_check(reaction_pair, reaction_attr, desc, reverse_desc)
+
+
+def test_03():
+    # Other reaction combinations that have yielded loop errors in the past...:
+    pass
 
 
 
@@ -661,6 +1027,9 @@ if __name__ == "__main__":
 
     ## LOOP ENERGY TESTS:
 
-    test_loop_energy_01_fourway()
+    # test_loop_energy_01_fourway()
+
+    test_circfb_01()
+
 
     print("\n\nAll ad-hoc test runs done!\n\n")

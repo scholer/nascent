@@ -200,6 +200,9 @@ class ComponentMgr(GraphManager):
         # Loop delegations are stored in Complex.
         # Activities and c_j caches, indexed by {d₁.F, d₂.F} or {(h1e3p.F, h2e5p.F), (h2e3p.F, h1e5p.F)}
         self.cache['intracomplex_activity'] = {}
+        self.cache['loop_formation_activities'] = {}
+        # 'loop_formation_activities' currently same as 'intracomplex_activity', but as some point we may want to
+        # have also e.g. steric overhang factors
 
         ## State-dependent hybridization energy cache
         # I think this was for hybridization that required e.g. bending or zippering...
@@ -1445,6 +1448,8 @@ class ComponentMgr(GraphManager):
             ##       (and increase activity if duplex ends are directly connected by backbone link)
             ## Perhaps just multiply the activity by e.g. 0.5 if the downstream domain is unhybridized.
             ## If the downstream domain IS hybridized, then stacking of it *IS* considered in availability.
+            # TODO: If you want to add steric overhang repulsion, you need to include this in your energy.
+            #
             if self.stacking_overhang_steric_factor:
                 # DomainEnds up/downstream
                 # We can just check if domain.partner is None - if the duplex ends are backbone connected,
@@ -1460,6 +1465,8 @@ class ComponentMgr(GraphManager):
             return self.cache['intracomplex_activity'][cache_key]
         # activity = super(ReactionMgr, self).intracomplex_activity(elem1, elem2, reaction_type)
         activity, loop_effects = self.loop_formation_effects(elem1, elem2, reaction_type)
+        assert activity == loop_effects['total_loop_activity_change']
+        self.cache['loop_formation_activities'][cache_key] = activity  # loop only, no extra effects..
         loop_effects = tupleify(loop_effects)
         # print("\nloop_formation_effects(%s, %s, %s) (cstate %s) returned:" %
         #       (elem1, elem2, reaction_type, d1.strand.complex._state_fingerprint))
@@ -1468,7 +1475,8 @@ class ComponentMgr(GraphManager):
         # print("Intracomplex activity %0.04f for %s+ reaction between %s and %s" % (
         #     activity, reaction_type, elem1, elem2))
         # reaction will always be forming and intra:
-        activity *= steric_overhang_factor
+        # activity *= steric_overhang_factor
+        #  TODO: Re-enable when you find the time to include steric factors (in energy sub-totals as well!)
         # If using steric overhang factor, then that must also affect the energy, that is, we would have
         # an energy contribution the overhangs which (1) stabilises hybridization and (2) are lost when stacking.
 

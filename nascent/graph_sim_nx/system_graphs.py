@@ -58,7 +58,14 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
      - However, using a MultiGraph would make delegation/undelegation MUCH easier, since we could
         use the original source delegator as key in MultiGraph.adj.
         Then we wouldn't have to spend as much time determining whether edges should be removed or not.
+
+    Pro MultiGraph: Loops will be easier to handle.
+     - Not having a multi-edged InterfaceGraph makes it slightly harder to deal with loops of just a few nodes:
+        These loops quickly turns degenerate when merging nodes.
+         For instance, loops consisting of just two nodes are effectively not a loop but just an edge.
+
     """
+    # TODO: Convert InterfaceGraph to a MultiGraph
 
     def merge(self, node1, node2):
         """

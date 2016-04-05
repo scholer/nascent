@@ -1821,6 +1821,7 @@ class ReactionMgr(ComponentMgr):
             assert all(end.end == "5p" for end in (h1end5p, h2end5p))  ## TODO: Remove assertions
             assert all(end.end == "3p" for end in (h1end3p, h2end3p))
             reacted_ifnodes = (h1end3p.ifnode.top_delegate(), h2end3p.ifnode.top_delegate())
+            # Edit: This gives the CURRENT top_ifnodes, it doesn't inform about which one was previously the top delegate.
             assert (reacted_ifnodes[0] == reacted_ifnodes[1]) == reaction_attr.is_forming
             if reaction_is_joining:
                 # reaction_spec_tuple is frozenset of tuples of DomainEnd fingerprints:
@@ -1878,13 +1879,14 @@ class ReactionMgr(ComponentMgr):
                     print("Error case, not implemented!")
                     pdb.set_trace()
                 cmplx_loop_effects_cache_key = (reacted_spec_pair, cmplx.loop_ensemble_fingerprint)
-                loop_effects = self.reaction_loop_effects[cmplx_loop_effects_cache_key]
+                loop_effects = dict(self.reaction_loop_effects[cmplx_loop_effects_cache_key])
                 print("\n- %s.ifnode_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
                 print("- %s.loopid_by_hash BEFORE effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
                 print("- %s.ifnode_loopids_index BEFORE loop formation: %s" % (cmplx, cmplx.ifnode_loopids_index))
                 # print("- %s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
                 print("- EFFECTUATING LOOP FORMATION using: %s" % (loop_effects,))
-                cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
+                # reacted_ifnodes calculated here is useless, we need the top_delegates *before* the reaction occured.
+                cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes=None, is_copy=True)
                 print("- %s.ifnode_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
                 print("- %s.loopid_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
                 print("- %s.ifnode_loopids_index AFTER loop formation: %s" % (cmplx, cmplx.ifnode_loopids_index))
@@ -1931,8 +1933,8 @@ class ReactionMgr(ComponentMgr):
             # pdb.set_trace()
             # loop_breakage_effects must be called AFTER performing the loop-breaking reaction,
             # but BEFORE resetting/asserting state change (retaining the old state's fingerprint)
-            loop_effects = self.loop_breakage_effects_cached(
-                elem1, elem2, reacted_spec_pair, reaction_attr, cmplx.loop_ensemble_fingerprint)
+            loop_effects = dict(self.loop_breakage_effects_cached(  # may return an immuatble, "tupleified" structure to prevent cache mutation.
+                elem1, elem2, reacted_spec_pair, reaction_attr, cmplx.loop_ensemble_fingerprint))
             # print("\nloop_breakage_effects_cached(%s, %s, %s,..,  %s) returned: %s" %
             #       (elem1, elem2, reaction_attr, cmplx.loop_ensemble_fingerprint, loop_effects))
             print("\n%s.ifnode_by_hash BEFORE effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
@@ -1941,7 +1943,7 @@ class ReactionMgr(ComponentMgr):
             # print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
 
             print("\nEffectuating loop breakage on %s using loop_effects directive: %s" % (cmplx, loop_effects,))
-            cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes)
+            cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes=None, is_copy=True)
             print("\n%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
             print("%s.ifnode_loopids_index AFTER effectuating loop breakage: %s" % (cmplx, cmplx.ifnode_loopids_index))
@@ -2107,6 +2109,11 @@ class ReactionMgr(ComponentMgr):
                     reverse_reaction_spec_pair = frozenset((elem1.state_fingerprint(), elem2.state_fingerprint()))
                 reverse_activity = self.intracomplex_activity(elem1, elem2, reaction_attr.reaction_type,
                                                               reverse_reaction_spec_pair)
+                # We are now actually able to calculate activities for "breaking" reactions.
+                # Note that reverse_activity = 1/forward_activity.
+                # Such that dS_loop_reverse = ln(reverse_activity) = -dS_loop_forward = -ln(forward_activity) = ln(1/forward_activity)
+                # <==> ln(reverse_activity) = ln(1/forward_activity), so: reverse_activity = 1/forward_activity
+                assert np.isclose(reverse_activity, 1/loop_effects['total_loop_activity_change'])
                 if reverse_activity <= 0:
                     print(("\n\nActivity for %s reaction between %s and %s is <= 0, reaction_attr %s"
                            "shape/loop energy is infinite; reaction should revert.\n\n") %
@@ -2132,6 +2139,8 @@ class ReactionMgr(ComponentMgr):
         ## and optionally also for individual contributions (hyb, stack, shape, volume)..
         cmplx_subtotals_before = np.zeros((4, 2), dtype=float) # always use np.zeros unless you explicitly initialize yourself.
         cmplx_subtotals_after = np.zeros((4, 2), dtype=float)
+        all_complexes = ((new_or_changed_complexes + reaction_result['obsolete_complexes']) if reaction_result['obsolete_complexes'] else new_or_changed_complexes)
+        cmplx_subtotals_before_lst = np.array([cmplx.energy_subtotals.copy() for cmplx in all_complexes])
         for cmplx in new_or_changed_complexes:
             ## TODO: This for-loop is pretty long, consider shortening it or moving code to dedicated methods.
             ## TODO: ^^ Perhaps just move energy updates to componentmgr.hybridize (etc) ?
@@ -2157,21 +2166,22 @@ class ReactionMgr(ComponentMgr):
             # Uh, source and target state was defined when looping over changed complexes to assert state changes.
             # If we are e.g. merging two complexes, then source_state will match src_state of the last complex
             # in changed_complexes.
-
         if reaction_result['obsolete_complexes']:
             for cmplx in reaction_result['obsolete_complexes']:
                 # Should be empty; released strands are available in 'free_strands'.
                 assert len(cmplx.strands) == 0
                 # self.state_counter is updated using asserted_target_states_list and reaction_spec_source_states_list
-            assert cmplx.energy_subtotals[I_VOLUME][I_DS] == 0
             cmplx_subtotals_before += cmplx.energy_subtotals
             cmplx.recalculate_complex_energy(self.volume_entropy)
+            assert cmplx.energy_subtotals[I_VOLUME][I_DS] == 0  # Should be zero AFTER subtotals re-calculation.
             cmplx_subtotals_after += cmplx.energy_subtotals
 
-        cmplx_subtotals_diff = cmplx_subtotals_after-cmplx_subtotals_before
+        cmplx_subtotals_after_lst = np.array([cmplx.energy_subtotals.copy() for cmplx in all_complexes])
+        cmplx_subtotals_diff_lst = cmplx_subtotals_after_lst - cmplx_subtotals_before_lst
+        cmplx_subtotals_diff = cmplx_subtotals_after - cmplx_subtotals_before
         reaction_dHdS = reaction_dHdS_changes.sum(axis=0)
-        print("cmplx_subtotals_after, cmplx_subtotals_before, cmplx_subtotals_diff, reaction_dHdS_changes:")
-        print(cmplx_subtotals_after, cmplx_subtotals_before, cmplx_subtotals_diff, reaction_dHdS_changes, sep="\n")
+        print("cmplx_subtotals_before, cmplx_subtotals_after, cmplx_subtotals_diff, reaction_dHdS_changes:")
+        print(cmplx_subtotals_before, cmplx_subtotals_after, cmplx_subtotals_diff, reaction_dHdS_changes, sep="\n")
         assert np.all(np.isclose(cmplx_subtotals_diff, reaction_dHdS_changes))
         assert np.all(np.isclose(cmplx_subtotals_diff.sum(axis=0), reaction_dHdS))
 
