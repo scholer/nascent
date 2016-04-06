@@ -36,10 +36,11 @@ Super-scripts:
     A ᵝ ᵞ ᵟ ᵠ ᵡ ᵦ ᵧ ᵨ ᵩ ᵪ ᵸ ᵎ ᵔ ᵕ ᵙ ᵜ.
     A ᶛ ᶜ ᶝ ᶞ ᶟ ᶠ ᶡ ᶢ ᶣ ᶤ ᶥ ᶦ ᶧ ᶨ ᶩ ᶪ ᶫ ᶬ ᶭ ᶮ ᶯ ᶰ ᶱ ᶲ ᶳ ᶴ ᶵ ᶶ ᶷ ᶸ ᶹ ᶺ ᶻ ᶼ ᶽ ᶾ ᶿ
     A ⁻¹
-More sub- and super-scripts:
- ˑ
-    ¯´·`_ʻ¸ˎʼʽʾʿˀˁˆˇˈˉˊˋˌˍˎˏːˑ˒˓˔˕˖˗˘˙˚˛˜˝˞˟ˠˡˢˣˤ ˥ ˦ ˧ ˨ ˩ ˪ ˫ ˬ˭ˮ˯˰˱˲˳˴˵˶˷˸˹˺˻˼ ˽ ˾ ˿ ̀  ́ ̂ ̃ ̄
-    ~ ˘ ˆ ˇ  ˈ ˉ ˊˋ ̃ ̄  ̅  ̆  ̇
+More sub- and super-scripts: (Note: Some are independent, some are combining)
+ Independent:
+   ˑ ¯´·`_ʻ¸ˎʼʽʾʿˀˁˆˇˈˉˊˋˌˍˎˏːˑ˒˓˔˕˖˗˘˙˚˛˜˝˞˟ˠˡˢˣˤ ˥ ˦ ˧ ˨ ˩ ˪ ˫ ˬ˭ˮ˯˰˱˲˳˴˵˶˷˸˹˺˻˼ ˽ ˾ ˿ ~ ˘ ˆ ˇ ˈ ˉ ˊˋ
+ Combining (on top of a space):
+    ̀  ́  ̂  ̃  ̄  ̃  ̄  ̅  ̆  ̇
     ̸
     ‒ – — ―  ‖ ‗
     ⁄ ⁞∟‾ ⌠∟∩∫≈≠≡≤≥⌂⌐⌠⌡─│┌ ┐ └ ┘├ ┤┬ ┴ ┼ ═ ║ ╒ ╓ ╔ ╕ ╖ ╗ ╘ ╙ ╚ ╛ ╜ ╝ ╞ ╢ ╣ ╤ ╥ ╦ ╧ ╨ ╩ ╪ ╫ ╬  ▀ ▬ ﴾﴿
@@ -59,6 +60,7 @@ Walls:
     ─⌂│┌┐└┘├┤┬┴┼═║╒╓╔╕╕╖╗╘╙╚╛╜╝╞╟╠╡╢╣╤╥╦╧╨╩╪╫╬ꜛꜜ﴾﴿ᴥᵜ
 
 Diacritics  (See https://en.wikipedia.org/wiki/Diacritic)
+ - Stand-alone diacriticts:
         ¸ˎ
         Overline: ‾  (character)  ~
         Overline: ̅.  (combining)  ̅-  ̃ ̄  ̃  ̄   ̃
@@ -66,7 +68,7 @@ Diacritics  (See https://en.wikipedia.org/wiki/Diacritic)
             Caron/wedge/inverted hat:   ˇ
         Combining characters:
             Caron (wedge/inverted hat): ◌̌
-
+ - Combining diacritics:
 
 To create diacritics (bar, hat, etc), use Word
     Enter base character, e.g. x, and a space: "x "

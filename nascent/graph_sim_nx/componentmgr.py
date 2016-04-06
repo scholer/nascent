@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
+##    Copyright 2015-2016 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
 ##    This file is part of Nascent.
 ##

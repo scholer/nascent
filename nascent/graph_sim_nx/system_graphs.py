@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-##    Copyright 2015 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
+##    Copyright 2015-2016 Rasmus Scholer Sorensen, rasmusscholer@gmail.com
 ##
 ##    This file is part of Nascent.
 ##
@@ -33,23 +33,566 @@ Module for representing system-level graphs (where each complex form it's own su
 from __future__ import absolute_import, print_function, division
 from collections import defaultdict
 import networkx as nx
+import pdb
+from pprint import pprint
 
 # Local imports:
 from .constants import (PHOSPHATEBACKBONE_INTERACTION, HYBRIDIZATION_INTERACTION, STACKING_INTERACTION)
 
 
 
-class InterfaceMultiGraph(nx.MultiGraph):  # Graph or MultiGraph?
+class InterfaceMultiGraph(nx.MultiGraph):
     """
-    Using a MultiGraph would make delegation/undelegation MUCH easier, since we could
-        use the original source delegator as key in MultiGraph.adj.
-        Then we wouldn't have to spend as much time determining whether edges should
-        be removed or not in undelegate and which graph should be used for representation.
-    """
-    pass
+    MultiGraph version of InterfaceGraph.
+    Using a MultiGraph make delegation/undelegation MUCH easier, since we can
+    use the original source delegator as key in MultiGraph.adj.
+    Then we don't have to spend as much time determining whether edges should
+    be removed or not in undelegate and which graph should be used for representation.
 
 
-class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
+    ## What edge key to use? ##
+
+    For domain long edges (connecting 5p of a domain to 3p of the same domain):
+    - Use 0 or "", since we want duplexed domain edges be represented as a single edge in the InterfaceGraph.
+    Edge key for backbone connections between the 3' of one domain (h1end3p) and the 5' domain of downstream domain (h1end5p):
+    - Originally I thought simply a tuple of (h1end3p, h1end5p) would suffice. However this would give edge degeneracies
+        for a palindromic duplex:   A---a hybridizing to A---a.
+    - So now i'm thinking keying by
+    - Obviously this is not cacheable, so for caching the edge key I'm thinking to use:
+        tuple((end.name, end.state_fingerprint()) for end in edge_key) if end else 0
+      Then if there is multiple edges from source to target ifnode (when recreating a loop path),
+       first check end.name part, and if that is still ambigious (RARE EVENT), then check the end.state_fingerprint() part.
+      Now, obviously that will require Complex to keep an up-to-date domainend_by_hash index, or figure out a way to
+      do a "minimal" update (i.e. predicting if the index will be needed). This is probably now something I want to
+      implement right *now*, but at least it's an option, so the solution should be future-proof.
+
+    Note that interface_graph is typically derived from ends5p3p_graph (MultiDiGraph), keyed by interaction type.
+
+
+    ## How does delegation work for MultiGraphs? ##
+
+    Stacking of a strands with two duplexes each to form a single double-helix:
+            0------1---2-------3     0---.           .----3     0---.  1        .---3
+                                          `.1---2---:                `.----2---:
+            4------5---6-------7     4----´ 5   6    `---7      4----´ 5   6    `---7
+        Aka:
+
+            A3----A5---B3-----B5     A3--.           .--B5     A3--.  A5       .--B5
+                                          `.A5--B3--:               `.----B3--:
+            a5----a3---b5-----b3     a5---´ a3  b5   `--b3     a5---´ a3  b5   `--b3
+        Where a3 was delegated to A5, b5 delegated to B3, and then A5 delegated to B3.
+        Delegation hierarchy/tree:      .- b5
+                                 B3 <-<ˊ
+                                       `·- A5 <-- a3
+
+    All nodes retains their delegtated edges even after delegation to a delegatee above. Thus
+    the a3.delegated_edges is a subset of A5.delegated_edges, A5.delegated_edges is a subset of B3.delegated_edges, etc:
+
+    Q: Should delegated_edges contain edge_keys?
+        (a) Yes: Delegated nodes (for each ifnode): {delegator: {key: {target: {edge_key: edge_attrs}}}}
+
+        where edge_key = (h1end3p, h1end5p) # i.e. 3p-to-5p
+
+
+    # The structure of delegated_nodes: #
+    Attention: While the structure of delegated_edges looks deceptively similar to MultiGraph.adj, the edge groups
+    are not the same dict objects. Modifying adj[delegator][target] will not modify the delegator.delegated_edges.
+    It may be nice to emphasize this difference by flattening the structure of delegated_edges to be
+    delegated_edges[delegator][(target, key)] rather than delegated_edges[delegator][target][key]
+
+        ifnode.delegated_edges = {
+            delegator1: {
+                target1: {key1: eattrs1},
+            }
+        }
+        b3.delegated_edges = {
+            'B3': {
+                'B5': {'': {}},
+                'A5': {('B3','A5'): {}}
+            },
+            'b5': {
+                'b3': {'': {}},
+                'a3': {('a3', 'b5'): {}}
+            },
+            'A5': {
+                'A3': {'': {}},
+                'B3': {('B3','A5'): {}}
+            },
+            'a3': {
+                'a5': {'': {}},
+                'b5': {('a3', 'b5'): {}}
+            }
+        }
+        b5.delegated_edges = {
+            'b5': {
+                'b3': {'': {}},
+                'a3': {('a3', 'b5'): {}}
+            },
+        }
+        A5.delegated_edges = {
+            'A5': {
+                'A3': {'': {}},
+                'B3': {('B3','A5'): {}}
+            },
+            'a3': {
+                'a5': {'': {}},
+                'b5': {('a3', 'b5'): {}}
+            }
+        }
+        a3.delegated_edges = {
+            'a3': {
+                'a5': {'': {}},
+                'b5': {('a3', 'b5'): {}}
+            }
+        }
+
+    Note that whether edges are a multi-edge dict, {key: eattr}, or just a single edge attr, makes little difference,
+    since we never overwrite anything in the delegatee.
+
+    """
+
+    def __init__(self, data=None, **attr):
+        # node attr key to increment to reflect the number of DomainEnd nodes represented by a the top_delegate ifnode:
+        self.node_delegation_size_key = 'size'
+        super().__init__(data, **attr)
+
+
+    def reset_ifnode_delegation_to_current_graph_representation(self):
+        """
+        Update all ifnode.delegated_edges to reflect the current state of the graph, that is:
+            ifnode.delegated_edges = {self: self.adj[self]}
+
+        """
+        print("Resetting ifnode delegation to:")
+        pprint(self.adj)
+        # Make sure you make COPIES of the edge groups, so we don't risk modifying the delegated edges in-place
+        # when updating graph.adj representation during delegate/undelegate()
+        for delegatee, target_edgegroups in self.adj.items():
+            delegatee.delegated_edges = {
+                delegatee: {
+                    target: {key: eattr for key, eattr in edge_group.items()}
+                    for target, edge_group in target_edgegroups.items()
+                }
+            }
+            print("%s.delegated_edges set to:" % delegatee, delegatee.delegated_edges)
+
+
+    def merge(self, node1, node2):
+        """
+        Merge representation of node1 and node2.
+        Returns the delegatee.
+        Mostly equivalent to calling self.delegate(node1, node2), but will also set node attributes e.g. size.
+        Synonyms: merge, fuse, join, unite, connect, link, collect, combine, collapse,
+        """
+        self.delegate(node1, node2)
+        try:
+            self.node[node2][self.node_delegation_size_key] += 1
+            self.node[node1][self.node_delegation_size_key] -= 1
+        except KeyError:
+            self.node[node2][self.node_delegation_size_key] = 2
+            self.node[node1][self.node_delegation_size_key] = 0
+        return node2
+
+
+    def split(self, node1, node2):
+        """
+        Undo collapse/merge of node1 and node2 by determining which node is delegator and which is delegatee,
+        and then calling undelegate(delegator, delegatee) accordingly.
+        Returns the delegatee.
+        Synonyms: split, part, separate, divide, disjoin, sever, slice, disunite
+        """
+        if node1.delegatee is None:
+            # Node1 does not have any delegatee, so it should itself be the top delegate:
+            delegator, delegatee = node2, node1
+        elif node2.delegatee is None:
+            # Node2 does not have any delegatee, so it should itself be the top delegate:
+            delegator, delegatee = node1, node2
+        elif node1.delegatee is node2:
+            # We might be exchanging the delegation of nodes that are already delegated. This should be OK, but isn't really supported.
+            delegator, delegatee = node1, node2
+            assert node2.delegatee is not node1
+        elif node2.delegatee is node1:
+            delegator, delegatee = node2, node1
+        else:
+            raise ValueError("Either node1 must be delegatee of node2 or node2 must be delegatee of node1.")
+        self.undelegate(delegator, delegatee)
+        self.node[delegator][self.node_delegation_size_key] += 1
+        self.node[delegatee][self.node_delegation_size_key] -= 1
+        return delegatee
+
+
+    def delegate(self, delegator, delegatee):
+        """
+        Delegate graph responsibility from delegator node to delegatee node.
+        Both nodes should be contained in this graph and both should be InterfaceNode instances.
+        This is a little different from InterfaceGraph.delegate since we have a MultiGraph:
+        - No longer any need to keep an "edge_count" edge attribute (we retain ALL edges... except domain edges..)
+        """
+        print("Delegating delegator %s to delegatee %s..." % (delegator, delegatee))
+        # Networkx API:
+        # Graph.edge[source][target] = edge_attr_dict
+        # MultiGraph.edge[source][target][key] = edge_attr # adj = {'src': {'tgt': {'key': {'eattr1': 0, 'eattr2': 1}}}}
+
+        ## 0. Make sure everything looks right:
+        assert delegator.delegatee is None
+        assert delegator not in delegatee.delegated_edges
+        # Make sure delegator and delegatee haven't been delegated edges from the same sub-delegator:
+        # assert len(set(delegator.delegated_edges.keys()) & set(delegatee.delegated_edges.keys())) == 0
+        assert delegatee.delegated_edges.keys().isdisjoint(delegator.delegated_edges.keys())
+
+
+        # 1a: set delegator's delegatee attribute:
+        delegator.delegatee = delegatee
+        ## 1b. Update delegatee.delegated_edges with entries from delegator.
+        # Keep delegator.delegated_edges intact.
+        delegatee.delegated_edges.update(delegator.delegated_edges)
+        # The above is actually updating self.adj[delegator] IN PLACE!
+        # Be very carefull when updating delegated_edges[delegator] vs adj[source] - they may be the same dict.
+
+
+        # Concern: How do we ensure that we don't modify the edge_groups in delegator.delegated_edges in-place?
+        # Maybe we should just flatten ifnode.delegated_edges[target][key] = eattr
+        # to delegated_edges[(target, key)] = eattr to avoid confusion?
+        # Edit: edge_groups in self.adj[source][target] are COPIES of the values in delegated_edges, so it shouldn't matter.
+
+        ## 2. Update graph representation:
+        ## 2a. Move all incoming edges from delegator to delegatee
+        for target, edges in self.adj[delegator].items():
+            # We could just do a self.adj[delegatee].update(edges), but...
+            if target not in self.adj[delegatee]: # We can move the full edge_group from delegator to delegatee..
+                assert delegatee not in self.adj[target]
+                self.adj[delegatee][target] = edges
+                self.adj[target][delegatee] = edges
+            else:
+                # We have to evaluate the move of each edge one by one, depending on whether an edge with same key is
+                # already present in adj[delegatee][target]
+                assert delegatee in self.adj[target]
+                for key, eattr in edges.items():
+                    if key not in self.adj[delegatee][target]:
+                        # print("Making new edge from delegatee %s to target %s" % (delegatee, target))
+                        self.adj[delegatee][target][key] = eattr
+                        self.adj[target][delegatee][key] = eattr
+                        if 'edge_count' not in self.adj[target][delegatee][key]:
+                            self.adj[target][delegatee][key]['edge_count'] = 1
+                            # Do you *know* that edge_count is 1??
+                            # If the edge already represents a "collapsed" representation of e.g. a duplex, edge_count
+                            # would be 2. Thus, we only set it to 1 if it isn't set yet.
+                    else:
+                        # We are merging two edges with the same key. This should be e.g. None or "" used by
+                        # domain-edges to explicitly get just a single edge between duplex ends.
+                        # We do not try to attempt to determine which edge is "best" since they should be equal.
+                        assert key in self.adj[target][delegatee]
+                        # print("delegatee %s existing target/edge: %s/%s" % (delegatee, target, self.adj[target][delegatee]))
+                        # assert eattr['len_contour'] == self.adj[delegatee][target]['len_contour']
+                        # If the above assertion fails, you probably have to make sure you select the shortest edge.
+                        # Thought: Could we update edge len_contour automatically? Overlapping edges (same src, tgt, key)
+                        # should only happen for duplex ends. When that happends, assign eattr['len_contour'] = eattr['ds_len'] or similar?
+                        try:
+                            self.adj[target][delegatee][key]['edge_count'] += 1
+                        except KeyError:
+                            self.adj[target][delegatee][key]['edge_count'] = 2
+            # Concern: Should we delete or just update? Is it safe to update the edge group?
+            # The edge group may have been moved fully to delegatee...
+            # In fact, how do we ensure that we don't modify the edge_groups in delegator.delegated_edges in-place?
+            del self.adj[target][delegator]
+        # 2b. Remove all outgoing edges from delegator:
+        self.adj[delegator] = {}
+
+
+
+
+    def undelegate(self, delegator, delegatee):
+        """
+        Reverse the effect of delegate.
+        That is, take all the edges that delegator has delegated to delegatee and transfer them back to delegator.
+
+        # Two approaches: - Using strategy (a)
+        #  (a) graph adj-based: Look at delegatee's current edge targets in graph.adj and determine if
+        #       ( i) there should be an edge from delegator to that target, and
+        #       (ii) if the edge from delegatee to target should still be in place.
+        #  (b) ifnode delegated_edges-based: Re-generate delegator edges from scratch.
+        #       For each original source-target edge in
+        #       delegator.delegated_edges = {source: {target: {}, ...}},
+        #       add an edge from delegator to the top-delegate for all targets.
+        #       (It should be ok to assume that delegator is now the top-delegatee for all sources, but check anyways.)
+        """
+        print("Undelegating delegator %s from delegatee %s..." % (delegator, delegatee))
+
+        ## 0. Make sure everything looks right from the start:
+        assert delegator.delegatee is delegatee # delegatee is indeed the ifnode that delegator has delegated to
+        assert delegator in delegatee.delegated_edges # delegatee knows that is is representing edges from delegator
+        assert len(self.adj[delegator]) == 0 # delegator should not currently have any edges
+
+        ## 1. Update delegatee.delegated_edges, removing all delegated entries now belonging to delegator again.
+        ## delegator.delegated_edges contains all edges that was delegated to delegator (incl itself) before they were redelegated to delegatee.
+        for k in delegator.delegated_edges:
+            # if an edge_group was delegated to delegator, then delegatee must have obtained it through delegator
+            del delegatee.delegated_edges[k]
+        # And reset delegator's delegatee attribute (marking that delegator no longer has a parent delegatee).
+        delegator.delegatee = None
+
+
+        assert all(source.top_delegate() is delegator for source in delegator.delegated_edges)  ## TODO: Remove check
+
+        ## 2. Update graph representation:
+        ## Things to be aware of:
+        ##  a) Targets in delegated_edges may not currently be the top_delegate; make sure when you create edges
+        ##      to delegator that they go to the top ifnode.
+
+        # Make a set of the edges that was reclaimed by delegator:
+        delegator_reclaimed_edges = {(target.top_delegate(), key)
+                                     # edgegroups_by_target = out_edges = {target1: {key1: {}, ..}, ..}
+                                     for source, edgegroups_by_target in delegator.delegated_edges.items()
+                                     for target, edge_group in edgegroups_by_target.items()
+                                     for key in edge_group}
+        # Determine which edges (target, key) should also still be in delegatee, i.e. when an edge from delegator
+        # has the same (target, key) as another of delegatee's edges.
+        remaining_delegatee_edges = {(target.top_delegate(), key)
+                                     for source, edgegroups_by_target in delegatee.delegated_edges.items()
+                                     for target, edge_group in edgegroups_by_target.items()
+                                     for key in edge_group}
+        # For MultiGraph strategy there should be NO overlap when we are naming the edges between domains:
+        # Edit: There should, for un-keyed edges, i.e. overlapping duplex edges:
+        overlapping_edges = delegator_reclaimed_edges & remaining_delegatee_edges
+        if len(overlapping_edges) > 0:
+            print("After undelegation, the following delegagtor target-key edges also remain valid for delegatee:",
+                  overlapping_edges)
+        # Edit: What about domain (long, traversing) edges? - target should differ...
+        # However, the original assertion may still be valid: checking targets and completely moving full sets
+        # of edges: {key1: eattrs2, key2: eattrs2}
+        remaining_delegatee_targets = {target.top_delegate()
+                                       for source, targets in delegatee.delegated_edges.items()
+                                       for target in targets}
+
+        # Structure with delegator's edges to top ifnodes: [target-top-ifnode][source aka self or sub-delegator] = eattr
+        # (Reversed order of target and source so we can do a quick "if delegator in delegator_targets[target]" below)
+        delegator_targets = defaultdict(dict)  # [target][source] = {key1: eattr1, key2: eattr2}
+        for source, targets in delegator.delegated_edges.items():
+            for target, edge_group in targets.items():
+                delegator_targets[target.top_delegate()][source] = edge_group
+
+        ## Approach 2a: Move or "copy" edges from self.adj
+        ## - using the current graph representation rather than edges in delegator.delegated_edges.
+        ## This avoids problems having to determine which edges in delegated_edges should actually be visible,
+        ## and may be slightly faster than approach 2b since in some cases we can just take the full edge_groups dict
+        ## and move it from delegatee to delegator.
+        # Strategy concern: Should you try to move whole (source, target) edge groups, or just take each edge one at a time?
+        # --> I'll first try to move complete edge groups and if I can't, then I'll consider each edge individually.
+        # Edge groups that should possibly be moved:
+        edge_groups = [(target, edge_group) for target, edge_group in self.adj[delegatee].items() if target in delegator_targets]
+        # print("undelegate delegator %s  from  delegatee %s" % (delegator, delegatee))
+        # print("delegator_targets:", delegator_targets)
+        # print("remaining_delegatee_targets:", remaining_delegatee_targets)
+        # print("Re-considering %s edges: [%s]", (delegatee, edges))
+        # Note: We need to support
+
+        # Concern: How do we ensure that we don't modify the edge_groups in delegator.delegated_edges in-place?
+        # We could "always copy edge_attrs only" and NOT try to modify edge_groups in place..
+        # But that requires self.adj[source][target] edge group to be a COPY of the edge group in delegated_edges.
+        # OK, so let's guarantee that.
+
+        for target, edge_group in edge_groups:
+            if target in remaining_delegatee_targets:
+                # We cannot simply move the edge_group dict from self.adj[delegatee][target] and assign it fully to delegator
+                # Instead, go over each edge (target, key) and either move it (if the edge is not in remaining_delegatee_edges
+                # or find another edge to use by looking at top ifnodes in delegator.delegated_edges (=delegator_targets).
+                print("Target %s still in remaining delegatee (%s) targets, moving individual edges (target, key)..." % (target, delegatee))
+                for key, eattr in edge_group.items():
+                    # This is basically the "for target, eattr in edges" loop in regular InterfaceGraph..
+                    # See if you can move eattr from delegatee to delegator:
+                    if (target, key) in remaining_delegatee_edges:
+                        # We cannot simply remove the eattr dict from self.adj[delegatee][target]
+                        # Find the best possible edge to represent (unusual, given that edges should have distinct keys even after delegation)
+                        if delegator in delegator_targets[target]:
+                            # If delegator is a legitimate source (and not a sub-delegator), then use the original delegator-to-target edge.
+                            other_eattr = delegator_targets[target][delegator][key]
+                        else:
+                            # pick a random eattr:
+                            other_eattr = next(eattr for egroup in delegator_targets[target].values() for eattr in egroup.values())
+                        print("(%s, %s) still in remaining_delegatee_edges, using other eattr created from delegated_edges: %s" % (target, key, other_eattr))
+                        #self.adj[delegator].setdefault(target, {})[key] = other_eattr
+                        # self.adj[target].setdefault(delegator, {})[key] = other_eattr
+                        # Make sure [delegator][target] and to use the same group_dict, not just equivalent:
+                        try:
+                            self.adj[delegator][target][key] = other_eattr
+                        except KeyError:
+                            new_group_dict = {}
+                            self.adj[delegator][target] = self.adj[target][delegator] = new_group_dict
+                            self.adj[target][delegator][key] = other_eattr
+                            assert other_eattr is self.adj[delegator][target][key]
+                        else:
+                            self.adj[target][delegator][key] = other_eattr
+                    else: # Move edge back from delegatee to delegator:
+                        print("Moving edge eattr to target %s from delegatee %s to delegator %s" % (target, delegatee, delegator))
+                        self.adj[delegator][target][key] = eattr
+                        assert eattr is self.adj[target][delegator][key]
+                        if self.adj[delegatee][target] is self.adj[target][delegatee]:
+                            # Deleting eattr from one edge_group should also delete it from the other as they are the same:
+                            del self.adj[delegatee][target][key]
+                            assert key not in self.adj[target][delegatee]
+                        else:
+                            print("\nWARNING: %s.adj[%s][%s] edge group dict differs from %s.adj[%s][%s] edge group dict!\n" % (delegatee, target, target, delegatee))
+                            del self.adj[delegatee][target][key]
+                            if target is not delegatee:
+                                # If the edge is a self-loop (target is delegatee) we would get a KeyError for removing twice:
+                                del self.adj[target][delegatee][key]
+            else:
+                # We can completely move the whole edge group in adj[delegatee][target] from delegatee to delegator:
+                # print("Moving edge to target %s from delegatee %s to delegator %s" % (target, delegatee, delegator))
+                self.adj[delegator][target] = edge_group
+                self.adj[target][delegator] = edge_group
+                # self.adj[target][delegator] = eattr
+                del self.adj[delegatee][target] # Do we delete edge_groups or just clear them?
+                # If the edges are self-loops (target is delegatee) we would get a KeyError for removing twice,
+                # so check that before deleting (or use
+                if target is not delegatee:
+                    del self.adj[target][delegatee]
+
+
+        # Alternative approach, revisited:
+        # First re-evaluate delegatee remaining nodes, deleting those that shouldn't still be there,
+        # then create new edges for delegator.
+
+        ## Approach 2b: Re-generate delegator edges from delegator.delegated_edges:
+        ## (This may be slightly simpler, especially when dealing with edge-groups in multi-graphs)
+        # for source, target_delegate, eattr in top_delegate_edges:
+        #     assert target_delegate in self.adj[delegatee]
+        #     # Remove edge to target_delegate from delegatee (or decrement edge_count)
+        #     self.adj[delegatee][target_delegate]['edge_count'] -= 1
+        #     if self.adj[delegatee][target_delegate]['edge_count'] > 0:
+        #         ## We should still have another edge between delegatee and target_delegate
+        #         ## edge_count, target_delegate not in remaining_delegatee_targets and
+        #         ## eattr is not self.adj[delegatee][target_delegate] should all be equivalent.
+        #         # > 0 because we have already subtracted 1.
+        #         assert target_delegate not in remaining_delegatee_targets
+        #         # eattr should not be for the edge between delegatee and target_delegate.
+        #         # If it is, then we would have to find another eattr dict to replace the one
+        #         # we are moving back to delegator.
+        #         assert eattr is not self.adj[delegatee][target_delegate]
+        #     else:
+        #         assert target_delegate in remaining_delegatee_targets
+        #         assert eattr is not self.adj[delegatee][target_delegate]
+        #         del self.adj[delegatee][target_delegate]
+        #
+        #     # Add edge from delegator to target_delegatee (or increment edge count)
+        #     if target_delegate in self.adj[delegator]:
+        #         self.adj[delegator][target_delegate]['edge_count'] += 1
+        #     else:
+        #         self.adj[delegator][target_delegate] = eattr
+        #         try:
+        #             assert self.adj[delegator][target_delegate]['edge_count'] == 1
+        #         except KeyError:
+        #             self.adj[delegator][target_delegate]['edge_count'] = 1
+
+    #
+    # def add_edges_from(self, ebunch, attr_dict=None, **attr):
+    #     """
+    #     Add edges as "native" edges between nodes.
+    #     """
+    #     ebunch = list(ebunch) # In case it is a generator...
+    #     print(locals())
+    #     pdb.set_trace()
+    #     super(InterfaceMultiGraph, self).add_edges_from(ebunch, attr_dict, edge_count=1, **attr)
+    #     #print("Updating IF nodes delegated edges for ebunch %s..." % (ebunch,))
+    #     for e in ebunch:
+    #         u, v = e[:2]
+    #         u.delegated_edges[u][v] = self.adj[u][v]
+    #         #print("%s.delegated_edges: %s" % (u, u.delegated_edges))
+    #         v.delegated_edges[v][u] = self.adj[v][u]
+    #         #print("%s.delegated_edges: %s" % (v, v.delegated_edges))
+    #
+    #
+    # def add_edge(self, u, v, key, attr_dict=None, **attr):
+    #     """
+    #     Add edges as "native" edges between nodes.
+    #     Note: This MAY cause big problems if you have already done delegations and you then add_edge(...)
+    #     (which will overwrite u,v.delegated_edges
+    #     """
+    #     print("Updating delegated edges for IF nodes  %s and %s..." % (u, v))
+    #     super(InterfaceGraph, self).add_edge(u, v, attr_dict, edge_count=1, **attr)
+    #     ## Q: How much do we want the "representation" eattrs to be tied to eattrs in delegated_edges?
+    #     u.delegated_edges[u][v] = self.adj[u][v]
+    #     v.delegated_edges[v][u] = self.adj[v][u]
+    #     # print("%s.delegated_edges: %s" % (u, u.delegated_edges))
+    #     # print("%s.delegated_edges: %s" % (v, v.delegated_edges))
+
+    def top_delegate(self, node):
+        """
+        Find the top delegate node. This graph-level method relies on in-graph node attribute 'delegatee',
+        i.e. instead of ifnode.delegatee object attribute, it calls self.node[node]['delegatee'] dict entry.
+        """
+        try:
+            node_delegatee = self.node[node]['delegatee']
+        except KeyError:
+            self.node[node]['delegatee'] = node_delegatee = None
+        if node_delegatee is None:
+            return self
+        else:
+            return self.top_delegate(node_delegatee)
+
+
+    def check_all_edges(self, do_raise=True):
+        """ Quickly check that self.adj[source][target] is equivalent to self.adj[target][source] """
+        all_ok = True
+        for source in self.adj:
+            for target in self.adj[source]:
+                try:
+                    assert source in self.adj[target]
+                except AssertionError as e:
+                    all_ok = False
+                    print("FAIL: source %s not in self.adj[%s] = %s" % (source, target, self.adj[target]))
+                    if do_raise:
+                        raise e
+                try:
+                    assert target in self.adj[source]
+                except AssertionError as e:
+                    all_ok = False
+                    print("FAIL: target %s not in self.adj[%s] = %s" % (target, source, self.adj[source]))
+                    if do_raise:
+                        raise e
+                try:
+                    assert self.adj[source][target] == self.adj[target][source]
+                except AssertionError as e:
+                    all_ok = False
+                    print("FAIL: self.adj[%s][%s] != self.adj[%s][%s]" % (source, target, target, source))
+                    if do_raise:
+                        raise e
+                except KeyError:
+                    pass
+        if all_ok:
+            print("All edged checked OK.")
+
+
+    def print_delegate_info(self):
+        """
+        print delegation information for this node.
+        """
+        for node in sorted(self.nodes()):
+            if node.delegatee is not None:
+                print(node, "--> edges delegated to", node.delegatee)
+                if len(self.adj[node]) > 0:
+                    print(" - WARNING: len(self.adj[%s]): %s" % (node, len(self.adj[node])))
+            else:
+                print(node, "<-- delegated edges (including self):")
+                for delegator, target_nodes in node.delegated_edges.items():
+                    print(" -%s%s: %s%s" % ("(" if delegator is node else " ", delegator,
+                                            target_nodes, ")" if delegator is node else " "))
+                    if node is not delegator:
+                        all_targets_from_all_sources = {v for u in self.adj for v in self.adj[u]}
+                        outgoing = len(self.adj[delegator]) > 0
+                        incoming_targets = any(delegator in self.adj[target] for target in target_nodes)
+                        incoming_all = delegator in all_targets_from_all_sources
+                        if outgoing or incoming_targets or incoming_all:
+                            #print("    - adj[%s] is empty: %s" % (delegator, ))
+                            print("    - WARNING: delegator %s has edges! " % (delegator, ))
+                            print("       - Outgoing edges:   ", self.adj[delegator])
+                            print("       - Incoming, targets:", not incoming_targets)
+                            print("       - Incoming, all:    ", not incoming_all)
+                            print("       -", outgoing, incoming_targets, incoming_all)
+
+
+
+class InterfaceGraph(nx.Graph):
     """
     Graph or MultiGraph?
      - Hybridization and stacking interaction edges in ends5p3p graph will always be
@@ -65,7 +608,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
          For instance, loops consisting of just two nodes are effectively not a loop but just an edge.
 
     """
-    # TODO: Convert InterfaceGraph to a MultiGraph
+    # TODO, WIP: Convert InterfaceGraph to a MultiGraph - Edit: I retain both
 
     def merge(self, node1, node2):
         """
@@ -197,6 +740,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
 
         ## 1. Update delegatee.delegated_edges, removing all delegated entries now belonging to delegator again.
         for k in delegator.delegated_edges:
+            # if an edge was delegated to delegator, then delegatee must have obtained it through delegator
             del delegatee.delegated_edges[k]
         # And reset delegator's delegatee attribute:
         delegator.delegatee = None
@@ -217,6 +761,8 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         #                       for target, eattr in targets.items()]
         # top_delegate_edges = sorted(top_delegate_edges, key=lambda tup: (tup[0] == delegator))
         # delegator_targets = {tup[1]: tup for tup in top_delegate_edges}
+        # Structure with delegator's edges to top ifnodes: [target-top-ifnode][source aka self or sub-delegator] = eattr
+        # (Reversed order of target and source so we can do a quick "if delegator in delegator_targets[target]" below)
         delegator_targets = defaultdict(dict)
         for source, targets in delegator.delegated_edges.items():
             for target, eattr in targets.items():
@@ -226,6 +772,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
                                        for target in targets}
 
         ## Approach 2a: Move or "copy" edges from self.adj:
+        ## (This may be slightly faster than approach 2b since in some cases we can remove the eattr dict from delegatee to delegator.
         edges = [(target, eattr) for target, eattr in self.adj[delegatee].items() if target in delegator_targets]
         # print("undelegate delegator %s  from  delegatee %s" % (delegator, delegatee))
         # print("delegator_targets:", delegator_targets)
@@ -233,17 +780,19 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         # print("Re-considering %s edges: [%s]", (delegatee, edges))
         for target, eattr in edges:
             if target in remaining_delegatee_targets:
+                # We cannot simply remove the eattr dict from self.adj[delegatee][target]
+                # Instead, find another eattr dict in delegator_targets and use that to update self.adj[delegator]
                 # print("Target %s still in remaining delegatee targets, making edge using other eattr..." % target)
-                # Make a new edge...
                 if delegator in delegator_targets[target]:
+                    # If delegator is a legitimate source (and not a sub-delegator), then use the original delegator-to-target edge.
                     new_eattr = delegator_targets[target][delegator]
                 else:
-                    # pick edge with highest edge_count?
+                    # No "original" delegator-to-target edge is available, all edges are adopted from sub-delegators;
+                    # Use edge with highest edge_count as representation in the graph:
                     new_eattr = max(delegator_targets[target].values(), key=lambda attr: attr.get('edge_count', 0))
                 self.adj[delegator][target] = new_eattr
                 self.adj[target][delegator] = new_eattr
-            else:
-                # Move edge back from delegatee to delegator:
+            else: # Move edge back from delegatee to delegator:
                 # print("Moving edge to target %s from delegatee %s to delegator %s" % (target, delegatee, delegator))
                 self.adj[delegator][target] = eattr
                 self.adj[target][delegator] = eattr
@@ -273,7 +822,7 @@ class InterfaceGraph(nx.Graph):  # Graph or MultiGraph?
         #         assert eattr is not self.adj[delegatee][target_delegate]
         #         del self.adj[delegatee][target_delegate]
         #
-        #     # Add edge from delegator to taget_delegatee (or increment edge count)
+        #     # Add edge from delegator to target_delegatee (or increment edge count)
         #     if target_delegate in self.adj[delegator]:
         #         self.adj[delegator][target_delegate]['edge_count'] += 1
         #     else:
@@ -406,12 +955,14 @@ class InterfaceNode(object):
 
     Old discussion: How should delegate_edges be ordered?  [Selected implementation: (a)]
     For instance, consider the graph
-        0------1---2-------3     0---.  1        .----3     0---.  1        .---3
-                                      `.5---2---:                `.----2---:
-        4------5---6-------7     4----´     6    `---7      4----´ 5   6    `---7
-    Where 5 was delegated to 1 and (1 and 6) was delegated to 2.
+        0------1---2-------3     0---.           .----3     0---.  1        .---3
+                                      `.1---2---:                `.----2---:
+        4------5---6-------7     4----´ 5   6    `---7      4----´ 5   6    `---7
+    Where 5 was delegated to 1, 6 delegated to 2, and then 1 delegated to 2.
     I.e from 5 we have a tree delegation branch: 5 --> 1 --> 2
-
+    While from 2 down we have the tree:      .- 6
+                                       2 <-<ˊ
+                                            `·- 1 <-- 5
     Considerations on the datastructure of delegated_edges, e.g. node 1 be w.r.t. node 5 (1-level merge):
      (a)    {5: {4: {}, 6: {}}, 1: {0: {}, 2: {}}}       - i.e. store the *original* {source: targets} edges.
      (b)    {1: {4: {}, 6: {}, 0: {}, 2: {}}}            - and then in node 1 have {5 => {4: {}, 6: {}}}
@@ -449,8 +1000,8 @@ class InterfaceNode(object):
         Node 3, 4, 7 are similar to node 0.
         As you can see, the content of an InterfaceNode's delegated_edges does not change when it is being delegated
         to another node. This makes it cheaper to "reverse" a node-merge.
-
     """
+
     def __init__(self, domain_end):
         self.domain_end = domain_end
         self.delegatee = None # If this node is represented by another node, this node is stored in this attribute.

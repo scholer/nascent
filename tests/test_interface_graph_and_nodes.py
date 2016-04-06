@@ -31,6 +31,7 @@ from pprint import pprint
 import pdb
 from collections import Counter
 import sys
+from pprint import pprint
 
 if "." not in sys.path:
     sys.path.insert(0, ".")  # Required to import nascent
@@ -40,13 +41,157 @@ from nascent.graph_sim_nx.graph_manager import GraphManager
 from nascent.graph_sim_nx.componentmgr import ComponentMgr
 from nascent.graph_sim_nx import graph_manager
 from nascent.graph_sim_nx.constants import STACKING_INTERACTION
+from nascent.graph_sim_nx.system_graphs import InterfaceMultiGraph, InterfaceGraph, InterfaceNode
 
 
+class DomainEndMock(object):
+    """
+    """
+    def __init__(self, name):
+        self.name = str(name)
+
+    def __str__(self):
+        return str(self.name)
+
+    def state_fingerprint(self):
+        return self.name
+
+
+def check_multi_graph(g):
+    for source in g.adj:
+        assert source in g.node
+        assert isinstance(g.adj[source], dict)
+        for target in g.adj[source]:
+            assert target in g.node
+            assert isinstance(g.adj[source][target], dict)
+            assert source in g.adj[target]
+            assert isinstance(g.adj[target][source], dict)
+            assert g.adj[target][source] is g.adj[source][target]
+            for key in g.adj[source][target]:
+                assert isinstance(g.adj[source][target][key], dict)
+
+
+
+def test_interfacemultigraph_merge_split_1():
+    """
+    Test basic InterfaceMultiGraph merge(...) and split(...) functionality
+
+    Test case 1, from InterfaceNode docstring:
+    For instance, consider the graph
+        0------1---2-------3     0---.           .----3     0---.  1        .---3
+                                      `.1---2---:                `.----2---:
+        4------5---6-------7     4----´ 5   6    `---7      4----´ 5   6    `---7
+    Where 5 was delegated to 1, 6 delegated to 2, and then 1 delegated to 2.
+    I.e from 5 we have a tree delegation branch: 5 --> 1 --> 2
+    While from 2 down we have the tree:      .- 6
+                                       2 <-<ˊ
+                                            `·- 1 <-- 5
+
+    """
+    ## Setup: ##
+    g = InterfaceMultiGraph()
+    node = ifnodes = [InterfaceNode(DomainEndMock(name)) for name in range(8)]
+    g.add_path(ifnodes[:4])
+    g.add_path(ifnodes[5:])
+
+    print("Graph.adj:")
+    pprint(g.adj)
+
+    # I no longer overwrite native Networkx.MultiGraph methods (add_edge and friends).
+    # Instead, once you have added what you need, invoke this to set ifnode.delegated_edges to match graph:
+    g.reset_ifnode_delegation_to_current_graph_representation()
+
+    check_multi_graph(g)
+
+
+    # Merge 5->1, 6->2, then 2->1:
+    for delegator, delegatee in [(ifnodes[i], ifnodes[j]) for i, j in [(5, 1), (6, 2), (2, 1)]]:
+
+        print("\nMerging %s, %s" % (delegator, delegatee))
+        g.merge(delegator, delegatee) #
+
+        assert delegator.delegatee is delegatee
+        assert delegator.top_delegate() is delegatee
+        assert delegatee.delegatee is None
+        assert delegatee.top_delegate() is delegatee
+
+        # An ifnode should have itself in self.delegated_edges: (ALWAYS, regardless of delegation)
+        assert delegator in delegator.delegated_edges
+        assert delegatee in delegatee.delegated_edges
+
+        # Delegation of edges from delegator to delegatee:
+        assert delegator in delegatee.delegated_edges
+        assert delegatee not in delegator.delegated_edges
+
+        check_multi_graph(g)
+        print(" - %s, %s was merged OK!\n" % (delegator, delegatee))
+
+
+
+    print("\n\ng.adj after all merges:")
+    pprint(g.adj)
+    print("(ifnode, ifnode.delegated_edges) for ifnode in ifnodes after all merges:")
+    pprint(sorted([(ifnode, ifnode.delegated_edges) for ifnode in ifnodes]))
+
+
+    # Split 1<-2, 1<-5, 2<-6:
+    # (delegator vs delegatee should be determined automatically for split - unlike for undelegate() )
+    for delegator, delegatee in [(ifnodes[i], ifnodes[j]) for i, j in reversed([(5, 1), (6, 2), (2, 1)])]:
+        print("\nSplitting %s, %s" % (delegator, delegatee))
+
+        g.split(delegator, delegatee) #
+
+        assert delegator.delegatee is None
+        assert delegator.top_delegate() is delegator
+        assert delegatee.delegatee is None
+        assert delegatee.top_delegate() is delegatee
+
+        # An ifnode should have itself in self.delegated_edges: (ALWAYS, regardless of delegation)
+        assert delegator in delegator.delegated_edges
+        assert delegatee in delegatee.delegated_edges
+
+        # Delegation of edges from delegator to delegatee:
+        assert delegator not in delegatee.delegated_edges
+        assert delegatee not in delegator.delegated_edges
+
+        check_multi_graph(g)
+        print(" - %s, %s was split OK!\n" % (delegator, delegatee))
+
+    print("\n\ng.adj after all splits:")
+    pprint(g.adj)
+    print("ifnode.delegated_edges after all splits:")
+    pprint(sorted([(ifnode, ifnode.delegated_edges) for ifnode in ifnodes]))
+
+
+
+def test_interfacemultigraph_delegate_undelegate_1():
+    """
+    Test basic InterfaceMultiGraph delegate(...) and undelegate(...) functionality
+    """
+    pass
+
+
+
+
+
+def test_interfacegraph_merge_split_1():
+    """
+    Test basic InterfaceGraph merge(...) and split(...) functionality
+    """
+    pass
+
+
+def test_interfacegraph_delegate_undelegate_1():
+    """
+    Test basic InterfaceGraph delegate(...) and undelegate(...) functionality
+    """
+    pass
 
 
 def test_ifnode_state_fingerprint_1():
     """
     Test to ensure that ifnode state fingerprints are invariant between instances.
+    Using ComponentMgr to provide setup. I know this is not good unit testing. - So consider it integration testing :)
     """
     e1 = Domain("e1", seq="GCTA"*4)   # 16 bp
     E1 = Domain("E1", seq="TAGC"*4)   # 16 bp
@@ -213,6 +358,8 @@ def test_ifnode_state_fingerprint_1():
 
 
 
+
+
 def test_intracomplex_activity_1():
     """
     ### Case 2(a):   ###
@@ -268,10 +415,18 @@ def test_intracomplex_activity_1():
     cmplx.rebuild_ifnode_loopids_index()
 
 
+
+
+
+
+
 if __name__ == "__main__":
-    print("NEW TEST STARTED\n"*30)
+    print("NEW AD-HOC TEST-RUN STARTED\n"*10)
 
 
-    test_ifnode_state_fingerprint_1()
+    # test_ifnode_state_fingerprint_1()
 
+    test_interfacemultigraph_merge_split_1()
+
+    print("\n\nAD-HOC TEST-RUN COMPLETE!\n"*10)
 
