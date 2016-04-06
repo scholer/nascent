@@ -92,6 +92,7 @@ from .utils import sequential_number_generator
 from .reaction_graph import ReactionGraph
 # from nascent.graph_sim_nx.reaction_utils import reaction_attr_to_str, reaction_spec_pair_to_str, reaction_to_str
 from .reaction_utils import get_reaction_spec_pair, reaction_to_str, reaction_spec_pair_to_str
+from .looptracking import effectuate_loop_changes
 
 # Constants and module-level singletons:
 reaction_graph_sequantial_number_generator = sequential_number_generator()  # Used for reaction_graph filenames.
@@ -1787,10 +1788,11 @@ class ReactionMgr(ComponentMgr):
         elem1, elem2 = reacted_pair # a, b = frozenset((a, b)) assignment is OK no need for tuple cast
         if reaction_attr.reaction_type is HYBRIDIZATION_INTERACTION:
             domain1, domain2 = elem1, elem2
-            reacted_ifnodes = (domain1.end5p.ifnode.top_delegate(), domain1.end3p.ifnode.top_delegate(),
-                               domain2.end5p.ifnode.top_delegate(), domain2.end3p.ifnode.top_delegate())
-            assert (reacted_ifnodes[0] == reacted_ifnodes[3]) == reaction_attr.is_forming
-            assert (reacted_ifnodes[1] == reacted_ifnodes[2]) == reaction_attr.is_forming
+            reacted_ifnodes = (domain1.end5p.ifnode, domain1.end3p.ifnode,
+                               domain2.end5p.ifnode, domain2.end3p.ifnode)
+            top_ifnodes = tuple(ifnode.top_delegate() for ifnode in reacted_ifnodes)
+            assert (top_ifnodes[0] == top_ifnodes[3]) == reaction_attr.is_forming
+            assert (top_ifnodes[1] == top_ifnodes[2]) == reaction_attr.is_forming
             # domain state fingerprint = (dspecie, self.partner is not None, c_state, in_complex_identifier)
             d1fp, d2fp = reaction_spec_tuple
             c1state, c2state = d1fp[2], d2fp[2]
@@ -1820,9 +1822,10 @@ class ReactionMgr(ComponentMgr):
             (h1end3p, h2end5p), (h2end3p, h1end5p) = tuple(reacted_pair)
             assert all(end.end == "5p" for end in (h1end5p, h2end5p))  ## TODO: Remove assertions
             assert all(end.end == "3p" for end in (h1end3p, h2end3p))
-            reacted_ifnodes = (h1end3p.ifnode.top_delegate(), h2end3p.ifnode.top_delegate())
+            reacted_ifnodes = (h1end3p.ifnode, h2end3p.ifnode)
+            top_ifnodes = tuple(ifnode.top_delegate() for ifnode in reacted_ifnodes)
             # Edit: This gives the CURRENT top_ifnodes, it doesn't inform about which one was previously the top delegate.
-            assert (reacted_ifnodes[0] == reacted_ifnodes[1]) == reaction_attr.is_forming
+            assert (top_ifnodes[0] == top_ifnodes[1]) == reaction_attr.is_forming
             if reaction_is_joining:
                 # reaction_spec_tuple is frozenset of tuples of DomainEnd fingerprints:
                 # DomainEnd fingerprints: (self.domain.state_fingerprint(), self.end, self.stack_partner is not None)
@@ -1835,9 +1838,10 @@ class ReactionMgr(ComponentMgr):
             #
         elif reaction_attr.reaction_type is PHOSPHATEBACKBONE_INTERACTION:
             h1end3p, h1end5p = elem1, elem2
-            reacted_ifnodes = (h1end3p.ifnode.top_delegate(), h1end5p.ifnode.top_delegate())
+            reacted_ifnodes = (h1end3p.ifnode, h1end5p.ifnode)
+            top_ifnodes = tuple(ifnode.top_delegate() for ifnode in reacted_ifnodes)
             # Backbone connections alone does NOT merge InterfaceNodes, but they could be stacked...
-            # assert (reacted_ifnodes[0] != reacted_ifnodes[1]) == (h1end3p.stack_partner is h1end5p)
+            # assert (top_ifnodes[0] != top_ifnodes[1]) == (h1end3p.stack_partner is h1end5p)
             assert h1end3p.end == "3p" and h1end5p.end == "5p"  ## TODO: Remove assertion
             reaction_spec_source_states = {d_fp[2] for d_fp in reaction_spec_tuple} # cstate or strand.name
         else:
@@ -1885,8 +1889,7 @@ class ReactionMgr(ComponentMgr):
                 print("- %s.ifnode_loopids_index BEFORE loop formation: %s" % (cmplx, cmplx.ifnode_loopids_index))
                 # print("- %s.loops BEFORE loop formation: %s" % (cmplx, cmplx.loops))
                 print("- EFFECTUATING LOOP FORMATION using: %s" % (loop_effects,))
-                # reacted_ifnodes calculated here is useless, we need the top_delegates *before* the reaction occured.
-                cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes=None, is_copy=True)
+                effectuate_loop_changes(cmplx, loop_effects, reaction_attr.is_forming, reacted_ifnodes=reacted_ifnodes, is_copy=True)
                 print("- %s.ifnode_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.ifnode_by_hash))
                 print("- %s.loopid_by_hash AFTER effectuating loop formation changes: %s" % (cmplx, cmplx.loopid_by_hash))
                 print("- %s.ifnode_loopids_index AFTER loop formation: %s" % (cmplx, cmplx.ifnode_loopids_index))
@@ -1943,7 +1946,7 @@ class ReactionMgr(ComponentMgr):
             # print("%s.loops BEFORE loop breakage: %s" % (cmplx, cmplx.loops))
 
             print("\nEffectuating loop breakage on %s using loop_effects directive: %s" % (cmplx, loop_effects,))
-            cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming, reacted_ifnodes=None, is_copy=True)
+            effectuate_loop_changes(cmplx, loop_effects, reaction_attr.is_forming, reacted_ifnodes=reacted_ifnodes, is_copy=True)
             print("\n%s.ifnode_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.ifnode_by_hash))
             print("%s.loopid_by_hash AFTER effectuating loop breakage changes: %s" % (cmplx, cmplx.loopid_by_hash))
             print("%s.ifnode_loopids_index AFTER effectuating loop breakage: %s" % (cmplx, cmplx.ifnode_loopids_index))

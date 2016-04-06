@@ -44,7 +44,7 @@ from nascent.graph_sim_nx.constants import STACKING_INTERACTION, HYBRIDIZATION_I
 from nascent.graph_sim_nx.constants import ReactionAttrs, RA_HYB_INTRA, RA_HYB_INTER, RA_DEHYB_INTRA, RA_STACK_INTRA
 from nascent.graph_sim_nx.constants import I_DH, I_DS, I_HYBRIDIZATION, I_STACKING, I_LOOP, I_VOLUME
 from nascent.graph_sim_nx.utils import prod, WC, rcompl, AttrDict, tupleify
-
+from nascent.graph_sim_nx.looptracking import effectuate_loop_changes
 
 
 
@@ -239,7 +239,7 @@ def form_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reactions=Fa
     assert cmplx == result['changed_complexes'][0]
 
     # 3. effectuate_loop_changes:
-    cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming) # returns (0, None) if reaction is impossible.
+    effectuate_loop_changes(cmplx, loop_effects, reaction_attr.is_forming) # returns (0, None) if reaction is impossible.
 
     # 4. assert_state_change:
     reaction_spec_pair = get_reaction_spec_pair(elem1, elem2, reaction_attr)
@@ -321,7 +321,7 @@ def break_and_check(reaction_pair, reaction_attr, cmplx, mgr, update_reactions=F
         pdb.set_trace()
 
     # 3. effectuate_loop_changes:
-    cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming) # returns (0, None) if reaction is impossible.
+    effectuate_loop_changes(cmplx, loop_effects, reaction_attr.is_forming) # returns (0, None) if reaction is impossible.
 
     ## 3b: Calculate reaction energy:
     assert isclose(loop_effects['total_loop_activity_change'], (
@@ -392,7 +392,7 @@ def react(reaction_pair, reaction_attr, cmplx, mgr, loop_effects=None, update_re
 
     # 3. Effectuate loop changes (if required) - must be done BEFORE asserting state changes..
     if loop_effects:
-        cmplx.effectuate_loop_changes(loop_effects, reaction_attr.is_forming)
+        effectuate_loop_changes(cmplx, loop_effects, reaction_attr.is_forming)
 
     # 4. assert_state_change:
     reaction_spec_pair = get_reaction_spec_pair(elem1, elem2, reaction_attr)

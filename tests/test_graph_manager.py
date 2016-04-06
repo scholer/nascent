@@ -46,6 +46,7 @@ from nascent.graph_sim_nx.graph_manager import GraphManager
 from nascent.graph_sim_nx.componentmgr import ComponentMgr
 from nascent.graph_sim_nx import graph_manager
 from nascent.graph_sim_nx.constants import STACKING_INTERACTION, HYBRIDIZATION_INTERACTION
+from nascent.graph_sim_nx.looptracking import effectuate_loop_changes
 
 
 WC = dict(zip("ATGC", "TACG"))
@@ -263,7 +264,8 @@ def test_calculate_loop_activity_3():
     alt_stack_loop1_activity = mgr.calculate_loop_activity(alt_stack_loop1_path, simulate_reaction=STACKING_INTERACTION)
     print("alt_stack_loop1_activity_before:", alt_stack_loop1_activity_before)
     print("alt_stack_loop1_activity:", alt_stack_loop1_activity)
-    assert alt_stack_loop1_activity_before > alt_stack_loop1_activity == 0
+    assert alt_stack_loop1_activity_before > 0
+    assert alt_stack_loop1_activity == 0
 
     # The other loop that only consists of t2:
     alt_stack_loop2 = (E1.end3p, t2.end5p, t2.end3p, E2.end5p)
@@ -680,7 +682,7 @@ def test_loop_formation_effects_02():
                 print(" - result:", res)
                 print(" - Applying loop_effects:", effects)
                 assert cmplx == res['changed_complexes'][0]
-                cmplx.effectuate_loop_changes(effects, is_forming=True)
+                effectuate_loop_changes(cmplx, effects, is_forming=True)
             cmplx.reset_and_recalculate()
     # h1end3p, h2end5p, h2end3p, h1end5p   aka   dh1end3p, dh1end5p, dh2end3p, dh2end5p
     for arm in "A":
@@ -693,7 +695,7 @@ def test_loop_formation_effects_02():
             activity, effects = mgr.loop_formation_effects(ends[:2], ends[2:], reaction_type=STACKING_INTERACTION) # No loops registered yet
             res = mgr.stack(*ends)
             assert cmplx == res['changed_complexes'][0]
-            cmplx.effectuate_loop_changes(effects, is_forming=True)
+            effectuate_loop_changes(cmplx, effects, is_forming=True)
             cmplx.reset_and_recalculate()
     for arm in "B":
         for i in range(3):
@@ -703,7 +705,7 @@ def test_loop_formation_effects_02():
             activity, effects = mgr.loop_formation_effects(ends[:2], ends[2:], reaction_type=STACKING_INTERACTION) # No loops registered yet
             res = mgr.stack(*ends)
             assert cmplx == res['changed_complexes'][0]
-            cmplx.effectuate_loop_changes(effects, is_forming=True)
+            effectuate_loop_changes(cmplx, effects, is_forming=True)
             cmplx.reset_and_recalculate()
 
     # cmplx = res['changed_complexes'][0]
@@ -782,13 +784,13 @@ def test_loop_formation_effects_02():
     print(cmplx.ifnode_by_hash)
 
     # Try to effctuate loop_effects:
-    cmplx.effectuate_loop_changes(loop_effects, is_forming=True)
+    effectuate_loop_changes(cmplx, loop_effects, is_forming=True)
 
     # Try the reverse reaction:
     loop_effects = mgr.loop_breakage_effects(dh1, dh2, reaction_type=STACKING_INTERACTION)
 
     # Try to effctuate reverse loop_effects:
-    cmplx.effectuate_loop_changes(loop_effects, is_forming=False)
+    effectuate_loop_changes(cmplx, loop_effects, is_forming=False)
 
     # Check if loop_path hashes are the same before and after:
     loop_hashes_after = [cmplx.calculate_loop_hash_slow(loop_path) for loop_path in loop_paths]

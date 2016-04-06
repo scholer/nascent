@@ -68,6 +68,26 @@ def touch(filepath):
         os.utime(filepath)
 
 
+def unique_gen(sequence):
+    """ Return a generator with unique elements. """
+    seen = set()
+    for elem in sequence:
+        if elem not in seen:
+            yield elem
+            seen.add(elem)
+
+def unique_list(sequence):
+    """ Return a list with unique elements. """
+    seen = set()
+    res = []
+    for elem in sequence:
+        if elem not in seen:
+            res.append(elem)
+            seen.add(elem)
+    return res
+
+
+
 def find_unique_fn(filename):
     if not os.path.exists(filename):
         return filename
