@@ -574,7 +574,7 @@ class Complex(nx.MultiDiGraph):
             # removed_volume_energy[strand] = self.volume_energies[strand]
             # del self.volume_energies[strand]
         # Edit: A complex cannot know the volume energy in general, but it can guess using:
-        self.volume_entropy = self.volume_entropy*((len(self.strands)-len(strands)-1)/(len(self.strands)-1))
+        # self.volume_entropy = self.volume_entropy*((len(self.strands)-len(strands)-1)/(len(self.strands)-1))
         if not isinstance(strands, set):
             strands = set(strands)
         self.strands -= strands

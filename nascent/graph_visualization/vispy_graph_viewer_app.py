@@ -124,7 +124,7 @@ class GraphViewer():
                                   size=(1400, 1000), show=True)
         self.main_view = self.canvas.central_widget.add_view()
         self.scene = self.main_view.scene
-        self.main_view.bgcolor = config.get('bgcolor', '#efefef')
+        self.main_view.bgcolor = config.get('scene_bgcolor', '#efefef')
         camera_type = config.get('camera', 'turntable')
         self.main_view.camera = camera_type
         # 'arcball, 'turntable', 'panzoom', 'fly',
@@ -333,7 +333,7 @@ class GraphViewer():
 
 
         ### VISUAL ENVIRONMENT: ###
-        self.scene_draw_ground = True
+        self.scene_draw_ground = config.get('scene_draw_ground', False)
         self.scene_ground_obj = None
         if self.scene_draw_ground:
             self.draw_ground()
@@ -403,7 +403,7 @@ class GraphViewer():
 
 
     def draw_ground(self):
-        """ Draw a ground underneath the graph. """
+        """ Draw a ground/floor underneath the graph. """
         size = self.config.get('scene_ground_size', (10, 14, 0.01))
         color = self.config.get('scene_ground_color', 'grey')
         scale = self.config.get('scene_ground_scale')

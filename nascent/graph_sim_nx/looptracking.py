@@ -72,7 +72,10 @@ import itertools
 from itertools import groupby
 from operator import itemgetter
 import networkx as nx
-from networkx.algorithms.shortest_paths import shortest_path
+# from networkx.algorithms.shortest_paths import shortest_path
+from networkx import single_source_dijkstra, dijkstra_path
+# This is actually the shortest path function that we are always using
+# shortest_path = dijkstra_path # defaults to 'weight' as edge length
 import pdb
 import math
 from math import log as ln
@@ -101,7 +104,25 @@ SEGMENT_STIFFNESS, SEGMENT_LENGTHS, SEGMENT_CONTOUR_LENGTH, SEGMENT_LENGTH_SQUAR
 loopid_sequential_number_generator = sequential_number_generator()
 
 
+def shortest_path(interface_graph, source, target, weight='len_contour'):
+    return dijkstra_path(interface_graph, source, target, weight)
+    # dijkstra_path calculates length to all nodes until target is found.
+    # return single_source_dijkstra(interface_graph, source, target, 'len_contour')
+    # single_source_dijkstra returns a length and paths dict with lengths from source to [node]
+    # perhaps check single_source_dijkstra and _dijkstra to see if anyting can be optimized
 
+
+def shortest_multigraph_path_edges(interface_graph, source, target, weight='len_contour'):
+    """
+    Return a tuple of (path, edges) where path is the shortest path between source and target,
+    as a list of N nodes: [source, node1, node2, node3, ..., target]
+    and edges is a list of N-1 edges connecting each pair of nodes in path, such that:
+        [list of (src, tgt, key) = zip(path, path[1:], edges)]
+    """
+    path = dijkstra_path(interface_graph, source, target, weight)
+    edges = [min([(eattr[weight], key) for key, eattr in interface_graph[n1][n2]])
+             for n1, n2 in zip(path, path[1:])]
+    return path, edges
 
 
 
@@ -495,10 +516,16 @@ def interfaces_shortest_path(interface_graph, ifnode1, ifnode2):
 
 
 
-
-def group_interfaces_path_by_stiffness(interface_graph, path):
+def group_interfaces_path_by_stiffness(interface_graph, path, edgekeys):
     """
-    Returns an iterator of structural elements based on a interface-level path (list of InterfaceGraph nodes),
+    Args:
+        interface_graph: A InterfaceMultiGraph instance.
+        path:       A connected path given as a list of nodes: [node1, node2, ...]
+                    Note that for loops, path should generally start and end on the same node.
+                    The path is not automatically cyclized.
+        edgekeys: A list of edge_keys for each edge in the path, i.e. edges between (node1, node2), (node2, node3), ...
+
+    Returns: an iterator of structural elements based on a interface-level path (list of InterfaceGraph nodes),
     where neighboring edges with the same stiffness has been grouped:
     path_edges = [(stiffness, [(length, length_sq, stiffness, source, target), ...]),
                   (stiffness, [(length, length_sq, stiffness, source, target), ...]),
@@ -518,8 +545,8 @@ def group_interfaces_path_by_stiffness(interface_graph, path):
     ## First create a generator of (length, length_sq, stiffness, source, target)
     ## Then use itertools.groupby to group elements by stiffness
     ## https://docs.python.org/3/library/itertools.html#itertools.groupby
-    path_source_target_eattr = ((source, target, interface_graph[source][target])
-                                for source, target in zip(path, path[1:]))
+    path_source_target_eattr = ((source, target, interface_graph[source][target][key])
+                                for source, target, key in zip(path, path[1:], edgekeys))
     # We really should have all three lengths: len_contour, dist_ee_nm, and dist_ee_sq.
     path_tuples = ((edge_attrs['len_contour'], edge_attrs['dist_ee_sq'], edge_attrs['stiffness'], source, target)
                    for source, target, edge_attrs in path_source_target_eattr)
@@ -530,7 +557,7 @@ def group_interfaces_path_by_stiffness(interface_graph, path):
 def interfaces_path_segments(interface_graph, path):
     """
     Arguments:
-        :path:  A list of ifnodes describing the path.
+        path:  A list of ifnodes describing the path.
     Return a list of (stiffness, [length, sum_length_squared]) tuples
     where each tuple represents a path segment with the same stiffness.
     This basically reduces the path to its constituent parts, which are usually all
@@ -1174,7 +1201,7 @@ def loop_breakage_effects(interface_graph, elem1, elem2, reaction_type):
     # changed_loops = {del_loop_id: None}
     changed_loops_by_hash = {}
     changed_loops_hash_by_id = {}
-    alternative_loop_paths = [del_loop_path]
+    alt_loop_paths = [del_loop_path]
     # reaction loop_effects directive = the collection of loop changes;
     # loop_update info = how to update each affected loop
     loop_effects = {
@@ -1240,7 +1267,7 @@ def loop_breakage_effects(interface_graph, elem1, elem2, reaction_type):
     # affected_loopids = {Λa, Λb, Λc}
     # del_loop = Λa
     # changed_loopids_deque = (Λb, Λc)
-    # alternative_loop_paths = [Λa]
+    # alt_loop_paths = [Λa]
     # Expected (if both Λb and Λc opts to use sub-path a for the new shortest path)
     #   Λb:  b₁+e₁₂ --> b₁+a₂
     #   Λc:  c₁+e₁₃ --> a₃+c₁
@@ -1276,7 +1303,7 @@ def loop_breakage_effects(interface_graph, elem1, elem2, reaction_type):
             assert loopid in broken_path_loops
             path_is_broken = True
             new_path_length, new_loop_path, e1, e2, e3, loop0_path = find_alternative_shortest_path(
-                interface_graph, path, alternative_loop_paths)
+                interface_graph, path, alt_loop_paths)
             a2 = calculate_loop_activity(interface_graph, new_loop_path, simulate_reaction=None, circularize_path=True)
         # [ifnode.state_fingerprint() for ifnode in new_loop_path]
         new_loop_path_spec = cmplx.calculate_loop_path_spec(new_loop_path)
@@ -1317,11 +1344,74 @@ def loop_breakage_effects(interface_graph, elem1, elem2, reaction_type):
     return loop_effects
 
 
-def find_alternative_shortest_path(interface_graph, loop1_path, alternative_loop_paths, avoid=None):
+def yield_idx_on_change(lst, groupA, initial_yield_if_value=True, yield_last=None):
+    yield_if_value = initial_yield_if_value
+    for idx, elem in enumerate(lst):
+        if (elem in groupA) is yield_if_value:
+            yield idx
+            yield_if_value = not yield_if_value
+
+    # It is convenient if we can automatically yield the last index in the list,
+    # if the last index matches the criteria (e.g. elem in groupA).
+    if yield_last and yield_if_value == initial_yield_if_value:
+        assert idx == len(lst)-1
+        assert elem in groupA is not yield_if_value
+        yield idx
+
+
+def first_list_group_idxs(path, group_set):
+    change_idx_generator = yield_idx_on_change(path, group_set)
+    start_stop_idx_pairs = list(zip(change_idx_generator, change_idx_generator))
+    assert all(path[idxs[0]] in group_set is True and path[idxs[1]] in group_set is False for idxs in start_stop_idx_pairs)
+    return start_stop_idx_pairs
+
+
+
+def partition_list_by_idxs(lst, idxs):
+    """
+
+    :param lst:
+    :param idxs:
+    :return:
+    """
+
+
+def partition_path_by_group(path, group, keys):
+    """
+    Partition :path: list into parts based on whether each element is in :group:.
+    Return e3, e1 where e3 is the path segment with nodes in group and e1 is path segment of nodes not in group.
+    """
+    idxs = first_list_group_idxs(path, group)
+    assert 1 <= len(idxs) <= 2
+    if len(idxs) == 1:
+        # Note: the last idx is when we have changed, so we don't need to add (or subtract) 1 to get the proper slice.
+        loop1_e3, loop1_e3_keys = path[idxs[0][0]:idxs[0][1]], keys[idxs[0][0]:idxs[0][1]]
+    else: # e3 path consists of two parts, glue together (last part first)
+        loop1_e3 = path[idxs[1][0]:idxs[1][1]] + path[idxs[0][0]:idxs[0][1]]
+        loop1_e3 = path[idxs[1][0]:idxs[1][1]] + path[idxs[0][0]:idxs[0][1]]
+
+    # Edit: perhaps just use group-by??
+    parts = list((criteria, list(grouper) for criteria, grouper in
+                  groupby(((node, key, idx) for idx, (node, key) in enumerate(zip(path, keys))),
+                          key=lambda tup: tup[0] in group)))
+
+    # parts is a list of tuples [(in_group_bool, [path_segment_grouper list])]
+    # parts is either [e3a, e1, e3b] or [e1a, e3, e1b] or [e3, e1] or [e1, e3]
+    if len(parts) == 2:
+        if parts[0][0] is True:
+            return ([parts[0][0]], parts[0][0])
+
+
+
+
+def find_alternative_shortest_path(interface_graph, loop1_path, loop1_keys, alt_loop_paths, alt_paths_edgekeys, avoid=None):
     r"""
     Again,
         loop1 is the "old" loop that no longer works because it is broken.
-        alternative_loops are other loop paths that are also broken, but should be usable...
+        alternative_loops are other loop paths that are also broken, but which may be combined with loop1_path
+        to form a new intact loop_path for loop1.
+    Note: Using new loop1_path structure where loop path must start and end on the same node.
+
     The hypothesis is currently that we should be able to piece together a new shortest path
     using the previous (broken-up and processed) paths.
     ## Consider the system:   .------.
@@ -1332,8 +1422,8 @@ def find_alternative_shortest_path(interface_graph, loop1_path, alternative_loop
     ##             `-.--´---------´      |
     ##                `-----------------´
     We are considering loop1_path = Λc = c+eᵤᵥ
-    against alternative_loop_paths = [Λa, Λb]     "loop0"
-    for each loop0 in alternative_loop_paths
+    against alt_loop_paths = [Λa, Λb]     "loop0"
+    for each loop0 in alt_loop_paths
     we find the shared part eᵤᵥ aka e3 and the not-shared-but-possibly-new-shorter sub-path e2.
     Thus, for loop1_path=Λc and alternative_loop_path=Λa, we have the following loop aliases:
         e3 = eᵤᵥ = e₁₃ = e₃₁
@@ -1359,20 +1449,49 @@ def find_alternative_shortest_path(interface_graph, loop1_path, alternative_loop
 
 
     """
+    assert loop1_path[0] == loop1_path[-1]
+    assert len(loop1_path) == len(loop1_path) - 1
     # TODO, WARNING: THERE IS A RISK THAT LOOPS PATHS WILL BE DEGENERATE, I.E. TWO LOOPS WILL EFFECTIVELY SHARE
     # THE SAME IFNODES, BUT THE LOOPS WILL BE OF DIFFERENT ORIGIN, SOMETHING LIKE INNER VS OUTER.
     # This is e.g. the case with cross-stacked fourway junction.
     alternatives = []
     loop1_nodes = set(loop1_path)
-    for loop0_path in alternative_loop_paths:
+    loop1_index = {ifnode: idx for idx, ifnode in enumerate(loop1_path)}
+    for loop0_path, loop0_keys in zip(alt_loop_paths, alt_paths_edgekeys):
         loop0_nodes = set(loop0_path)
+        loop0_index = {ifnode: idx for idx, ifnode in enumerate(loop1_path)}
+
         e2_nodes = loop0_nodes - loop1_nodes # set(e3)
         e3_nodes = loop0_nodes & loop1_nodes # shared nodes
-        # This is probably an easier and more reliable way:
-        loop1_e3 = [ifnode for ifnode in loop1_path if ifnode in e3_nodes]
-        loop0_e3 = [ifnode for ifnode in loop0_path if ifnode in e3_nodes]
-        loop1_e1 = [ifnode for ifnode in loop1_path if ifnode not in e3_nodes]
-        loop0_e2 = [ifnode for ifnode in loop0_path if ifnode not in e3_nodes]
+
+
+        # Approach B: Find path idxs pairs and then piece together paths:
+        # Indices where the result of (node in e3_nodes) changes (from False to True to False, ...)
+        loop1_idxs = first_list_group_idxs(loop1_path, e3_nodes) # list of (start, stop) idxs
+        loop0_idxs = first_list_group_idxs(loop0_path, e3_nodes)
+        assert 1 <= len(loop1_idxs) <= 2
+        if len(loop1_idxs) == 1:
+            # Note: the last idx is when we have changed, so we don't need to add (or subtract) 1 to get the proper slice.
+            loop1_e3, loop1_e3_keys = loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]], loop1_keys[loop1_idxs[0][0]:loop1_idxs[0][1]]
+        else: # e3 path consists of two parts, glue together (last part first)
+            loop1_e3 = loop1_path[loop1_idxs[1][0]:loop1_idxs[1][1]] + loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]]
+            loop1_e3 = loop1_path[loop1_idxs[1][0]:loop1_idxs[1][1]] + loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]]
+
+
+
+
+
+
+        # Approach A: Filter paths and then find indices. This is probably an easier and more reliable way (than glueing together path parts)
+        loop1_e3, loop1_e3_keys = zip(*[(ifnode, key) for ifnode, key in zip(loop1_path, loop0_keys) if ifnode in e3_nodes])
+        loop1_e1, loop1_e1_keys = zip(*[(ifnode, key) for ifnode, key in zip(loop1_path, loop0_keys) if ifnode not in e3_nodes])
+
+        loop0_e3, loop0_e3_keys = zip(*[(ifnode, key) for ifnode, key in zip(loop0_path, loop1_keys) if ifnode in e3_nodes])
+        loop0_e2, loop0_e2_keys = zip(*[(ifnode, key) for ifnode, key in zip(loop0_path, loop1_keys) if ifnode not in e3_nodes])
+
+        loop1_e3_idxs = (loop1_index[loop1_e3[0]], loop1_index[loop1_e3[-1]])
+        loop0_e3_idxs = (loop0_index[loop0_e3[0]], loop0_index[loop0_e3[-1]])
+
         if loop1_nodes == loop0_nodes:
             # just return whatever is intact? Reasoning: e1 and e2 will both be empty.
             pdb.set_trace()
@@ -1397,8 +1516,6 @@ def find_alternative_shortest_path(interface_graph, loop1_path, alternative_loop
             # intersection_nodes = (loop1_e3[0], loop1_e3[-1])
             assert len(loop1_e3) >= 2
             assert loop1_e3[0] != loop1_e3[-1]
-            loop1_e3_idxs = (loop1_path.index(loop1_e3[0]), loop1_path.index(loop1_e3[-1]))
-            loop1_e3_idxs = (loop1_path.index(loop0_e3[0]), loop1_path.index(loop0_e3[-1]))
             if e3_is_parallel:
                 # We need to reverse loop0_e2 to make it fit.
                 loop2_path = loop1_e1 + loop1_e3[0:1] + loop0_e2[::-1] + loop1_e3[-1:]
@@ -1499,7 +1616,7 @@ def find_alternative_shortest_path(interface_graph, loop1_path, alternative_loop
         # path2_length = sum(interface_graph[source][target]['len_contour']
         #                    for source, target in zip(loop2_path, loop2_path[1:]))
         # alternatives.append((path2_length, loop2_path, e1, e2, e3, loop0_path))
-    # end for loop0_path in alternative_loop_paths
+    # end for loop0_path in alt_loop_paths
     return min(alternatives)
 
 

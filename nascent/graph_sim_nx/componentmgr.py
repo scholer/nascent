@@ -317,16 +317,6 @@ class ComponentMgr(GraphManager):
         # Hybridization => merge two DomainEnds into a single node by delegating representation of one to the other.
         end1_delegatee = self.interface_graph.merge(domain1.end5p.ifnode, domain2.end3p.ifnode)
         end2_delegatee = self.interface_graph.merge(domain1.end3p.ifnode, domain2.end5p.ifnode)
-        # You could just use interface_graph[end1_delegate][end2_delegate] instead of looping...
-        # Remember, interface_graph.adj reflects the current *representation*. After merging/delegating ifnodes,
-        # the edges from delegator is no longer available. Either update edge before merge or only update delegatee.
-        # Edit: Isn't this updated when we update the ends5p3p_graph since the eattr dicts are the same instance?
-        # Update domain PHOSPHATE_BACKBONE edge:
-        self.interface_graph[end1_delegatee][end2_delegatee]['len_contour'] = domain1.ds_len_contour
-        self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_nm'] = domain1.ds_dist_ee_nm
-        self.interface_graph[end1_delegatee][end2_delegatee]['dist_ee_sq'] = domain1.ds_dist_ee_sq
-        self.interface_graph[end1_delegatee][end2_delegatee]['stiffness'] = 1
-        # self.interface_graph[end1_delegatee][end2_delegatee]['direction'] = DIRECTION_SYMMETRIC # No, domain pb edge
 
         # Update PHOSPHATE_BACKBONE edge dist_ee_nm, dist_ee_sq and stiffness attrs
         # for edge between d.end5p and d.end3p (for both d):
@@ -345,6 +335,19 @@ class ComponentMgr(GraphManager):
             # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_nm'] = d.ds_dist_ee_nm
             # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_sq'] = d.ds_dist_ee_sq
             # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['stiffness'] = 1
+
+        # You could just use interface_graph[end1_delegate][end2_delegate] instead of looping...
+        # Remember, interface_graph.adj reflects the current *representation*. After merging/delegating ifnodes,
+        # the edges from delegator is no longer available. Either update edge before merge or only update delegatee.
+        # EDIT: ISN'T THIS UPDATED WHEN WE UPDATE THE ENDS5P3P_GRAPH SINCE THE EATTR DICTS ARE THE SAME INSTANCE?
+        # Edit2: Updated to use InterfaceMultiGraph
+        # Update domain PHOSPHATE_BACKBONE edge:
+        assert all(eattr['len_contour'] == domain1.ds_len_contour for key, eattr in self.interface_graph[end1_delegatee][end2_delegatee].items())
+        assert all(eattr['dist_ee_nm'] == domain1.ds_dist_ee_nm for key, eattr in self.interface_graph[end1_delegatee][end2_delegatee].items())
+        assert all(eattr['dist_ee_sq'] == domain1.ds_dist_ee_sq for key, eattr in self.interface_graph[end1_delegatee][end2_delegatee].items())
+        assert all(eattr['stiffness'] == 1 for key, eattr in self.interface_graph[end1_delegatee][end2_delegatee].items())
+
+        # self.interface_graph[end1_delegatee][end2_delegatee]['direction'] = DIRECTION_SYMMETRIC # No, domain pb edge
 
         if join_complex:
             result = self.join_complex_at(domain_pair=(domain1, domain2), edge_kwargs=edge_kwargs)
@@ -446,10 +449,14 @@ class ComponentMgr(GraphManager):
                 self.ends5p3p_graph[d.end5p][d.end3p]['dist_ee_sq'] = d.ss_dist_ee_sq
                 self.ends5p3p_graph[d.end5p][d.end3p]['stiffness'] = 0  # ss backbone has zero stiffness
             ## TODO: Check whether we really need to update interface_graph edges -- we do that for hybridize.
-            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['len_contour'] = d.ss_len_contour
-            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_nm'] = d.ss_dist_ee_nm
-            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_sq'] = d.ss_dist_ee_sq
-            self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['stiffness'] = 0
+            # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['len_contour'] = d.ss_len_contour
+            # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_nm'] = d.ss_dist_ee_nm
+            # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['dist_ee_sq'] = d.ss_dist_ee_sq
+            # self.interface_graph[d.end5p.ifnode][d.end3p.ifnode]['stiffness'] = 0
+            assert all(eattr['len_contour'] == d.ss_len_contour for key, eattr in self.interface_graph[d.end5p.ifnode][d.end3p.ifnode].items())
+            assert all(eattr['dist_ee_nm'] == d.ss_dist_ee_nm for key, eattr in self.interface_graph[d.end5p.ifnode][d.end3p.ifnode].items())
+            assert all(eattr['dist_ee_sq'] == d.ss_dist_ee_sq for key, eattr in self.interface_graph[d.end5p.ifnode][d.end3p.ifnode].items())
+            assert all(eattr['stiffness'] == 0 for key, eattr in self.interface_graph[d.end5p.ifnode][d.end3p.ifnode].items())
 
         ## If domain is stacked, break the stacking interaction before breaking complex:
         ## Edit/new: Domains CANNOT dehybridize if they are stacked
@@ -918,17 +925,17 @@ class ComponentMgr(GraphManager):
                 c_major.stacking_energies.update(c_minor.stacking_energies)
                 # c_major.loop_energies.update(c_minor.loop_energies) # Is updated from values in Complex.loops
                 # self.volume_entropy is the entropy of *releasing* a fixed component into the system volume.
-                print("c_major volume entropy before merging:", c_major.volume_entropy)
+                # print("c_major volume entropy before merging:", c_major.volume_entropy)
                 # c_major.energy_subtotals['volume'][1] = -self.volume_entropy * (len(c_major.strands) - 1)
-                c_major.volume_entropy += c_minor.volume_entropy  # we add entropy of formation for this reaction later.
-                print("c_major volume entropy  after merging:", c_major.volume_entropy,
-                      "(%s strands)" % len(c_major.strands))
+                # c_major.volume_entropy += c_minor.volume_entropy  # we add entropy of formation for this reaction later.
+                # print("c_major volume entropy  after merging:", c_major.volume_entropy,
+                #       "(%s strands)" % len(c_major.strands))
 
                 # c_major.volume_energies.update(c_minor.volume_energies)
                 c_minor.hybridization_energies.clear()
                 c_minor.stacking_energies.clear()
                 # c_minor.loop_energies.clear()
-                c_minor.volume_entropy = 0
+                # c_minor.volume_entropy = 0
                 ## Re-calculate energy totals: Done elsewhere by invoking Complex.recalculate_complex_energy()
                 ## We just have to make sure that we update the individual energy contributions (e.g. stacking_energies)
 

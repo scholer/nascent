@@ -43,7 +43,7 @@ from pprint import pprint
 import networkx as nx
 from networkx.algorithms.shortest_paths import shortest_path
 
-from .system_graphs import InterfaceGraph
+from .system_graphs import InterfaceMultiGraph
 from .nx_utils import draw_graph_and_save
 from .constants import (PHOSPHATEBACKBONE_INTERACTION,
                         HYBRIDIZATION_INTERACTION,
@@ -199,7 +199,7 @@ class GraphManager(object):
         self.ends5p3p_graph = ends5p3p_graph or nx.MultiGraph()
         self.domain_graph = domain_graph or nx.MultiGraph()
         self.strand_graph = strand_graph or nx.MultiGraph()
-        self.interface_graph = InterfaceGraph()
+        self.interface_graph = InterfaceMultiGraph()
         if strands:
             # TODO: Add strand-node attrs to strand-graph:
             # TODO: Add "Label" attr to all nodes (for Gephi)
@@ -223,14 +223,16 @@ class GraphManager(object):
         # If we have hybridization/stacking, we have to perform node-delegation on those nodes
         # and we don't want to implement that right now...
         assert all(key == PHOSPHATEBACKBONE_INTERACTION for source, target, key, data in domain_end_edges)
-        self.interface_graph.add_edges_from((source.ifnode, target.ifnode, data)
+        self.interface_graph.add_edges_from((source.ifnode, target.ifnode,
+                                             0 if source.domain == target.domain else (source, target), # edge keys
+                                             data)
                                             for source, target, key, data in domain_end_edges)
-
+        # Make delegation base structure according to current graph representation:
+        self.interface_graph.reset_ifnode_delegation_to_current_graph_representation()
         ### Other attributes: ###
         self.fnprefix = ""
 
         ### Loops: ###
-        # We currently just use domain objects to track loops. Could probably be domain species.
         self.enable_loop_tracking = True
 
 

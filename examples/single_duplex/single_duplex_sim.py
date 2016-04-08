@@ -321,10 +321,10 @@ def main():
             else:
                 # pdb.set_trace()
                 simulator.stats_writer.monitored_strands = [input_oligos[0]]
-                # simulator.simulate(T=332, n_steps_max=200000, systime_max=2000)
+                simulator.simulate(T=340, n_steps_max=200000, systime_max=2000) #
                 # simulator.simulate(T=330, n_steps_max=50000, systime_max=50)
                 # simulator.simulate(T=330, n_steps_max=10000, systime_max=4000)
-                simulator.simulate(T=330, n_steps_max=4000, systime_max=400)
+                # simulator.simulate(T=330, n_steps_max=4000, systime_max=400)
                 # simulator.simulate(T=330, n_steps_max=2000, systime_max=200)
                 # simulator.simulate(T=330, n_steps_max=1000, systime_max=100)
                 # simulator.simulate(T=330, n_steps_max=100, systime_max=20)
