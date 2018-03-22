@@ -1345,12 +1345,19 @@ def loop_breakage_effects(interface_graph, elem1, elem2, reaction_type):
 
 
 def yield_idx_on_change(lst, groupA, initial_yield_if_value=True, yield_last=None):
+    """
+    Given a sequence of elements, lst, and another set of elements, groupA.
+    Going through lst and ask whether each element is in the groupA set.
+    Every time the answer CHANGES, yield the idx of the element where the answer changed.
+    Example:
+        >>> list(yield_idx_on_change([0, 1, 2, 3, 4, 5], {2, 3}))
+        [2, 4]
+    """
     yield_if_value = initial_yield_if_value
     for idx, elem in enumerate(lst):
         if (elem in groupA) is yield_if_value:
             yield idx
             yield_if_value = not yield_if_value
-
     # It is convenient if we can automatically yield the last index in the list,
     # if the last index matches the criteria (e.g. elem in groupA).
     if yield_last and yield_if_value == initial_yield_if_value:
@@ -1360,52 +1367,51 @@ def yield_idx_on_change(lst, groupA, initial_yield_if_value=True, yield_last=Non
 
 
 def first_list_group_idxs(path, group_set):
+    """ Return a list of tuples containing start and stop indices where path element is in group_set. """
     change_idx_generator = yield_idx_on_change(path, group_set)
     start_stop_idx_pairs = list(zip(change_idx_generator, change_idx_generator))
     assert all(path[idxs[0]] in group_set is True and path[idxs[1]] in group_set is False for idxs in start_stop_idx_pairs)
     return start_stop_idx_pairs
 
 
-
-def partition_list_by_idxs(lst, idxs):
+def partition_path_by_criteria(criteria, path):
     """
+    Partition :path: list into parts based on the result of :criteria:(elem) for each element in :path:.
+    criteria function is typically: lambda node, idx: node in some_set_of_nodes.
+    :path: can be e.g. zip(path, edgekeys) if you need to include edge keys. In that case, the criteria function
+    should be updated to accept a tuple: lambda (node, ekey), idx: node in some_set_of_nodes  (or similar)
 
-    :param lst:
-    :param idxs:
-    :return:
+    Returns:
+        ([e3], [e1])
+    where [e3] is a list of path segment with nodes in group and [e1] is a list of path segments with nodes not in group.
+    Use case: Consider the system below consisting of two loops, Λ₁ and Λ₂, where Λ₁=e₁+e₃ and Λ₂=e₂+e₃.
+    We don't know where exactly where Λ₁ path starts and ends, but we want to partition it so we get
+    the segments that overlap with Λ₂ in one group and the segments that don't overlap in another group.
+            .-------,---------.
+           /  Λ₁   /          \
+        e₁ \   e₃ /:/   Λ₂    /
+            \      /      e₂ /
+             `-.--´---------´
+
     """
-
-
-def partition_path_by_group(path, group, keys):
-    """
-    Partition :path: list into parts based on whether each element is in :group:.
-    Return e3, e1 where e3 is the path segment with nodes in group and e1 is path segment of nodes not in group.
-    """
-    idxs = first_list_group_idxs(path, group)
-    assert 1 <= len(idxs) <= 2
-    if len(idxs) == 1:
-        # Note: the last idx is when we have changed, so we don't need to add (or subtract) 1 to get the proper slice.
-        loop1_e3, loop1_e3_keys = path[idxs[0][0]:idxs[0][1]], keys[idxs[0][0]:idxs[0][1]]
-    else: # e3 path consists of two parts, glue together (last part first)
-        loop1_e3 = path[idxs[1][0]:idxs[1][1]] + path[idxs[0][0]:idxs[0][1]]
-        loop1_e3 = path[idxs[1][0]:idxs[1][1]] + path[idxs[0][0]:idxs[0][1]]
-
-    # Edit: perhaps just use group-by??
-    parts = list((criteria, list(grouper) for criteria, grouper in
-                  groupby(((node, key, idx) for idx, (node, key) in enumerate(zip(path, keys))),
-                          key=lambda tup: tup[0] in group)))
-
-    # parts is a list of tuples [(in_group_bool, [path_segment_grouper list])]
-    # parts is either [e3a, e1, e3b] or [e1a, e3, e1b] or [e3, e1] or [e1, e3]
-    if len(parts) == 2:
-        if parts[0][0] is True:
-            return ([parts[0][0]], parts[0][0])
+    # Just using groupby instead of above first_list_group_idxs function
+    partsgen = ((key_result, list(grouper)) for key_result, grouper in
+                groupby(((node, idx) for idx, node in enumerate(path)),
+                        key=criteria))
+    parts_by_criteria = list(zip(*zip(partsgen, partsgen)))
+    if parts_by_criteria[0][0][0] is True:
+        e3_parts, e1_parts = parts_by_criteria[0], parts_by_criteria[1]
+    else:
+        e1_parts, e3_parts = parts_by_criteria[0], parts_by_criteria[1]
+    assert all(part[0] is True for part in e1_parts)
+    assert all(part[0] is False for part in e3_parts)
+    return e1_parts, e3_parts
 
 
 
-
-def find_alternative_shortest_path(interface_graph, loop1_path, loop1_keys, alt_loop_paths, alt_paths_edgekeys, avoid=None):
+def find_alternative_shortest_path(interface_graph, loop1_path, loop1_keys, alt_loops, broken_edge, avoid=None):
     r"""
+    :broken_edge: ({src, tgt nodes}, edge_key}
     Again,
         loop1 is the "old" loop that no longer works because it is broken.
         alternative_loops are other loop paths that are also broken, but which may be combined with loop1_path
@@ -1449,40 +1455,100 @@ def find_alternative_shortest_path(interface_graph, loop1_path, loop1_keys, alt_
 
 
     """
-    assert loop1_path[0] == loop1_path[-1]
-    assert len(loop1_path) == len(loop1_path) - 1
+    # TODO, thought: Maybe define paths by edges ({src, tgt}, key) rather than just a list of nodes?
+    # TODO: When processing ifnode undelegation after breaking reaction, should we transform all loops to start and end at the disconnected ifnodes?
+    # TODO: There is a special case for loops that might traverse dehybridized duplex, e.g. the simple "duplex with internal loops" case.
+    #       In that case we would need to know about the duplex edge.
+    #       I guess one check is if the loops have no shared nodes.
+
+    # if reaction_attr.reaction_type is not PHOSPHATEBACKBONE_INTERACTION:
+    assert loop1_path[0] != loop1_path[-1] # This is after processing ifnode undelegation
+    assert len(loop1_path) == len(loop1_keys) - 1
     # TODO, WARNING: THERE IS A RISK THAT LOOPS PATHS WILL BE DEGENERATE, I.E. TWO LOOPS WILL EFFECTIVELY SHARE
     # THE SAME IFNODES, BUT THE LOOPS WILL BE OF DIFFERENT ORIGIN, SOMETHING LIKE INNER VS OUTER.
     # This is e.g. the case with cross-stacked fourway junction.
     alternatives = []
     loop1_nodes = set(loop1_path)
+    loop1_edges_list = [(frozenset((src, tgt)), key) for src, tgt, key in zip(loop1_path, loop1_path[1:], loop1_keys)]
+    loop1_edges_set = set(loop1_edges_list)
     loop1_index = {ifnode: idx for idx, ifnode in enumerate(loop1_path)}
-    for loop0_path, loop0_keys in zip(alt_loop_paths, alt_paths_edgekeys):
+    for loop0 in alt_loops:
+        loop0_path, loop0_keys = loop0[""]
+        # loop0_path is an alternative loop that we can use to reconstruct a new path for loop1 (=loop2_path)
         loop0_nodes = set(loop0_path)
         loop0_index = {ifnode: idx for idx, ifnode in enumerate(loop1_path)}
-
         e2_nodes = loop0_nodes - loop1_nodes # set(e3)
         e3_nodes = loop0_nodes & loop1_nodes # shared nodes
+        loop0_edges_list = [(frozenset((src, tgt)), key) for src, tgt, key in zip(loop0_path, loop0_path[1:], loop0_keys)]
+        loop0_edges_set = set(loop0_edges_list)
+        e3_edges_set = loop0_edges_set & loop1_edges_set # shared edges
+        e2_edges_set = loop0_edges_set - loop1_edges_set
+        e1_edges_set = loop1_edges_set - loop0_edges_set
+        # the reconstituted loop2_path consists of the union set: e1_nodes | e2_nodes | {the two intersection nodes}
+
+        if loop0_nodes <= loop1_nodes and False:
+            # Short-circuit optimization, e.g. unstacking of backbone-connected duplexes.
+            assert len(loop0_nodes) == 2 # This is after processing ifnode undelegation, right?
+            assert len(e3_edges_set) == 0
+            assert len(e2_edges_set) == 1
+            assert len(loop0_edges_list) == 1
+            loop0_e2, loop1_e3 = loop0_edges_list, []
+            # it should be ok to just append/insert the edge and assume we form a proper cycle,
+            # since we have processed loop1_path to start and end on the reacted/split nodes.
+            loop2_path = loop1_path
+            loop2_edges_list = loop1_edges_list + loop0_edges_list
+            # old: (path2_length, loop2_path, loop1_e1, loop0_e2, loop1_e3, loop0_path)
+            # new: (path2_length, loop2_path, loop2_edges, loop1_e1, loop0_e2, loop1_e3, loop0)
 
 
-        # Approach B: Find path idxs pairs and then piece together paths:
-        # Indices where the result of (node in e3_nodes) changes (from False to True to False, ...)
-        loop1_idxs = first_list_group_idxs(loop1_path, e3_nodes) # list of (start, stop) idxs
-        loop0_idxs = first_list_group_idxs(loop0_path, e3_nodes)
-        assert 1 <= len(loop1_idxs) <= 2
-        if len(loop1_idxs) == 1:
-            # Note: the last idx is when we have changed, so we don't need to add (or subtract) 1 to get the proper slice.
-            loop1_e3, loop1_e3_keys = loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]], loop1_keys[loop1_idxs[0][0]:loop1_idxs[0][1]]
-        else: # e3 path consists of two parts, glue together (last part first)
-            loop1_e3 = loop1_path[loop1_idxs[1][0]:loop1_idxs[1][1]] + loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]]
-            loop1_e3 = loop1_path[loop1_idxs[1][0]:loop1_idxs[1][1]] + loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]]
+        ## Approach D: If we know that all affected loops starts and ends on e3, we can simplify a lot of things:
 
 
 
+        ## Approach C: Using groupby to group e1 path
+        e1_parts, e3_parts = partition_path_by_criteria(criteria=lambda node_ekey, idx: node_ekey[0] in e3_nodes,
+                                                        path=zip(loop1_path, loop1_keys))
+        # Could be optimized by using above result to find e2..
+        e2_parts, e3_parts = partition_path_by_criteria(criteria=lambda node_ekey, idx: node_ekey[0] in e3_nodes,
+                                                        path=zip(loop0_path, loop0_keys))
+        # At this moment, e1 and e2 does *NOT* include the intersection nodes where e1,e2,e3 branches off.
+
+
+        # Same approach, but using edges:
+        e2_edges, e3_edges = partition_path_by_criteria(criteria=lambda edge, idx: edge in e3_edges_set,
+                                                        path=loop1_edges_list)
+
+        partsgen = ((key_result, list(grouper)) for key_result, grouper in
+                    groupby(((edge, idx) for idx, edge in enumerate(loop1_edges_list)),
+                            key=lambda edge, idx: edge in e3_edges_set))
+        parts_by_criteria = list(zip(*zip(partsgen, partsgen)))
+        if parts_by_criteria[0][0] is False:
+            # TODO: Make sure to account for the case where e2 is empty
+            assert 1 <= len(parts_by_criteria) <= 2
+            # e3a is empty.
+            e3a = []
+            e1 = parts_by_criteria[0][1]
+            if len(parts_by_criteria) == 2:
+                e3b = parts_by_criteria[1][1]
+        else:
 
 
 
-        # Approach A: Filter paths and then find indices. This is probably an easier and more reliable way (than glueing together path parts)
+        # ## Approach B: Find path idxs pairs and then piece together paths:
+        # # Indices where the result of (node in e3_nodes) changes (from False to True to False, ...)
+        # loop1_idxs = first_list_group_idxs(loop1_path, e3_nodes) # list of (start, stop) idxs
+        # loop0_idxs = first_list_group_idxs(loop0_path, e3_nodes)
+        # assert 1 <= len(loop1_idxs) <= 2
+        # if len(loop1_idxs) == 1:
+        #     # Note: the last idx is when we have changed, so we don't need to add (or subtract) 1 to get the proper slice.
+        #     loop1_e3, loop1_e3_keys = loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]], loop1_keys[loop1_idxs[0][0]:loop1_idxs[0][1]]
+        # else: # e3 path consists of two parts, glue together (last part first)
+        #     loop1_e3 = loop1_path[loop1_idxs[1][0]:loop1_idxs[1][1]] + loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]]
+        #     loop1_e3 = loop1_path[loop1_idxs[1][0]:loop1_idxs[1][1]] + loop1_path[loop1_idxs[0][0]:loop1_idxs[0][1]]
+
+
+        # Approach A: Filter paths and then find indices. This is probably an easier and more reliable way
+        # (compared to approach B = glueing together path parts from indices)
         loop1_e3, loop1_e3_keys = zip(*[(ifnode, key) for ifnode, key in zip(loop1_path, loop0_keys) if ifnode in e3_nodes])
         loop1_e1, loop1_e1_keys = zip(*[(ifnode, key) for ifnode, key in zip(loop1_path, loop0_keys) if ifnode not in e3_nodes])
 
@@ -1501,7 +1567,8 @@ def find_alternative_shortest_path(interface_graph, loop1_path, loop1_keys, alt_
         else:
             if loop1_nodes <= loop0_nodes:
                 # loop1 is covered by loop0..
-                alternatives.append((path2_length, loop2_path, loop1_e1, loop0_e2, loop1_e3, loop0_path))
+                # alternatives.append((path2_length, loop2_path, loop1_e1, loop0_e2, loop1_e3, loop0_path))
+                loop2_path
             if loop1_e3 == loop0_e3:
                 e3_is_parallel = True
             elif loop1_e3 == loop0_e3[::-1]:
@@ -2711,7 +2778,3 @@ class LoopTracker(object):
         """
         """
         return self.loop_graph.split(node1, node2)
-
-
-
-

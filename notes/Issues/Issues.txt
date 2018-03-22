@@ -1,11 +1,12 @@
 
+
+
 ## MAJOR: ##
+* Activity for existing loop-splitting reaction not properly calculated.
 * Loops are not properly tracked/created/deleted.
-* Make ifnodes cacheable so we don't have to re-calculate loop_effects when forming a new loop.
-* Better visualization of reaction graph.
+* Symmetric graphs - labelling and fingerprinting
+* Better visualization of reaction graph. 
 * Test coverage.
-* Symmetric graphs - labelling and fingerprinting. -- I think I got this fixed with the new label_complex_nodes method.
-* Activity for existing loop-splitting reaction not properly calculated. (I think I got this almost done, at least approximately.)
 
 
 
@@ -32,13 +33,14 @@
 
 
 ## Issues: ##
-* Complex fingerprints are not properly updated? (At least according to ReactionMgr.print_complexes_stats() ..) - Hopefully this is fixed now?
+* Complex fingerprints are not properly updated? (At least according to ReactionMgr.print_complexes_stats() ..)
 * Complex fingerprints seem to change from run to run. They should be invariant for the same complex state. Maybe because python adds a random seed to all hashes to prevent hash-collision attacks. See https://docs.python.org/3/using/cmdline.html#envvar-PYTHONHASHSEED.
-* Provide option to set the seed value for random(). (However, I don't think that would be enough to guarantee same trajectories between runs, since the order of dicts and sets is not guaranteed to be ) order to get constant
+* Provide option to set the seed value for random(). (However, I don't think that would be enough to guarantee same trajectories between runs, since the order of dicts and sets is not guaranteed to be ) order to get constant 
 * PHYSICAL CONSISTENCY: Duplex equilibrium is shifted when splitting up the duplex into sub-domains.
-* Connectivity rings state fingerprinting doesn't discriminate for multi-edges. - Fixed with new label_complex_nodes() method!
+* Connectivity rings state fingerprinting doesn't discriminate for multi-edges.
 * GRAPH SYMMETRY: Domain state fingerprinting ICID labelling is not optimal for symmetric complexes. I need an consistent enumerator function.
 ** Even for symmetric complexes, we can have "pairs" that are properly described by a fingerprint.
+    However, the
 ** Maybe split the complex up into its asymetric units (e.g. A, B) and distinguish:
 	{A1, A2} == {B1, B2} (intra-unit), {A1, B2} == {B1, A2}  (inter-unit), but {A1, A2} != {A1, B2}.
 ** There is probably a lot of theory on symmetry here...
