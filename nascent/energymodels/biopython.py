@@ -34,6 +34,8 @@ def gc_percent(seq):
     return (seq.count("G")+seq.count("C"))/len(seq)
 
 
+# Base stacking energies:
+# -----------------------
 # Values are (deltaH, deltaS) pairs = (kcal/mol, cal/mol/K)
 
 # Allawi and SantaLucia (1997), Biochemistry 36: 10581-10594
